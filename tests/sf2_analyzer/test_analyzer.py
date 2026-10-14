@@ -35,8 +35,8 @@ def inst(name: str, bag_index: int) -> bytes:
     return fixed_name(name) + struct.pack("<H", bag_index)
 
 
-def shdr(name: str, start: int, end: int, link: int = 0, sample_type: int = 1) -> bytes:
-    return fixed_name(name) + struct.pack("<IIIIIBbHH", start, end, start, end, 44100, 60, 0, link, sample_type)
+def shdr(name: str, start: int, end: int, link: int = 0, sample_type: int = 1, rate: int = 44100) -> bytes:
+    return fixed_name(name) + struct.pack("<IIIIIBbHH", start, end, start, end, rate, 60, 0, link, sample_type)
 
 
 def gen(oper: int, amount: int) -> bytes:
@@ -69,7 +69,7 @@ def make_sf2(two_zones=False, modulators=False, stereo=False) -> bytes:
 
     sample0_type = 4 if stereo else 1
     sample0_link = 1 if stereo else 0
-    sample_table = shdr("S0", 0, 100, sample0_link, sample0_type)
+    sample_table = shdr("S0", 0, 100, sample0_link, sample0_type, 48000 if stereo else 44100)
     if two_zones or stereo:
         sample1_type = 2 if stereo else 1
         sample1_link = 0
@@ -102,11 +102,14 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(report["counts"]["instruments"], 1)
         self.assertEqual(report["counts"]["samples"], 1)
         self.assertEqual(report["sdta"]["smpl_payload_bytes"], 200)
+        self.assertEqual(report["banks"]["program_counts"], {"0": 1})
+        self.assertEqual(report["samples"]["sample_rate_distribution"], {"44100": 1})
         program = report["programs"][0]
         self.assertEqual(program["unique_sample_count"], 1)
         self.assertEqual(program["pcm_bytes"], 200)
         self.assertEqual(program["max_overlapping_zones"], 1)
         self.assertTrue(report["residency"]["fits_all_samples"])
+        self.assertEqual(len(report["file"]["sha256"]), 64)
 
     def test_overlap_modulators_and_stereo_links(self):
         report = analyze(self.write_sf2(make_sf2(two_zones=True, modulators=True, stereo=True)))
@@ -116,12 +119,15 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(program["unique_sample_count"], 2)
         self.assertEqual(report["modulators"]["pmod_nonzero_count"], 1)
         self.assertEqual(report["modulators"]["imod_nonzero_count"], 1)
+        self.assertEqual(report["modulators"]["pmod_amount_nonzero_count"], 1)
+        self.assertEqual(report["modulators"]["imod_amount_nonzero_count"], 1)
         self.assertEqual(report["samples"]["stereo_side_sample_count"], 2)
         self.assertEqual(report["samples"]["linked_sample_count"], 2)
+        self.assertEqual(report["samples"]["sample_rate_distribution"], {"44100": 1, "48000": 1})
 
     def test_json_serializable(self):
         text = json.dumps(analyze(self.write_sf2(make_sf2())))
-        self.assertIn('"schema_version": 1', text)
+        self.assertIn('"schema_version": 2', text)
 
     def test_rejects_non_sf2(self):
         with self.assertRaises(Sf2Error):
