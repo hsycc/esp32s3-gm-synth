@@ -1,0 +1,119 @@
+{
+  "output": "assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2",
+  "size_bytes": 5926856,
+  "sha256": "c56e709a8802446005f4ec7b07d93dc4a9020a62157af2866f01cd2b61321d8a",
+  "source": "assets/sf2/full/GeneralUser-GS.sf2",
+  "source_sha256": "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe",
+  "preset_count": 21,
+  "instrument_count": 43,
+  "sample_count": 164,
+  "presets": [
+    {
+      "bank": 0,
+      "program": 0,
+      "name": "Grand Piano"
+    },
+    {
+      "bank": 0,
+      "program": 1,
+      "name": "Bright Grand Piano"
+    },
+    {
+      "bank": 0,
+      "program": 8,
+      "name": "Celeste"
+    },
+    {
+      "bank": 0,
+      "program": 9,
+      "name": "Glockenspiel"
+    },
+    {
+      "bank": 0,
+      "program": 10,
+      "name": "Music Box"
+    },
+    {
+      "bank": 0,
+      "program": 16,
+      "name": "Tonewheel Organ"
+    },
+    {
+      "bank": 0,
+      "program": 24,
+      "name": "Nylon Guitar"
+    },
+    {
+      "bank": 0,
+      "program": 32,
+      "name": "Acoustic Bass"
+    },
+    {
+      "bank": 0,
+      "program": 56,
+      "name": "Trumpet"
+    },
+    {
+      "bank": 0,
+      "program": 62,
+      "name": "Synth Brass 1"
+    },
+    {
+      "bank": 0,
+      "program": 63,
+      "name": "Synth Brass 2"
+    },
+    {
+      "bank": 0,
+      "program": 80,
+      "name": "Square Lead"
+    },
+    {
+      "bank": 0,
+      "program": 81,
+      "name": "Saw Lead"
+    },
+    {
+      "bank": 0,
+      "program": 111,
+      "name": "Shenai"
+    },
+    {
+      "bank": 0,
+      "program": 112,
+      "name": "Tinker Bell"
+    },
+    {
+      "bank": 0,
+      "program": 113,
+      "name": "Agogo"
+    },
+    {
+      "bank": 0,
+      "program": 115,
+      "name": "Wood Block"
+    },
+    {
+      "bank": 0,
+      "program": 117,
+      "name": "Melodic Tom"
+    },
+    {
+      "bank": 0,
+      "program": 120,
+      "name": "Fret Noise"
+    },
+    {
+      "bank": 0,
+      "program": 124,
+      "name": "Telephone 1"
+    },
+    {
+      "bank": 128,
+      "program": 0,
+      "name": "Standard 1"
+    }
+  ],
+  "target_mib": 6.0,
+  "selection_method": "gm_family_round_robin_with_standard_drum"
+}

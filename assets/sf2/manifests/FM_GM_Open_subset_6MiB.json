@@ -1,0 +1,194 @@
+{
+  "output": "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2",
+  "size_bytes": 5893186,
+  "sha256": "2df518038f2939c9d05ba5e123da8cc443aed1d5535fcf669cdf49a8c10bd077",
+  "source": "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2",
+  "source_sha256": "969a7db13c0713e2792ee9fc8a3e10505982c4875cc0c3483a2047ac7315561d",
+  "preset_count": 36,
+  "instrument_count": 36,
+  "sample_count": 82,
+  "presets": [
+    {
+      "bank": 0,
+      "program": 0,
+      "name": "Acoustic Grand Pian"
+    },
+    {
+      "bank": 0,
+      "program": 1,
+      "name": "Bright Acoustic Pia"
+    },
+    {
+      "bank": 0,
+      "program": 2,
+      "name": "Electric Grand Pian"
+    },
+    {
+      "bank": 0,
+      "program": 8,
+      "name": "Celesta"
+    },
+    {
+      "bank": 0,
+      "program": 9,
+      "name": "Glockenspiel"
+    },
+    {
+      "bank": 0,
+      "program": 16,
+      "name": "Drawbar Organ"
+    },
+    {
+      "bank": 0,
+      "program": 17,
+      "name": "Percussive Organ"
+    },
+    {
+      "bank": 0,
+      "program": 18,
+      "name": "Rock Organ"
+    },
+    {
+      "bank": 0,
+      "program": 24,
+      "name": "Acoustic Guitar (ny"
+    },
+    {
+      "bank": 0,
+      "program": 25,
+      "name": "Acoustic Guitar (st"
+    },
+    {
+      "bank": 0,
+      "program": 32,
+      "name": "Acoustic Bass"
+    },
+    {
+      "bank": 0,
+      "program": 33,
+      "name": "Electric Bass (fing"
+    },
+    {
+      "bank": 0,
+      "program": 34,
+      "name": "Electric Bass (pick"
+    },
+    {
+      "bank": 0,
+      "program": 40,
+      "name": "Violin"
+    },
+    {
+      "bank": 0,
+      "program": 41,
+      "name": "Viola"
+    },
+    {
+      "bank": 0,
+      "program": 48,
+      "name": "String Ensemble 1"
+    },
+    {
+      "bank": 0,
+      "program": 49,
+      "name": "String Ensemble 2"
+    },
+    {
+      "bank": 0,
+      "program": 56,
+      "name": "Trumpet"
+    },
+    {
+      "bank": 0,
+      "program": 57,
+      "name": "Trombone"
+    },
+    {
+      "bank": 0,
+      "program": 64,
+      "name": "Soprano Sax"
+    },
+    {
+      "bank": 0,
+      "program": 65,
+      "name": "Alto Sax"
+    },
+    {
+      "bank": 0,
+      "program": 72,
+      "name": "Piccolo"
+    },
+    {
+      "bank": 0,
+      "program": 73,
+      "name": "Flute"
+    },
+    {
+      "bank": 0,
+      "program": 80,
+      "name": "Lead 1 (square)"
+    },
+    {
+      "bank": 0,
+      "program": 81,
+      "name": "Lead 2 (sawtooth)"
+    },
+    {
+      "bank": 0,
+      "program": 88,
+      "name": "Pad 1 (new age)"
+    },
+    {
+      "bank": 0,
+      "program": 89,
+      "name": "Pad 2 (warm)"
+    },
+    {
+      "bank": 0,
+      "program": 96,
+      "name": "FX 1 (rain)"
+    },
+    {
+      "bank": 0,
+      "program": 97,
+      "name": "FX 2 (soundtrack)"
+    },
+    {
+      "bank": 0,
+      "program": 104,
+      "name": "Sitar"
+    },
+    {
+      "bank": 0,
+      "program": 105,
+      "name": "Banjo"
+    },
+    {
+      "bank": 0,
+      "program": 112,
+      "name": "Tinkle Bell"
+    },
+    {
+      "bank": 0,
+      "program": 113,
+      "name": "Agogo"
+    },
+    {
+      "bank": 0,
+      "program": 120,
+      "name": "Guitar Fret Noise"
+    },
+    {
+      "bank": 0,
+      "program": 121,
+      "name": "Breath Noise"
+    },
+    {
+      "bank": 128,
+      "program": 0,
+      "name": "Standard Drum Kit"
+    }
+  ],
+  "target_mib": 6.0,
+  "selection_method": "gm_family_round_robin_with_standard_drum"
+}

@@ -1,0 +1,19 @@
+{
+  "output": "assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2",
+  "size_bytes": 11158736,
+  "sha256": "b212d88beeebe045dd0bb738d3c3277d73b61eaf324acb3a2348f60f996d4483",
+  "source": "assets/sf2/full/FluidR3_GM.sf2",
+  "source_sha256": "74594e8f4250680adf590507a306655a299935343583256f3b722c48a1bc1cb0",
+  "preset_count": 1,
+  "instrument_count": 8,
+  "sample_count": 106,
+  "presets": [
+    {
+      "bank": 128,
+      "program": 0,
+      "name": "Standard"
+    }
+  ],
+  "target_mib": 6.0,
+  "selection_method": "gm_family_round_robin_with_standard_drum"
+}
