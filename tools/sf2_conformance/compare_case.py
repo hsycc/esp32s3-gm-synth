@@ -4,8 +4,9 @@ import argparse
 import json
 import subprocess
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Tuple
+from typing import List, Mapping, Tuple
 
+from tools.sf2_analyzer.compat import runtime_generator_base
 from tools.sf2_analyzer.core import GEN_NAMES, Sf2
 from tools.sf2_analyzer.modulator import compile_note_mod_plans
 from tools.sf2_analyzer.modulator_eval import evaluate_mod_plan
@@ -131,10 +132,11 @@ def _our_voices(sf2_path: Path, bank: int, program: int, key: int, velocity: int
         values = {}
         for op in GENERATOR_OPS:
             name = GENERATOR_NAMES[op]
-            base = native.get(name)
-            if base is None:
-                base = 0
-            values[op] = float(base) + float(modulation.get(op, 0.0))
+            native_base = native.get(name)
+            if native_base is None:
+                native_base = 0
+            runtime_base = runtime_generator_base(op, native_base)
+            values[op] = float(runtime_base or 0.0) + float(modulation.get(op, 0.0))
         actual_key, actual_velocity = _effective_key_velocity(zone, key, velocity)
         voices.append(
             {
