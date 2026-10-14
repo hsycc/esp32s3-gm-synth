@@ -20,8 +20,16 @@ venv/
 .ruff_cache/
 
 # Analyzer/report local outputs
+# Ignore arbitrary local SoundFonts by default, but allow the pinned public
+# conformance assets under assets/sf2. FluidR3 full source is tracked through
+# Git LFS via .gitattributes; the two smaller full sources and all derived
+# ~6 MiB fixtures are ordinary Git files.
 *.sf2
 *.SF2
+!assets/sf2/subsets/*.sf2
+!assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2
+!assets/sf2/full/GeneralUser-GS.sf2
+!assets/sf2/full/FluidR3_GM.sf2
 *.wav
 *.WAV
 artifacts/
