@@ -10,193 +10,222 @@ This file is the durable execution plan for Codex/local development. Keep it upd
 - 44.1 kHz / 16-bit / stereo
 - 16 MIDI channels
 - GM1 128 melodic programs + drums
+- local hardware keys may initially emit one fixed velocity (for example 96 or 100)
+- the synth engine still accepts full MIDI velocity 1..127 from external MIDI/files
 
-R16 is excluded. SoundFont file size is not a product requirement.
+R16 is excluded. SoundFont file size is not itself a synth-engine limit.
 
-## M0 — Baseline and measurement harness
+## Product-format decision
 
-Goal: establish a trustworthy starting point before major refactors.
+Native `.sf2` is a first-class user asset format.
+
+Users should be able to create/share a SoundFont with existing tools and import the same `.sf2` into the product. A private compiled bank format is not the required user-facing path.
+
+Firmware may generate a disposable sidecar index/cache from an SF2, but the original `.sf2` remains the portable asset.
+
+## Public compatibility baselines
+
+Use multiple banks because no single SoundFont is the specification:
+
+- FM/GM Open SoundFont: simple/open GM128 baseline
+- GeneralUser GS: real-world generator/modulator compliance baseline
+- FluidR3_GM: large classic GM / partial-residency stress baseline
+- TimGM6mb: compact real-world N16R8/modulator-heavy baseline
+- GMBK5X128: known non-standard robustness/stress input only
+
+Public full banks and deterministic ~6 MiB derived fixtures live under `assets/sf2/` when Git LFS policy permits.
+
+## M0 — N16R8 hardware baseline
+
+Goal: establish a trustworthy hardware/build starting point before performance claims.
 
 Tasks:
-- choose the initial ESP-IDF/Arduino integration strategy
-- select/record the actual N16R8 development board/module
-- reproduce the relevant behavior of the SF2 reference implementation
+- choose and pin ESP-IDF/Arduino integration strategy
+- select/record actual N16R8 board/module
 - establish 44.1 kHz stereo I2S output
 - add block render-time telemetry
 - record internal SRAM and PSRAM usage
-- test 8 / 12 / 16 / 19 active voices where possible
-- create a repeatable dense-MIDI stress sequence
+- create repeatable dense-MIDI stress sequences
 
 Exit criteria:
 - reproducible build
 - known N16R8 hardware target/configuration
-- measured baseline for CPU/block timing and memory
-- measured safe PSRAM reserve, not a guessed reserve
-- no untracked assumptions about maximum polyphony
+- measured memory reserve and audio deadline baseline
 
 ## M1 — SF2 analyzer
 
-Goal: understand real candidate GM SoundFonts before designing around file size alone.
+Status: first useful version implemented.
 
-Analyzer reports:
+Goal: turn bank/storage/feature questions into measured data.
+
+Implemented/expected analysis includes:
 - RIFF/SF2 structure
 - source identity/hash and file size
-- `smpl` PCM payload size
+- `smpl` payload
 - preset/instrument/sample counts
-- bank/preset distribution
+- bank distribution
 - source sample-rate distribution
-- sample alignment/residency estimate
-- program -> sample dependency sets
-- per-program PCM working set
-- per-program zone count
-- maximum overlapping zones for representative notes/velocities
-- drum-bank requirements
-- used generator opcodes
-- used preset/instrument modulators with amount classification
-- linked/stereo sample usage
-- machine-readable JSON report
+- generator/modulator usage
+- linked/stereo samples
+- per-program dependencies/working sets
+- realistic 16-channel sample unions
+- N16R8 residency estimates
 
-Current real profiles:
-- `TimGM6mb.sf2`: compact, full-residency candidate, modulator-heavy
-- `GMBK5X128.sf2`: large multi-bank source, requires offline pruning + shared/per-program residency, simpler modulator semantics
+## M1.5 — SF2 compatibility baseline
 
-See `tasks/M1_SF2_ANALYZER.md` and `docs/SF2_BANK_ANALYSIS.md`.
+Goal: say precisely which standard SF2 semantics are supported, planned or unsupported.
+
+Tasks:
+- compatibility matrix for generators/modulators/features
+- import warnings for unsupported or malformed features
+- classify default modulators, `imod`, `pmod`, stereo links, `sm24`, ROM samples, etc.
+- use FM/GM Open, GeneralUser GS, FluidR3 and TimGM as different qualification roles
 
 Exit criteria:
-- analyzer can process both current candidate banks
-- N16/R8 persistent/resident feasibility can be answered with evidence
-- required SF2 feature subsets are documented
-- product asset compiler/pruner requirements are defined
+- importing a bank produces a deterministic compatibility report
+- unsupported features are explicit rather than silently ignored
 
-## M2 — Engine decomposition
+## M2 — Generator hierarchy and ResolvedZone
 
-Goal: separate responsibilities while preserving behavior.
-
-Target domains:
-- `gm/` — GM channel semantics and reset/bank/program state
-- `sf2/` — source parser and/or compiled zone representation
-- `sample/` — shared residency, handles, references and future stream abstraction
-- `synth/` — voice allocation and voice state
-- `audio/` — block rendering and I2S
-- `dsp/` — envelope/filter/interpolation/effects
-- `storage/` — compiled bank reads and background asset preparation
-- `diagnostics/` — counters and timing
-
-Rules:
-- structural changes first
-- do not change sound/DSP intentionally during decomposition unless required to correct a documented SF2 semantic gap
-- add tests around behavior before moving code
-- do not design the runtime around raw source-SF2 traversal if the offline compiler can precompute it safely
-
-## M3 — Timestamped event scheduler
-
-Goal: adopt a Phoenix-style musical event path suitable for MIDI and future internal sequencing.
+Goal: convert general SF2 preset/instrument structures into final sample-playing zones before firmware DSP depends on them.
 
 Target flow:
 
-`MIDI/other input -> decoder -> timestamp -> bounded queue -> block scheduler -> frame-offset execution`
+`Preset global/local -> Instrument global/local -> Sample -> ResolvedZone`
 
-Tasks:
-- define compact event structure
-- implement bounded realtime-safe queue
-- convert timestamps to audio-frame offsets
-- support multiple events inside one audio block
-- measure queue pressure and scheduling misses
+Required semantics:
+- preset/instrument global/local range intersection
+- instrument local generator supersedes instrument global/default
+- preset local supersedes preset global
+- valid preset generators increment instrument/default generator values
+- invalid preset-level generators are ignored/reported
+- sample address/loop offsets
+- root key/tuning
+- envelopes/filter/pan/attenuation/FX sends in native SF2 units
+
+Status: host `ResolvedZone` implementation and hierarchy tests started.
 
 Exit criteria:
-- events can execute at distinct frame offsets inside a block
-- audio task never blocks waiting for input/control tasks
+- deterministic host tests cover four-level hierarchy
+- representative real banks resolve without invalid sample references
+- selected results are cross-checked against a standards-oriented reference such as FluidSynth
 
-## M4 — Adaptive polyphony and safe voice stealing
+## M2.5 — Modulator resolver
 
-Goal: prefer graceful degradation over deadline misses/clicks.
+Goal: support mainstream SoundFont dynamic behavior without interpreting all modulators inside the per-sample hot loop.
+
+Required semantics:
+- default SF2 modulators
+- instrument global/local `imod` identity/override rules
+- preset global/local `pmod` identity/add rules
+- zero-amount instrument modulators that intentionally disable defaults
+- common source curves: linear/concave/convex/switch, polarity/direction
+- primary and amount-source controls where qualification banks use them
+
+Runtime strategy:
+- key/velocity/static modulation: NoteOn/preparation rate
+- CC/pitch/pressure modulation: event/control rate
+- only actual continuous DSP (LFO/envelope/filter) remains active in render path
+
+Exit criteria:
+- GeneralUser GS/TimGM modulator cases produce documented expected parameter behavior
+- no per-sample scan over arbitrary `pmod/imod` tables
+
+## M3 — Sample residency manager
+
+Goal: make large user SF2 files practical on R8 without storage I/O from NoteOn/audio render.
+
+Capabilities:
+- full-resident fast path for small banks that safely fit
+- shared/per-program PSRAM residency as general path
+- stable sample handles and voice references
+- background/control-domain sample loading
+- prepare -> READY -> block-boundary commit -> safe retire
+- fragmentation/high-water diagnostics
+
+Exit criteria:
+- large source SF2 can select playable presets while only required sample union is resident
+- active voices keep valid samples through release tails
+- no filesystem/flash read in audio hot path
+
+## M4 — Voice DSP baseline
+
+Goal: make ResolvedZone produce sound correctly before aggressive optimization.
+
+Implement/validate:
+- sample interpolation
+- pitch/sample-rate conversion
+- volume ADSR
+- loops
+- attenuation/pan
+- per-voice filter where required
+- vibrato/mod LFO where required
+- modulation envelope where required
+- dry/reverb/chorus sends
+
+Exit criteria:
+- representative reference notes render correctly enough for semantic A/B comparison
+- deterministic DSP tests exist where practical
+
+## M5 — Timestamped realtime event scheduler
+
+Goal: move MIDI/internal events into a bounded realtime-safe path.
+
+`input -> decoder -> timestamp -> bounded queue -> block scheduler -> frame-offset execution`
+
+Exit criteria:
+- multiple events can execute at distinct offsets within a 64-frame block
+- audio task never blocks on control/input work
+
+## M6 — Adaptive polyphony and safe voice stealing
+
+Goal: preserve audio deadlines across simple and DSP-heavy SF2 programs.
 
 Tasks:
-- block deadline monitor
-- rolling/peak render-time counters
-- CPU-pressure signal
+- render deadline monitor
+- rolling/peak/P99 timing
 - adaptive voice-admission limit
-- hysteresis/recovery policy
-- fast-release/fade voice stealing
-- duplicate-note and exclusive-class policy
+- hysteresis/recovery
+- fast-release/fade stealing
+- optional per-voice DSP complexity weight as a predictive signal
 
-Exit criteria:
-- load spikes reduce admission before repeated deadline failure
-- polyphony recovers gradually after sustained stability
-- stealing avoids obvious hard discontinuities under stress
+Qualification target remains 16 active sample voices; 18–20 remains opportunistic until N16R8 measurements prove margin.
 
-## M5 — Asset compiler, residency and Program Change
-
-Goal: deploy product-specific assets in N16 and remove synchronous asset loading from realtime audio transitions.
-
-Required capabilities:
-- host-side GM asset compiler/pruner
-- eliminate unexposed banks/presets and unreferenced samples
-- precompute program -> sample dependency sets
-- shared/per-program PSRAM residency
-- optional full-resident fast path for compact compiled banks
-- prepare / ready / block-boundary commit / safe retire lifecycle
-
-Optional experiments:
-- 48 kHz -> 44.1 kHz offline resampling for banks such as GMBK5X128, only after sound-quality evaluation
-- additional metadata flattening/precomputation to reduce runtime parser/control cost
-
-Exit criteria:
-- compiled product bank fits the N16 partition plan
-- no filesystem/flash reads in audio hot path
-- realistic 16-channel active sample unions fit R8 with measured reserve
-- Program Change behavior is measured and documented
-- old sound can continue until new program is ready where practical
-
-## M6 — GM128 qualification
-
-Goal: turn “it plays” into a release-quality validation matrix.
+## M7 — GM128 / user-SF2 qualification
 
 Functional coverage:
-- 128 melodic programs
-- selected channel-10 drum profile(s)
+- 128 GM melodic programs and drums where provided
 - 16 MIDI channels
-- Note On/Off
-- Program Change
-- Bank Select
-- pitch bend and bend range
-- CC7 volume
-- CC10 pan
-- CC11 expression
-- CC64 sustain
-- CC91 reverb send
-- CC93 chorus send
-- GM reset
+- Program/Bank change
+- Note On/Off, sustain, volume, pan, expression
+- pitch bend/range
+- reverb/chorus sends
+- default/custom modulators
+- stereo-linked samples
 
 Stress coverage:
-- dense piano chords
-- long sustain
-- repeated same-note retrigger
+- dense chords/sustain
 - drum bursts
 - rapid Program Change
-- 16-channel MIDI mixes
-- maximum-zone/layer presets
+- mixed 16-channel working sets
+- maximum-zone/layer programs
 - long-running playback
 
-Release metrics must include:
-- deadline misses
-- underruns
-- queue drops
+Release metrics:
+- deadline misses / underruns / queue drops
 - invalid sample accesses
-- max and percentile render time
-- memory high-water marks
-- sample-residency pressure/high-water mark
-- observed stable polyphony
+- max/P95/P99 render time
+- internal SRAM/PSRAM high-water marks
+- sample residency pressure
+- observed stable polyphony by DSP complexity class
 
 ## Current decision log
 
-- Hardware target is fixed: ESP32-S3 N16R8; do not use R16 assumptions.
-- Source `.sf2` file size is not a target metric; compiled persistent footprint and active PCM union are.
-- Primary product direction: validated GM profile(s), not arbitrary-SF2 compatibility first.
-- Shared/per-program residency is a required architecture path.
-- Full residency is an optional optimization for compact banks such as TimGM6mb if N16R8 measurements prove safe reserve.
-- Large multi-bank sources such as GMBK5X128 must be treated as compiler input, not automatically as deployable raw assets.
-- Streaming remains an architectural extension rather than a current V1 requirement.
-- Guaranteed polyphony target: 16 voices; higher values are performance targets only until hardware validation.
-- Audio block baseline: 64 frames at 44.1 kHz.
-- Reference project ideas may be combined; none is treated as the final architecture.
+- Hardware target is fixed: ESP32-S3 N16R8; R16 assumptions are prohibited.
+- Native SF2 is the user-facing/shareable asset format.
+- Local keys may use a fixed or small discrete set of velocities; engine compatibility remains 1..127.
+- Shared/per-program residency is mandatory architecture; full residency is only an optimization.
+- SF3 is not a V1 priority.
+- Private compiled-bank conversion is not required for user assets; disposable indexes/caches are allowed.
+- Modulators must be resolved outside the per-sample interpretation path; continuous DSP cost, not table parsing, is the main polyphony risk.
+- 16 active sample voices remains the qualification goal; higher counts depend on measured N16R8 headroom.
