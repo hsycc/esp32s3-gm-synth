@@ -16,30 +16,93 @@ permissions:
 jobs:
   real-bank-conformance:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    env:
+      FLUIDSYNTH_ORACLE_VERSION: "2.6.1"
+      FLUIDSYNTH_ORACLE_SHA: "71e85b2ca6bf48641ba7e2261d8f2640ae473773"
 
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
 
-      - name: Install FluidSynth oracle
+      - name: Install oracle build dependencies
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfluidsynth-dev pkg-config
-          pkg-config --modversion fluidsynth
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git
 
-      - name: Build FluidSynth probe
+      - name: Fetch pinned FluidSynth source
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build reports
-          cc -std=c11 -O2 -Wall -Wextra -Werror \
-            tools/sf2_conformance/fluidsynth_probe.c \
-            $(pkg-config --cflags --libs fluidsynth) \
-            -o build/fluidsynth_probe
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/FluidSynth/fluidsynth.git \
+            build/fluidsynth-src
+          git -C build/fluidsynth-src checkout --detach "${FLUIDSYNTH_ORACLE_SHA}"
+          git -C build/fluidsynth-src submodule update --init --depth 1 gcem
+          test "$(git -C build/fluidsynth-src rev-parse HEAD)" = "${FLUIDSYNTH_ORACLE_SHA}"
+
+      - name: Add internal effective-generator probe target
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp tools/sf2_conformance/fluidsynth_probe.c \
+            build/fluidsynth-src/sf2_effective_probe.c
+          cat >> build/fluidsynth-src/CMakeLists.txt <<'CMAKE'
+
+          # esp32s3-gm-synth conformance oracle. Built inside the pinned
+          # FluidSynth tree so internal fluid_voice_gen_value() uses the exact
+          # same types and generator layout as the reference implementation.
+          add_executable(sf2_effective_probe sf2_effective_probe.c)
+          target_include_directories(sf2_effective_probe PRIVATE
+            ${FluidSynth_BINARY_DIR}
+            ${FluidSynth_BINARY_DIR}/include
+            ${FluidSynth_SOURCE_DIR}/include
+            ${FluidSynth_SOURCE_DIR}/src
+            ${FluidSynth_SOURCE_DIR}/src/drivers
+            ${FluidSynth_SOURCE_DIR}/src/synth
+            ${FluidSynth_SOURCE_DIR}/src/rvoice
+            ${FluidSynth_SOURCE_DIR}/src/midi
+            ${FluidSynth_SOURCE_DIR}/src/utils
+            ${FluidSynth_SOURCE_DIR}/src/sfloader
+            ${FluidSynth_SOURCE_DIR}/src/bindings
+          )
+          target_link_libraries(sf2_effective_probe PRIVATE libfluidsynth)
+          CMAKE
+
+      - name: Build pinned FluidSynth effective oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S build/fluidsynth-src -B build/fluidsynth-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -Denable-aufile=OFF \
+            -Denable-alsa=OFF \
+            -Denable-dbus=OFF \
+            -Denable-ipv6=OFF \
+            -Denable-jack=OFF \
+            -Denable-ladspa=OFF \
+            -Denable-libsndfile=OFF \
+            -Denable-midishare=OFF \
+            -Denable-network=OFF \
+            -Denable-openmp=OFF \
+            -Denable-oss=OFF \
+            -Denable-pipewire=OFF \
+            -Denable-pulseaudio=OFF \
+            -Denable-readline=OFF \
+            -Denable-sdl3=OFF \
+            -Denable-systemd=OFF \
+            -Denable-native-dls=OFF \
+            -Denable-signalsmith=OFF
+          cmake --build build/fluidsynth-build --target sf2_effective_probe -j2
+          cp build/fluidsynth-build/sf2_effective_probe build/fluidsynth_probe
+          ./build/fluidsynth_probe 2>&1 | grep -q '^usage:'
 
       - name: Verify checked-in comparable fixtures
         shell: bash
@@ -47,12 +110,14 @@ jobs:
           set -euo pipefail
           sha256sum -c assets/sf2/manifests/subset-sha256.txt
 
-      - name: Run real-bank generator conformance
+      - name: Run real-bank effective-generator conformance
         shell: bash
         run: |
           set -euo pipefail
           python -m tools.sf2_conformance.run_suite \
             --probe ./build/fluidsynth_probe \
+            --oracle-version "FluidSynth ${FLUIDSYNTH_ORACLE_VERSION}" \
+            --oracle-sha "${FLUIDSYNTH_ORACLE_SHA}" \
             --output reports/sf2_conformance.json
 
       - name: Print mismatch summary
