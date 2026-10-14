@@ -2,7 +2,19 @@
 
 ## Goal
 
-Use ESP32-S3 internal SRAM and PSRAM deliberately. The fixed GM bank should be analyzed before choosing full residency, per-program residency, or any streaming mechanism.
+Use ESP32-S3 N16R8 memory deliberately. The architecture must work with **8 MB PSRAM** and must not depend on 16 MB PSRAM.
+
+The two current candidate banks prove that one fixed residency strategy is insufficient:
+- compact banks may support full residency
+- larger banks require shared/per-program residency
+
+## Fixed memory budget
+
+Hardware baseline:
+- flash: 16 MB
+- PSRAM: 8 MB
+
+The full 8 MB PSRAM is never assumed available for PCM. Runtime reserve must cover firmware PSRAM use, allocator overhead, effects, metadata and safety margin.
 
 ## Memory classes
 
@@ -24,32 +36,50 @@ Prefer for large resident data:
 - PCM sample arena
 - larger non-DMA sample buffers
 - large effect delay buffers when acceptable
-- parsed metadata only when access cost remains safe
+- parsed/compiled metadata only when access cost remains safe
 
-### Flash/filesystem/SD
+### Flash/filesystem
 
-Owns persistent assets. V1 Note On must not depend on realtime reads from this storage.
+Owns persistent product assets.
+
+N16 capacity is also a hard product constraint: the raw source SoundFont need not be the deployed asset. Large source banks should be compiled/pruned into product-specific assets before firmware deployment.
+
+V1 Note On must not depend on realtime reads from persistent storage.
+
+## Measured candidate profiles
+
+See `SF2_BANK_ANALYSIS.md` for full details.
+
+### TimGM6mb
+- aligned PCM across the complete source: about 5.47 MiB
+- gross R8 headroom after complete PCM residency: about 2.53 MiB before all other runtime use
+- therefore full residency is plausible but must be proven on hardware
+
+### GMBK5X128
+- complete aligned PCM: about 14.84 MiB — impossible on R8
+- GM bank 0 + standard drum sample union: about 8.49 MiB — still too large for full residency
+- measured 15 melodic + standard drum 16-channel union: about 5.44 MiB
+- therefore shared/per-program residency is the intended runtime path
 
 ## Sample residency decision
 
-M1 must calculate actual bank characteristics.
-
-Do not infer PCM residency directly from `.sf2` file size.
+Do not infer residency from `.sf2` file size.
 
 Important values:
 - `smpl` chunk payload size
 - aligned PCM size
 - sample count
 - metadata overhead
-- sample-pool index/entry overhead
 - application PSRAM reserve
+- sample-pool index/entry overhead
 - fragmentation/allocator reserve
+- active 16-channel union size
 
-### Option A — full fixed-bank residency
+### Option A — full compiled-bank residency
 
-Preferred when:
+Allowed only when:
 
-`all required PCM + metadata + runtime PSRAM use + safety reserve <= available PSRAM`
+`all required PCM + metadata + runtime PSRAM use + safety reserve <= 8 MB PSRAM`
 
 Benefits:
 - Program Change can be index/state only
@@ -57,35 +87,60 @@ Benefits:
 - no runtime sample fragmentation caused by program switching
 - simplest timing model
 
-Risks:
-- leaves less PSRAM for future features/effects
-- startup loading time
-- must preserve adequate safety reserve
+This is an optimization for small compiled banks, not the general architecture.
 
 ### Option B — shared/per-program residency
 
-Load only samples required by active programs/channels and share duplicate sample references.
+**Required V1 capability.**
+
+Load samples required by active programs/channels and share duplicate sample references.
 
 Benefits:
-- supports banks larger than available PSRAM
+- supports source/compiled banks larger than R8
 - retains storage-free Note On after preparation
+- real GMBK 16-channel working sets appear feasible on R8
 
 Costs:
 - residency manager complexity
 - Program Change preparation latency
 - fragmentation/rebuild policy
-- multi-channel working-set analysis becomes important
+- explicit ownership/refcount rules
 
 ### Option C — streaming
 
-Not a V1 requirement for a ~14 MB bank.
+Not currently required for the two analyzed GM candidates.
 
-Keep the interfaces extensible enough for future large instruments. Streaming introduces:
+Keep interfaces extensible enough for future large instruments. Streaming introduces:
 - storage latency
 - refill buffers
 - underrun management
 - fragmentation/card-quality dependencies
 - source-rate-dependent bandwidth pressure
+
+## Product asset pipeline
+
+Preferred direction:
+
+```text
+Source SF2
+   ↓
+Host analyzer/compiler
+   ├─ select GM banks/presets
+   ├─ remove unreferenced samples
+   ├─ normalize metadata
+   ├─ precompute dependency sets
+   └─ optional measured resampling
+   ↓
+Compiled product bank in N16 flash
+   ↓
+Residency Manager
+   ↓
+R8 PSRAM SamplePool
+   ↓
+Voice Engine
+```
+
+For `GMBK5X128`, the source file contains many non-GM variation banks. Shipping the entire 15 MiB source in N16 is not the intended product path.
 
 ## Sample handle model
 
@@ -128,13 +183,13 @@ Desired properties:
 - predictable alignment
 - inspectable capacity/usage
 - bounded metadata
-- coalescing or rebuild strategy if partial residency is used
+- coalescing or rebuild strategy
 - explicit entry-count limit
 - diagnostics for fragmentation and largest free span
 
 ## Measurements
 
-Record at minimum:
+Record at minimum on N16R8:
 - total/free internal SRAM
 - largest free internal block
 - total/free PSRAM
@@ -143,5 +198,6 @@ Record at minimum:
 - resident sample count
 - allocation failures
 - fragmentation/repack events
+- peak active-program union size
 
 Memory design changes should include before/after measurements on hardware.
