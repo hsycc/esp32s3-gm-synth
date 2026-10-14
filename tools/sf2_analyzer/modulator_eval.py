@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import math
-from typing import Mapping, MutableMapping, Optional, Tuple
+from typing import Mapping, Optional, Tuple
 
-from .modulator import ModSource, Modulator
+from .compat import DEFAULT_RUNTIME_COMPATIBILITY, REALWORLD_SF2, STRICT_SF2
+from .modulator import ModSource, Modulator, default_modulators
 
 
 MIDI_RANGE = 128.0
 PITCH_WHEEL_RANGE = 16384.0
 PEAK_ATTENUATION_CB = 960.0
 _CURVE_TABLE_SIZE = 128
+_DEFAULT_VELOCITY_FILTER_IDENTITY = next(
+    mod.identity
+    for mod in default_modulators()
+    if mod.destination == 8 and mod.origin == "default:velocity_to_filter_fc"
+)
 
 
 def _concave_table_value(index: int) -> float:
@@ -117,15 +123,35 @@ def _source_raw_value(source: ModSource, state: Mapping) -> Tuple[float, float]:
     raise ValueError(f"unsupported general-controller source {source.index}")
 
 
-def evaluate_modulator(modulator: Modulator, state: Mapping) -> float:
+def evaluate_modulator(
+    modulator: Modulator,
+    state: Mapping,
+    *,
+    compatibility_profile: str = DEFAULT_RUNTIME_COMPATIBILITY,
+) -> float:
     """Evaluate one effective Modulator in native destination-generator units.
+
+    The real-world profile mirrors FluidSynth/legacy-bank compatibility for the
+    standard velocity-to-filter default modulator: that exact modulator identity
+    contributes zero. A strict-SF2 profile remains available for analysis.
 
     V1 currently accepts only the standard linear transform (transform=0).
     Source mapping curves are fully handled for the common SF2 types.
     """
+    if compatibility_profile not in (STRICT_SF2, REALWORLD_SF2):
+        raise ValueError(f"unknown SF2 compatibility profile {compatibility_profile!r}")
     if modulator.transform != 0:
         raise ValueError(f"unsupported SF2 transform operator {modulator.transform}")
     if modulator.amount == 0:
+        return 0.0
+
+    # FluidSynth 2.6.x intentionally suppresses the SF2 default
+    # velocity->filter cutoff route for compatibility. Identity excludes amount,
+    # so an identical instrument/preset replacement remains covered.
+    if (
+        compatibility_profile == REALWORLD_SF2
+        and modulator.identity == _DEFAULT_VELOCITY_FILTER_IDENTITY
+    ):
         return 0.0
 
     raw1, range1 = _source_raw_value(modulator.source, state)
@@ -135,7 +161,13 @@ def evaluate_modulator(modulator: Modulator, state: Mapping) -> float:
     return float(modulator.amount) * mapped1 * mapped2
 
 
-def evaluate_mod_plan(plan: Mapping, state: Mapping, trigger: Optional[str] = None) -> dict:
+def evaluate_mod_plan(
+    plan: Mapping,
+    state: Mapping,
+    trigger: Optional[str] = None,
+    *,
+    compatibility_profile: str = DEFAULT_RUNTIME_COMPATIBILITY,
+) -> dict:
     """Evaluate effective modulators, optionally restricted to one event group.
 
     Returned values are summed by destination generator and remain in native
@@ -159,6 +191,10 @@ def evaluate_mod_plan(plan: Mapping, state: Mapping, trigger: Optional[str] = No
             item["transform"],
             item.get("origin", "compiled"),
         )
-        value = evaluate_modulator(mod, state)
+        value = evaluate_modulator(
+            mod,
+            state,
+            compatibility_profile=compatibility_profile,
+        )
         totals[mod.destination] = totals.get(mod.destination, 0.0) + value
     return totals
