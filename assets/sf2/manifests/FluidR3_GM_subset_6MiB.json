@@ -1,19 +1,132 @@
 {
   "output": "assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2",
-  "size_bytes": 11158736,
-  "sha256": "b212d88beeebe045dd0bb738d3c3277d73b61eaf324acb3a2348f60f996d4483",
+  "size_bytes": 5913718,
+  "sha256": "fa2ee672cb31c6ab57d5a41a53a76ea413792f59360ef19a399c974475a2c9b1",
   "source": "assets/sf2/full/FluidR3_GM.sf2",
   "source_sha256": "74594e8f4250680adf590507a306655a299935343583256f3b722c48a1bc1cb0",
-  "preset_count": 1,
-  "instrument_count": 8,
-  "sample_count": 106,
+  "preset_count": 23,
+  "instrument_count": 25,
+  "sample_count": 102,
   "presets": [
     {
-      "bank": 128,
-      "program": 0,
-      "name": "Standard"
+      "bank": 0,
+      "program": 8,
+      "name": "Celesta"
+    },
+    {
+      "bank": 0,
+      "program": 16,
+      "name": "DrawbarOrgan"
+    },
+    {
+      "bank": 0,
+      "program": 24,
+      "name": "Nylon String Guitar"
+    },
+    {
+      "bank": 0,
+      "program": 32,
+      "name": "Acoustic Bass"
+    },
+    {
+      "bank": 0,
+      "program": 38,
+      "name": "Synth Bass 1"
+    },
+    {
+      "bank": 0,
+      "program": 50,
+      "name": "Synth Strings 1"
+    },
+    {
+      "bank": 0,
+      "program": 51,
+      "name": "Synth Strings 2"
+    },
+    {
+      "bank": 0,
+      "program": 56,
+      "name": "Trumpet"
+    },
+    {
+      "bank": 0,
+      "program": 57,
+      "name": "Trombone"
+    },
+    {
+      "bank": 0,
+      "program": 72,
+      "name": "Piccolo"
+    },
+    {
+      "bank": 0,
+      "program": 80,
+      "name": "Square Lead"
+    },
+    {
+      "bank": 0,
+      "program": 81,
+      "name": "Saw Wave"
+    },
+    {
+      "bank": 0,
+      "program": 86,
+      "name": "Fifth Sawtooth Wave"
+    },
+    {
+      "bank": 0,
+      "program": 87,
+      "name": "Bass & Lead"
+    },
+    {
+      "bank": 0,
+      "program": 88,
+      "name": "Fantasia"
+    },
+    {
+      "bank": 0,
+      "program": 90,
+      "name": "Polysynth"
+    },
+    {
+      "bank": 0,
+      "program": 94,
+      "name": "Halo Pad"
+    },
+    {
+      "bank": 0,
+      "program": 96,
+      "name": "Ice Rain"
+    },
+    {
+      "bank": 0,
+      "program": 98,
+      "name": "Crystal"
+    },
+    {
+      "bank": 0,
+      "program": 112,
+      "name": "Tinker Bell"
+    },
+    {
+      "bank": 0,
+      "program": 120,
+      "name": "Fret Noise"
+    },
+    {
+      "bank": 0,
+      "program": 121,
+      "name": "Breath Noise"
+    },
+    {
+      "bank": 0,
+      "program": 127,
+      "name": "Gun Shot"
     }
   ],
   "target_mib": 6.0,
-  "selection_method": "gm_family_round_robin_with_standard_drum"
+  "target_bytes": 6291456,
+  "selection_method": "melodic_gm_family_round_robin_no_drums",
+  "standard_drum_included": false,
+  "drum_policy": "Common size-matched fixtures exclude drums. Drum kits are tested separately because a single large kit can exceed the 6 MiB budget."
 }

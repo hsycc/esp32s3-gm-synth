@@ -1,12 +1,12 @@
 {
   "output": "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2",
-  "size_bytes": 5893186,
-  "sha256": "2df518038f2939c9d05ba5e123da8cc443aed1d5535fcf669cdf49a8c10bd077",
+  "size_bytes": 5898214,
+  "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
   "source": "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2",
   "source_sha256": "969a7db13c0713e2792ee9fc8a3e10505982c4875cc0c3483a2047ac7315561d",
-  "preset_count": 36,
-  "instrument_count": 36,
-  "sample_count": 82,
+  "preset_count": 67,
+  "instrument_count": 67,
+  "sample_count": 67,
   "presets": [
     {
       "bank": 0,
@@ -25,6 +25,16 @@
     },
     {
       "bank": 0,
+      "program": 3,
+      "name": "Honky-tonk Piano"
+    },
+    {
+      "bank": 0,
+      "program": 4,
+      "name": "Electric Piano 1"
+    },
+    {
+      "bank": 0,
       "program": 8,
       "name": "Celesta"
     },
@@ -32,6 +42,21 @@
       "bank": 0,
       "program": 9,
       "name": "Glockenspiel"
+    },
+    {
+      "bank": 0,
+      "program": 10,
+      "name": "Music Box"
+    },
+    {
+      "bank": 0,
+      "program": 11,
+      "name": "Vibraphone"
+    },
+    {
+      "bank": 0,
+      "program": 12,
+      "name": "Marimba"
     },
     {
       "bank": 0,
@@ -50,6 +75,16 @@
     },
     {
       "bank": 0,
+      "program": 19,
+      "name": "Church Organ"
+    },
+    {
+      "bank": 0,
+      "program": 20,
+      "name": "Reed Organ"
+    },
+    {
+      "bank": 0,
       "program": 24,
       "name": "Acoustic Guitar (ny"
     },
@@ -57,6 +92,16 @@
       "bank": 0,
       "program": 25,
       "name": "Acoustic Guitar (st"
+    },
+    {
+      "bank": 0,
+      "program": 26,
+      "name": "Electric Guitar (ja"
+    },
+    {
+      "bank": 0,
+      "program": 27,
+      "name": "Electric Guitar (cl"
     },
     {
       "bank": 0,
@@ -75,6 +120,11 @@
     },
     {
       "bank": 0,
+      "program": 35,
+      "name": "Fretless Bass"
+    },
+    {
+      "bank": 0,
       "program": 40,
       "name": "Violin"
     },
@@ -82,6 +132,16 @@
       "bank": 0,
       "program": 41,
       "name": "Viola"
+    },
+    {
+      "bank": 0,
+      "program": 42,
+      "name": "Cello"
+    },
+    {
+      "bank": 0,
+      "program": 43,
+      "name": "Contrabass"
     },
     {
       "bank": 0,
@@ -95,6 +155,16 @@
     },
     {
       "bank": 0,
+      "program": 50,
+      "name": "SynthStrings 1"
+    },
+    {
+      "bank": 0,
+      "program": 51,
+      "name": "SynthStrings 2"
+    },
+    {
+      "bank": 0,
       "program": 56,
       "name": "Trumpet"
     },
@@ -102,6 +172,16 @@
       "bank": 0,
       "program": 57,
       "name": "Trombone"
+    },
+    {
+      "bank": 0,
+      "program": 58,
+      "name": "Tuba"
+    },
+    {
+      "bank": 0,
+      "program": 59,
+      "name": "Muted Trumpet"
     },
     {
       "bank": 0,
@@ -115,6 +195,16 @@
     },
     {
       "bank": 0,
+      "program": 66,
+      "name": "Tenor Sax"
+    },
+    {
+      "bank": 0,
+      "program": 67,
+      "name": "Baritone Sax"
+    },
+    {
+      "bank": 0,
       "program": 72,
       "name": "Piccolo"
     },
@@ -122,6 +212,16 @@
       "bank": 0,
       "program": 73,
       "name": "Flute"
+    },
+    {
+      "bank": 0,
+      "program": 74,
+      "name": "Recorder"
+    },
+    {
+      "bank": 0,
+      "program": 75,
+      "name": "Pan Flute"
     },
     {
       "bank": 0,
@@ -135,6 +235,16 @@
     },
     {
       "bank": 0,
+      "program": 82,
+      "name": "Lead 3 (calliope)"
+    },
+    {
+      "bank": 0,
+      "program": 83,
+      "name": "Lead 4 (chiff)"
+    },
+    {
+      "bank": 0,
       "program": 88,
       "name": "Pad 1 (new age)"
     },
@@ -142,6 +252,16 @@
       "bank": 0,
       "program": 89,
       "name": "Pad 2 (warm)"
+    },
+    {
+      "bank": 0,
+      "program": 90,
+      "name": "Pad 3 (polysynth)"
+    },
+    {
+      "bank": 0,
+      "program": 91,
+      "name": "Pad 4 (choir)"
     },
     {
       "bank": 0,
@@ -155,6 +275,16 @@
     },
     {
       "bank": 0,
+      "program": 98,
+      "name": "FX 3 (crystal)"
+    },
+    {
+      "bank": 0,
+      "program": 99,
+      "name": "FX 4 (atmosphere)"
+    },
+    {
+      "bank": 0,
       "program": 104,
       "name": "Sitar"
     },
@@ -162,6 +292,16 @@
       "bank": 0,
       "program": 105,
       "name": "Banjo"
+    },
+    {
+      "bank": 0,
+      "program": 106,
+      "name": "Shamisen"
+    },
+    {
+      "bank": 0,
+      "program": 107,
+      "name": "Koto"
     },
     {
       "bank": 0,
@@ -175,6 +315,16 @@
     },
     {
       "bank": 0,
+      "program": 114,
+      "name": "Steel Drums"
+    },
+    {
+      "bank": 0,
+      "program": 115,
+      "name": "Woodblock"
+    },
+    {
+      "bank": 0,
       "program": 120,
       "name": "Guitar Fret Noise"
     },
@@ -184,11 +334,19 @@
       "name": "Breath Noise"
     },
     {
-      "bank": 128,
-      "program": 0,
-      "name": "Standard Drum Kit"
+      "bank": 0,
+      "program": 122,
+      "name": "Seashore"
+    },
+    {
+      "bank": 0,
+      "program": 123,
+      "name": "Bird Tweet"
     }
   ],
   "target_mib": 6.0,
-  "selection_method": "gm_family_round_robin_with_standard_drum"
+  "target_bytes": 6291456,
+  "selection_method": "melodic_gm_family_round_robin_no_drums",
+  "standard_drum_included": false,
+  "drum_policy": "Common size-matched fixtures exclude drums. Drum kits are tested separately because a single large kit can exceed the 6 MiB budget."
 }

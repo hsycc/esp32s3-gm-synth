@@ -1,12 +1,12 @@
 {
   "output": "assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2",
-  "size_bytes": 5926856,
-  "sha256": "c56e709a8802446005f4ec7b07d93dc4a9020a62157af2866f01cd2b61321d8a",
+  "size_bytes": 5926022,
+  "sha256": "cd0a4de25da33ea6112ad0edadf97b0a2b5472311d8b099728477eece7b748a4",
   "source": "assets/sf2/full/GeneralUser-GS.sf2",
   "source_sha256": "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe",
-  "preset_count": 21,
-  "instrument_count": 43,
-  "sample_count": 164,
+  "preset_count": 35,
+  "instrument_count": 44,
+  "sample_count": 186,
   "presets": [
     {
       "bank": 0,
@@ -40,6 +40,11 @@
     },
     {
       "bank": 0,
+      "program": 17,
+      "name": "Percussive Organ"
+    },
+    {
+      "bank": 0,
       "program": 24,
       "name": "Nylon Guitar"
     },
@@ -50,8 +55,28 @@
     },
     {
       "bank": 0,
+      "program": 33,
+      "name": "Finger Bass"
+    },
+    {
+      "bank": 0,
+      "program": 40,
+      "name": "Violin"
+    },
+    {
+      "bank": 0,
+      "program": 50,
+      "name": "Synth Strings 1"
+    },
+    {
+      "bank": 0,
       "program": 56,
       "name": "Trumpet"
+    },
+    {
+      "bank": 0,
+      "program": 58,
+      "name": "Tuba"
     },
     {
       "bank": 0,
@@ -65,6 +90,16 @@
     },
     {
       "bank": 0,
+      "program": 64,
+      "name": "Soprano Sax"
+    },
+    {
+      "bank": 0,
+      "program": 72,
+      "name": "Piccolo"
+    },
+    {
+      "bank": 0,
       "program": 80,
       "name": "Square Lead"
     },
@@ -75,8 +110,53 @@
     },
     {
       "bank": 0,
-      "program": 111,
-      "name": "Shenai"
+      "program": 86,
+      "name": "5th Saw Wave"
+    },
+    {
+      "bank": 0,
+      "program": 88,
+      "name": "Fantasia"
+    },
+    {
+      "bank": 0,
+      "program": 90,
+      "name": "Polysynth"
+    },
+    {
+      "bank": 0,
+      "program": 92,
+      "name": "Bowed Glass"
+    },
+    {
+      "bank": 0,
+      "program": 95,
+      "name": "Sweep Pad"
+    },
+    {
+      "bank": 0,
+      "program": 96,
+      "name": "Ice Rain"
+    },
+    {
+      "bank": 0,
+      "program": 97,
+      "name": "Soundtrack"
+    },
+    {
+      "bank": 0,
+      "program": 104,
+      "name": "Sitar"
+    },
+    {
+      "bank": 0,
+      "program": 105,
+      "name": "Banjo"
+    },
+    {
+      "bank": 0,
+      "program": 110,
+      "name": "Fiddle"
     },
     {
       "bank": 0,
@@ -90,30 +170,23 @@
     },
     {
       "bank": 0,
-      "program": 115,
-      "name": "Wood Block"
-    },
-    {
-      "bank": 0,
-      "program": 117,
-      "name": "Melodic Tom"
-    },
-    {
-      "bank": 0,
       "program": 120,
       "name": "Fret Noise"
     },
     {
       "bank": 0,
-      "program": 124,
-      "name": "Telephone 1"
+      "program": 121,
+      "name": "Breath Noise"
     },
     {
-      "bank": 128,
-      "program": 0,
-      "name": "Standard 1"
+      "bank": 0,
+      "program": 124,
+      "name": "Telephone 1"
     }
   ],
   "target_mib": 6.0,
-  "selection_method": "gm_family_round_robin_with_standard_drum"
+  "target_bytes": 6291456,
+  "selection_method": "melodic_gm_family_round_robin_no_drums",
+  "standard_drum_included": false,
+  "drum_policy": "Common size-matched fixtures exclude drums. Drum kits are tested separately because a single large kit can exceed the 6 MiB budget."
 }
