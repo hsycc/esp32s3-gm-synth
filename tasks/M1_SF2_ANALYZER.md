@@ -4,7 +4,34 @@
 Analyze the actual fixed GM bank and turn compatibility/memory questions into data.
 
 ## Tool
-Create a host-side analyzer under `tools/sf2_analyzer/`.
+Host-side analyzer under `tools/sf2_analyzer/`.
+
+## Implementation status
+
+Analyzer v0.1 is implemented with Python standard library only.
+
+Implemented:
+- RIFF/SF2 chunk parsing
+- `phdr/pbag/pmod/pgen/inst/ibag/imod/igen/shdr` table parsing
+- preset -> instrument -> sample dependency resolution
+- preset/instrument key and velocity range intersection
+- sample PCM byte and 4-byte-aligned residency accounting
+- generator usage reporting
+- non-zero `pmod` / `imod` reporting
+- linked/stereo sample reporting
+- per-program sample working sets and representative layer overlap
+- conventional bank-0 / bank-128 GM summaries
+- greedy 16-program working-set estimate
+- greedy 15-melodic + 1-drum working-set estimate
+- optional PSRAM/reserve fit calculation
+- JSON output
+- synthetic SF2 host tests and GitHub Actions coverage
+
+Still required to complete M1:
+- run the analyzer against the actual candidate production GM bank
+- archive the generated JSON report (when licensing/confidentiality permits)
+- validate suspicious/unsupported generator and modulator usage against the SoundFont spec and reference synth behavior
+- use the real report to choose full-bank vs program-resident sample strategy
 
 ## Required output
 - RIFF/SF2 chunk summary
@@ -28,4 +55,4 @@ Create a host-side analyzer under `tools/sf2_analyzer/`.
 4. What are realistic 16-channel union working sets?
 
 ## Exit criteria
-Architecture decisions about residency and SF2 feature support are based on analyzer output, not `.sf2` file size guesses.
+Architecture decisions about residency and SF2 feature support are based on analyzer output from the actual fixed GM bank, not `.sf2` file size guesses.
