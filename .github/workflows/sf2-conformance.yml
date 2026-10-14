@@ -102,7 +102,13 @@ jobs:
             -Denable-signalsmith=OFF
           cmake --build build/fluidsynth-build --target sf2_effective_probe -j2
           cp build/fluidsynth-build/sf2_effective_probe build/fluidsynth_probe
-          ./build/fluidsynth_probe 2>&1 | grep -q '^usage:'
+
+          set +e
+          oracle_usage="$(./build/fluidsynth_probe 2>&1)"
+          oracle_rc=$?
+          set -e
+          test "$oracle_rc" -eq 2
+          grep -q '^usage:' <<<"$oracle_usage"
 
       - name: Verify checked-in comparable fixtures
         shell: bash
