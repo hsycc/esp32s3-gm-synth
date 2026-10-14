@@ -85,7 +85,6 @@ jobs:
             --target-mib 6 \
             --manifest assets/sf2/manifests/FluidR3_GM_subset_6MiB.json
 
-          # Re-parse generated files using the project's independent analyzer.
           for sf2 in assets/sf2/subsets/*.sf2; do
             base="$(basename "$sf2" .sf2)"
             python -m tools.sf2_analyzer "$sf2" \
@@ -95,28 +94,32 @@ jobs:
           sha256sum assets/sf2/subsets/*.sf2 > assets/sf2/manifests/subset-sha256.txt
           ls -lh assets/sf2/subsets/*.sf2
 
-      - name: Commit subsets, manifests and licenses first
+      - name: Commit fixtures, licenses and sub-100MB full sources
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Subsets intentionally use ordinary Git. Only assets/sf2/full is LFS.
           git add --renormalize assets/sf2/subsets || true
-          git add assets/sf2/subsets assets/sf2/manifests assets/sf2/licenses
+          git add \
+            assets/sf2/subsets \
+            assets/sf2/manifests \
+            assets/sf2/licenses \
+            assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2 \
+            assets/sf2/full/GeneralUser-GS.sf2
           if ! git diff --cached --quiet; then
-            git commit -m "test-assets: refresh comparable SF2 subsets [skip ci]"
+            git commit -m "test-assets: add public SF2 baselines and fixtures [skip ci]"
             git push origin HEAD:main
           fi
 
-      - name: Attempt full public SoundFonts through Git LFS
+      - name: Attempt oversized FluidR3 through Git LFS
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          git add assets/sf2/full
+          git add assets/sf2/full/FluidR3_GM.sf2
           if ! git diff --cached --quiet; then
-            git commit -m "test-assets: add full public SF2 baselines via LFS [skip ci]"
+            git commit -m "test-assets: add FluidR3 full baseline via LFS [skip ci]"
             git push origin HEAD:main
           fi
