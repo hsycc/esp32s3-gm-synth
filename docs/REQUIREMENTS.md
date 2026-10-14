@@ -2,16 +2,20 @@
 
 ## Product scope
 
-V1 is a software GM1 sound module for **ESP32-S3 N16R8** using a validated SoundFont-derived asset profile.
+V1 is a software GM/SoundFont sound module for **ESP32-S3 N16R8** with **native user-loadable SF2 support**.
+
+Users should be able to create and share `.sf2` banks using common SoundFont tools and load compatible banks without converting them to a proprietary format.
+
+A bundled GM bank is the default/qualification asset, not the only supported bank.
 
 ### Required musical behavior
 
 - 16 MIDI channels
-- GM1 melodic programs 0–127
+- GM1 melodic programs 0–127 for the bundled qualification bank
 - channel-10 drum/percussion behavior
 - Note On / Note Off
 - Program Change
-- Bank Select sufficient for the validated bank/profile
+- Bank Select
 - pitch bend
 - configurable pitch-bend range through the supported RPN path
 - sustain pedal (CC64)
@@ -22,7 +26,7 @@ V1 is a software GM1 sound module for **ESP32-S3 N16R8** using a validated Sound
 - chorus send (CC93)
 - GM reset behavior required by the validation corpus
 
-Broader GS/XG support is optional and must not delay GM1 qualification.
+Broader GS/XG behavior is optional, but non-zero banks in user SF2 files should be parsed and exposed where practical.
 
 ## Audio targets
 
@@ -36,10 +40,10 @@ Initial baseline:
 
 ### Polyphony
 
-- 16 voices: qualification target / intended guaranteed minimum
+- 16 active sample voices: qualification target / intended guaranteed minimum
 - 18–20 voices: stretch target only when measured realtime margin supports it
 
-A voice means one active sample/zone playback instance, not one MIDI note.
+A voice means one active sample/zone playback instance, not one MIDI note. Stereo-linked samples and layered zones must be accounted for separately in performance validation.
 
 ## Fixed hardware baseline
 
@@ -51,34 +55,76 @@ A voice means one active sample/zone playback instance, not one MIDI note.
 
 R16 must not be assumed for capacity planning.
 
-Specific board/pin assignments are intentionally deferred until the board baseline is selected, but memory-capacity decisions are already bound to N16R8.
+Specific board/pin assignments are intentionally deferred until the board baseline is selected, but memory-capacity decisions are bound to N16R8.
 
-## SoundFont scope
+## SF2 user-asset requirements
 
-V1 does not require support for a fixed `.sf2` file size such as 14 MB.
+`.sf2` is the primary exchange/import format for V1.
 
-The relevant limits are:
-- source asset footprint in N16 flash
-- compiled GM-only asset footprint
-- active/shared PCM working set in R8 PSRAM
-- SF2 generator/modulator features actually used
-- runtime CPU cost of the selected bank/profile
+The product must distinguish three independent limits:
 
-Current real candidate banks are documented in `SF2_BANK_ANALYSIS.md`.
+1. **Storage limit** — whether the SF2 file fits the available flash/filesystem/external storage.
+2. **Metadata/feature compatibility** — whether the firmware understands the SF2 generators/modulators/sample structures used by the bank.
+3. **Active residency limit** — whether the currently selected programs' PCM working set fits R8 PSRAM with safe system reserve.
 
-Before a bank is qualified, M1/M2 must determine:
-- actual `smpl` payload size
-- sample count
-- preset/instrument count
-- bank/preset distribution
+Do not reject or accept a SoundFont based only on total `.sf2` file size.
+
+A user SF2 import/load operation should produce a compatibility report or status containing at least:
+- SF2 version/basic RIFF validity
+- preset/instrument/sample counts
+- storage/file size
 - generator usage
 - modulator usage
 - stereo-link usage
-- source sample-rate distribution
-- maximum relevant zone layering
-- per-program sample working set
-- realistic 16-channel union working sets
-- GM-only pruning opportunity
+- sample-rate distribution
+- estimated per-program and current multi-channel residency
+- unsupported features, if any
+
+## Compatibility target classes
+
+### Open/simple baseline
+
+`FM/GM Open SoundFont` is useful as a simple public GM128 baseline:
+- Bank 0 programs 0–127
+- GM standard drum kit
+- 44.1 kHz / 16-bit / mono
+- deliberately small/simple generator set
+
+Passing this bank proves parser/GM-map basics, not full SoundFont compatibility.
+
+### Real-world compatibility baseline
+
+`GeneralUser GS` is used as a high-value real-world compatibility reference because its author explicitly documents extensive use of SoundFont synthesis and modulator features and dependence on standards-compliant players.
+
+### Compact real-world baseline
+
+`TimGM6mb.sf2` remains useful for N16R8 memory/performance testing and modulator behavior.
+
+### Non-standard stress input
+
+`GMBK5X128.sf2` is useful for large-bank residency/storage stress, but must not define standard SF2 behavior because the supplied file is known to be non-standard.
+
+## SF2 feature roadmap
+
+V1 compatibility work should prioritize:
+- correct preset/instrument global + local zone hierarchy
+- key/velocity range intersection
+- sample addressing and loop offsets
+- root key / coarse tune / fine tune / scale tuning
+- volume envelope
+- modulation envelope features required by reference banks
+- initial attenuation
+- pan
+- filter cutoff/Q
+- reverb/chorus sends
+- sample modes and exclusive class
+- standard/default SF2 modulators needed for normal MIDI behavior
+- `imod` / `pmod` semantics required by GeneralUser/Tim-style banks
+- stereo-linked samples
+
+Features outside the supported profile must be detected and reported rather than silently treated as fully compatible.
+
+SF3 is not a V1 requirement. It may be added later as an optional compressed SoundFont input format.
 
 ## Realtime requirements
 
@@ -111,49 +157,58 @@ The final event path must support timestamped events and intra-block execution o
 
 The architecture **must support shared/per-program PSRAM residency**.
 
-Reason: at least one real candidate source bank exceeds R8 by a large margin, while its realistic 16-channel active union can still fit within R8.
+Reason: user-loadable SF2 banks can be much larger than R8 even when their currently selected 16-channel sample union fits in R8.
 
-Preference order for a specific compiled bank:
-1. full fixed-bank residency only if that bank fits in R8 with adequate measured system reserve
-2. shared/per-program PSRAM residency as the general V1 path
-3. streaming only when future requirements cannot be met by compiled/pruned assets plus residency management
+Preferred policy:
+1. full-bank residency is an automatic fast path for small SF2 banks that fit with measured reserve
+2. shared/per-program PSRAM residency is the general path
+3. future storage streaming is optional and should not be required for ordinary SF2 operation
 
 No storage I/O is allowed in Note On execution in V1.
 
-## Asset compilation / pruning
+## SF2 indexing/cache
 
-A host-side compilation stage is permitted and expected.
+A proprietary bank conversion is **not** required before playback.
 
-It may:
-- remove non-GM banks/presets that the product does not expose
-- deduplicate referenced samples
-- flatten/normalize metadata needed by firmware
-- precompute program -> sample dependency sets
-- precompute resolved zone metadata where safe
-- optionally resample source PCM when justified by measured quality/storage/CPU tradeoffs
+The implementation may generate a small derived sidecar/index cache from the source SF2 to accelerate subsequent loads. Such a cache may contain:
+- preset/bank lookup tables
+- program -> sample dependency sets
+- validated sample file offsets and lengths
+- normalized/resolved zone metadata where semantics are preserved
 
-The compiler must preserve intended playback semantics for the qualified bank/profile.
+The cache must be disposable/regenerable; the `.sf2` remains the shareable source of truth.
 
 ## Program Change
 
-Final Program Change must not depend on loading assets in the audio task.
+Final Program Change must not load samples inside the audio task.
 
 Acceptable models:
-- full-resident compiled bank: pointer/index/state switch
-- partial residency: asynchronous/control-domain prepare, then safe commit at a block boundary
+- small/full-resident SF2: pointer/index/state switch
+- partial residency: asynchronous/control-domain prepare, then safe commit at an audio block boundary
 
 Program transition latency and any audible gap must be measured.
+
+If the requested program cannot fit together with currently pinned active program samples, the system must fail gracefully or apply a documented policy; it must not corrupt active voice memory.
+
+## Storage planning
+
+N16 flash does not imply that a 16 MB SF2 file can be stored internally. Firmware image(s), OTA slots, NVS/filesystem metadata and other assets also consume flash.
+
+The internal user-SF2 size limit must be derived from the final partition table and measured firmware size. Larger SF2 support may require external storage in a later product configuration.
 
 ## Quality gates
 
 GM128 qualification is incomplete until tests cover:
-- every melodic program
-- drum kit paths used by the selected profile
+- every melodic program in the default GM bank
+- standard drum paths
 - representative key and velocity ranges
 - sustain-heavy playback
 - repeated retriggers
 - rapid Program Change
 - 16-channel mixed playback
+- layered zones
+- stereo-linked samples
+- default and custom modulators
 - voice stealing
 - long-running stress
 
