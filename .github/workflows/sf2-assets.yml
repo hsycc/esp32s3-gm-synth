@@ -62,24 +62,24 @@ jobs:
           sha256sum assets/sf2/full/*.sf2 > assets/sf2/manifests/full-source-sha256.txt
           ls -lh assets/sf2/full/*.sf2
 
-      - name: Build nominal 6 MiB SF2 subsets
+      - name: Build comparable 6 MiB melodic SF2 fixtures
         shell: bash
         run: |
           set -euo pipefail
 
-          python tools/sf2_subset/sf2_subset.py \
+          python -m tools.sf2_subset.build_fixture \
             assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2 \
             assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2 \
             --target-mib 6 \
             --manifest assets/sf2/manifests/FM_GM_Open_subset_6MiB.json
 
-          python tools/sf2_subset/sf2_subset.py \
+          python -m tools.sf2_subset.build_fixture \
             assets/sf2/full/GeneralUser-GS.sf2 \
             assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2 \
             --target-mib 6 \
             --manifest assets/sf2/manifests/GeneralUser_GS_subset_6MiB.json
 
-          python tools/sf2_subset/sf2_subset.py \
+          python -m tools.sf2_subset.build_fixture \
             assets/sf2/full/FluidR3_GM.sf2 \
             assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2 \
             --target-mib 6 \
@@ -102,13 +102,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Subsets intentionally use ordinary Git. Only assets/sf2/full is LFS.
+          git add --renormalize assets/sf2/subsets || true
           git add assets/sf2/subsets assets/sf2/manifests assets/sf2/licenses
           if ! git diff --cached --quiet; then
-            git commit -m "test-assets: add reproducible SF2 subsets [skip ci]"
+            git commit -m "test-assets: refresh comparable SF2 subsets [skip ci]"
             git push origin HEAD:main
           fi
 
-      - name: Commit full public SoundFonts through Git LFS
+      - name: Attempt full public SoundFonts through Git LFS
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
