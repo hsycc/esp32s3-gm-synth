@@ -1,5 +1,24 @@
 # M2.5 — SF2 Modulator Resolver（调制器解析器）
 
+## Status
+
+**L0 + L1 complete and enforced in CI.**
+
+Pinned baseline result against FluidSynth 2.6.1 commit
+`71e85b2ca6bf48641ba7e2261d8f2640ae473773`:
+
+- 3 comparable ~6 MiB public SF2 fixtures
+- 8 bank-0 programs per fixture
+- 24 real-bank cases total
+- key 60 / velocity 96
+- structural failures: **0**
+- generator failures: **0**
+- maximum observed generator delta: **5.34015444486613e-06 cb** on `initialAttenuation`
+- CI acceptance tolerance: `1e-3`
+
+The `sf2-conformance` workflow now runs with `--strict-generators`; future
+changes that regress these effective generator values fail CI.
+
 ## Goal
 
 Support mainstream SoundFont dynamic-control semantics without interpreting arbitrary `pmod` / `imod` tables inside the per-sample audio hot loop.
@@ -13,7 +32,7 @@ Support mainstream SoundFont dynamic-control semantics without interpreting arbi
 
 ## Phase A — identity and merge semantics
 
-Implemented/started:
+Implemented:
 - decode `sfModulator` source bit fields
 - standard/default modulator definitions
 - global/local identity merge
@@ -28,11 +47,9 @@ Implemented/started:
   - Channel pressure
   - Poly pressure
 
-Host tests must lock these semantics before DSP integration.
-
 ## Phase B — source mapping/evaluation
 
-Implement and cross-check:
+Implemented and reference-tested:
 - Linear（线性）
 - Concave（凹曲线）
 - Convex（凸曲线）
@@ -40,9 +57,24 @@ Implement and cross-check:
 - Positive/Negative（正向/反向）
 - Unipolar/Bipolar（单极/双极）
 - primary source × amount source
-- supported transform operator behavior
+- standard transform operator (`transform=0`)
 
-Reference selected cases against FluidSynth/SoundFont behavior.
+Non-zero transforms are rejected explicitly rather than interpreted silently.
+
+## Runtime compatibility policy
+
+Native analysis and playback compatibility are intentionally separate:
+
+- `ResolvedZone.generators_native` keeps the literal SF2 hierarchy result.
+- `strict_sf2` evaluates the literal/default SF2 modulation model.
+- `realworld_sf2` is the default runtime profile and mirrors the two legacy
+  compatibility behaviors required by the qualification banks:
+  - SoundFont `initialAttenuation` generator base uses the EMU/FluidSynth
+    `0.4` compatibility factor.
+  - the exact standard default Velocity → FilterFc modulator identity is
+    suppressed, matching current FluidSynth compatibility behavior.
+
+This split prevents real-world playback quirks from corrupting SF2 analysis.
 
 ## Phase B.5 — pinned real-bank oracle
 
@@ -81,14 +113,14 @@ Baseline real-bank matrix:
 
 ### Conformance gates
 
-**L0 — structural conformance (must be green before M3)**
+**L0 — structural conformance: GREEN**
 - same playing voice count
 - same actual key
 - same actual velocity
 - no resolver/modulator zone-count mismatch
 
-**L1 — core effective-generator conformance (must be green before M3)**
-Compare in native SoundFont units:
+**L1 — core effective-generator conformance: GREEN + STRICT CI**
+Compared in native SoundFont units:
 - vibLfoToPitch
 - initialFilterFc
 - initialFilterQ
@@ -100,9 +132,7 @@ Compare in native SoundFont units:
 - fineTune
 - scaleTuning
 
-Once the baseline matrix is clean, CI switches to strict-generator mode.
-
-**L2 — dynamic controller matrix (may overlap early M3 work)**
+**L2 — dynamic controller matrix (continues in parallel with early M3)**
 Expand coverage to:
 - velocity 32 / 96 / 127
 - representative keys 48 / 60 / 72
@@ -137,6 +167,7 @@ Continuous DSP such as LFO, filter and modulation envelope may still run per-sam
 
 ## Exit criteria
 
+Completed for L0/L1:
 - default + `imod` + `pmod` merge rules are unit-tested
 - source curve evaluation has reference tests
 - zero-amount instrument overrides behave correctly
@@ -144,4 +175,7 @@ Continuous DSP such as LFO, filter and modulation envelope may still run per-sam
 - L1 core effective-generator matrix is green and enforced in CI
 - deterministic ModPlans are produced for real qualification banks
 - no arbitrary pmod/imod table scan exists in the per-sample audio loop
-- estimated/observed ModPlan update cost is separated from continuous DSP cost
+
+Remaining M2.5 follow-up:
+- L2 dynamic event matrix
+- measure ModPlan event-update cost separately from continuous DSP cost
