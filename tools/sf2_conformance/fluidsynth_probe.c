@@ -1,16 +1,20 @@
 #include <fluidsynth.h>
+#include "fluid_voice.h"
 #include <stdio.h>
 #include <stdlib.h>
 
 /*
- * Small reference oracle used by host CI.
+ * Pinned-source FluidSynth oracle used by host CI.
  *
- * It loads one SF2, selects one bank/program, applies a deterministic MIDI
- * controller state, starts one note, then prints the current FluidSynth voice
- * generator values in native SoundFont units.
+ * IMPORTANT: this probe intentionally uses FluidSynth's internal
+ * fluid_voice_gen_value() rather than the public fluid_voice_gen_get().
+ * fluid_voice_gen_get() exposes only generator.val (the nominal/base value),
+ * while synthesis uses generator.val + generator.mod + generator.nrpn.
+ * fluid_voice_gen_value() returns that effective value and is therefore the
+ * correct oracle for our ResolvedZone + ModPlan comparison.
  *
- * Output is intentionally TSV so the Python conformance runner can parse it
- * without pulling a JSON library into this probe.
+ * This file is compiled inside the pinned FluidSynth source tree so the
+ * internal header/type layout always matches the linked reference build.
  */
 
 static const int kGenerators[] = {
@@ -106,7 +110,7 @@ int main(int argc, char **argv) {
                fluid_voice_get_actual_key(voice),
                fluid_voice_get_actual_velocity(voice));
         for (size_t g = 0; g < sizeof(kGenerators) / sizeof(kGenerators[0]); ++g) {
-            printf("\t%.9g", fluid_voice_gen_get(voice, kGenerators[g]));
+            printf("\t%.12g", (double)fluid_voice_gen_value(voice, kGenerators[g]));
         }
         printf("\n");
     }
