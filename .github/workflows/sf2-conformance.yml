@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           sha256sum -c assets/sf2/manifests/subset-sha256.txt
 
-      - name: Run real-bank effective-generator conformance
+      - name: Run strict real-bank effective-generator conformance
         shell: bash
         run: |
           set -euo pipefail
@@ -124,6 +124,7 @@ jobs:
             --probe ./build/fluidsynth_probe \
             --oracle-version "FluidSynth ${FLUIDSYNTH_ORACLE_VERSION}" \
             --oracle-sha "${FLUIDSYNTH_ORACLE_SHA}" \
+            --strict-generators \
             --output reports/sf2_conformance.json
 
       - name: Print mismatch summary
