@@ -5,7 +5,7 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from tools.sf2_conformance.compare_case import GENERATOR_NAMES, compare_case
+from tools.sf2_conformance.compare_case import compare_case
 
 
 DEFAULT_FIXTURES = (
@@ -22,6 +22,8 @@ DEFAULT_PROGRAMS = (8, 16, 32, 50, 56, 80, 88, 96)
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run real-SF2 generator conformance cases")
     parser.add_argument("--probe", type=Path, required=True)
+    parser.add_argument("--oracle-version", default="FluidSynth pinned source")
+    parser.add_argument("--oracle-sha", default="unknown")
     parser.add_argument("--fixture", type=Path, action="append", dest="fixtures")
     parser.add_argument("--program", type=int, action="append", dest="programs")
     parser.add_argument("--key", type=int, default=60)
@@ -90,8 +92,13 @@ def main() -> int:
         "max_abs_delta_by_generator": dict(sorted(max_delta_by_generator.items())),
     }
     output = {
-        "schema_version": 1,
-        "oracle": "FluidSynth fluid_voice_gen_get",
+        "schema_version": 2,
+        "oracle": {
+            "implementation": args.oracle_version,
+            "source_sha": args.oracle_sha,
+            "generator_accessor": "fluid_voice_gen_value",
+            "semantics": "generator.val + generator.mod + generator.nrpn",
+        },
         "fixtures": [str(f) for f in fixtures],
         "programs": list(programs),
         "key": args.key,
