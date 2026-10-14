@@ -1,0 +1,37 @@
+# ESP-IDF / CMake
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+CMakeFiles/
+cmake-build-*/
+
+# Arduino / PlatformIO (if used during experiments)
+.pio/
+.vscode/.browse.c_cpp.db*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Analyzer/report local outputs
+*.sf2
+*.SF2
+*.wav
+*.WAV
+artifacts/
+reports/local/
+
+# IDE / OS
+.DS_Store
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
