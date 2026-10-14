@@ -5,6 +5,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from tools.sf2_analyzer.compat import (
+    REALWORLD_SF2,
+    STRICT_SF2,
+    runtime_generator_base,
+)
 from tools.sf2_analyzer.modulator import (
     build_mod_plan,
     decode_source,
@@ -58,6 +63,27 @@ class ModulatorEvaluationTests(unittest.TestCase):
         )
         self.assertAlmostEqual(evaluate_modulator(mod, {"velocity": 127}), 0.0)
         self.assertAlmostEqual(evaluate_modulator(mod, {"velocity": 0}), 952.5)
+
+    def test_realworld_profile_suppresses_default_velocity_filter_route(self):
+        mod = next(
+            m
+            for m in default_modulators()
+            if m.origin == "default:velocity_to_filter_fc"
+        )
+        state = {"velocity": 96}
+        self.assertAlmostEqual(
+            evaluate_modulator(mod, state, compatibility_profile=STRICT_SF2),
+            -581.25,
+        )
+        self.assertEqual(
+            evaluate_modulator(mod, state, compatibility_profile=REALWORLD_SF2),
+            0.0,
+        )
+
+    def test_realworld_profile_scales_loaded_initial_attenuation_only_at_runtime(self):
+        self.assertEqual(runtime_generator_base(48, 50, profile=STRICT_SF2), 50.0)
+        self.assertEqual(runtime_generator_base(48, 50, profile=REALWORLD_SF2), 20.0)
+        self.assertEqual(runtime_generator_base(17, 50, profile=REALWORLD_SF2), 50.0)
 
     def test_pitch_bend_center_is_zero(self):
         mod = next(
