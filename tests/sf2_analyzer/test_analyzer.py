@@ -110,6 +110,14 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(program["max_overlapping_zones"], 1)
         self.assertTrue(report["residency"]["fits_all_samples"])
         self.assertEqual(len(report["file"]["sha256"]), 64)
+        self.assertEqual(
+            report["compatibility"]["features"]["generator_table_parsing"],
+            "implemented",
+        )
+        self.assertEqual(
+            report["compatibility"]["features"]["default_sf2_modulators"],
+            "planned_m2_5",
+        )
 
     def test_overlap_modulators_and_stereo_links(self):
         report = analyze(self.write_sf2(make_sf2(two_zones=True, modulators=True, stereo=True)))
@@ -124,10 +132,16 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(report["samples"]["stereo_side_sample_count"], 2)
         self.assertEqual(report["samples"]["linked_sample_count"], 2)
         self.assertEqual(report["samples"]["sample_rate_distribution"], {"44100": 1, "48000": 1})
+        compat = report["compatibility"]
+        self.assertIn("custom_pmod_imod_semantics", compat["planned_features_exercised"])
+        self.assertIn("stereo_linked_sample_runtime", compat["planned_features_exercised"])
+        self.assertEqual(compat["modulators"]["pmod_effective_record_count"], 1)
+        self.assertEqual(compat["modulators"]["imod_effective_record_count"], 1)
 
     def test_json_serializable(self):
         text = json.dumps(analyze(self.write_sf2(make_sf2())))
-        self.assertIn('"schema_version": 2', text)
+        self.assertIn('"schema_version": 3', text)
+        self.assertIn('"compatibility"', text)
 
     def test_rejects_non_sf2(self):
         with self.assertRaises(Sf2Error):
