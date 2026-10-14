@@ -1,0 +1,77 @@
+name: sf2-conformance
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/sf2-conformance.yml"
+      - "tools/sf2_analyzer/**"
+      - "tools/sf2_conformance/**"
+      - "assets/sf2/subsets/**"
+      - "tests/sf2_analyzer/**"
+
+permissions:
+  contents: read
+
+jobs:
+  real-bank-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install FluidSynth oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfluidsynth-dev pkg-config
+          pkg-config --modversion fluidsynth
+
+      - name: Build FluidSynth probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build reports
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            tools/sf2_conformance/fluidsynth_probe.c \
+            $(pkg-config --cflags --libs fluidsynth) \
+            -o build/fluidsynth_probe
+
+      - name: Verify checked-in comparable fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c assets/sf2/manifests/subset-sha256.txt
+
+      - name: Run real-bank generator conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.sf2_conformance.run_suite \
+            --probe ./build/fluidsynth_probe \
+            --output reports/sf2_conformance.json
+
+      - name: Print mismatch summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f reports/sf2_conformance.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("reports/sf2_conformance.json").read_text())
+          print(json.dumps(data["summary"], indent=2, sort_keys=True))
+          PY
+          fi
+
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sf2-conformance-report
+          path: reports/sf2_conformance.json
+          if-no-files-found: warn
