@@ -1,4 +1,9 @@
-# M3 — Event Scheduler
+# Legacy filename — Event Scheduler is now M5
+
+> This file is retained to avoid breaking old links. The durable implementation
+> plan moved Sample Residency ahead of event scheduling. Treat this work as
+> **M5 — Timestamped Realtime Event Scheduler**. Current M3 work is documented
+> in `tasks/M3_SAMPLE_RESIDENCY.md`.
 
 ## Goal
 Implement a timestamped bounded musical-event path with intra-block execution.
