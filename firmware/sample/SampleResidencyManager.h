@@ -33,6 +33,20 @@ struct SampleRef {
     bool valid() const { return pcm != nullptr && lease_token != 0; }
 };
 
+// Control/storage-domain read-only view of one resident arena entry. This is
+// NOT an audio-side ownership token and does not increment a Voice Ref. The
+// view is valid only while control keeps the entry pinned/not-evicted.
+struct ResidentSampleView {
+    SampleId sample_id = 0;
+    std::uint32_t generation = 0;
+    const std::int16_t* pcm = nullptr;
+    SampleDescriptor descriptor{};
+    std::uint16_t pin_count = 0;
+    std::uint16_t phase_a_voice_ref_count = 0;
+
+    bool valid() const { return pcm != nullptr && generation != 0; }
+};
+
 enum class ResidencyError : std::uint8_t {
     None = 0,
     NotInitialized,
@@ -68,9 +82,9 @@ struct ResidencyStats {
 // PCM arena (PSRAM on ESP32-S3, an aligned byte buffer in host tests). Metadata
 // capacity is fixed so load/acquire/release behavior remains bounded.
 //
-// Threading note: this phase validates allocation/lifetime semantics only. A
-// control/audio publication boundary is added in M3 Phase B before this class
-// is used cross-core on ESP32-S3.
+// Threading note: allocator/hash/pin methods and residentView() belong to the
+// control/storage domain. Audio cross-core access is provided separately by
+// PublishedSampleDirectory in M3 Phase B.
 class SampleResidencyManager {
 public:
     static constexpr std::size_t kAlignment = 4;
@@ -90,20 +104,26 @@ public:
 
     bool isResident(SampleId sample_id) const;
 
+    // Control-only observation. No ownership is acquired; callers must pin the
+    // entry before publishing a returned pointer to another domain.
+    ResidentSampleView residentView(SampleId sample_id) const;
+
     // Program/channel residency ownership. A pinned sample is not evictable.
     bool pin(SampleId sample_id);
     bool unpin(SampleId sample_id);
 
-    // Voice ownership. acquire/release perform no arena allocation and use a
-    // generation + lease token so stale/double releases are detectable.
+    // Phase-A Voice ownership used by host lifetime tests. Final cross-core
+    // audio ownership is handled by PublishedSampleDirectory.
     SampleRef acquire(SampleId sample_id);
     bool release(const SampleRef& ref);
 
-    // Eviction succeeds only when pinCount == 0 && voiceRefCount == 0.
+    // Eviction succeeds only when pinCount == 0 && phase-A voiceRefCount == 0.
+    // Final runtime eviction must additionally ensure any published record has
+    // been unpublished and is reclaimable.
     bool evict(SampleId sample_id);
 
     // Safe rebuild primitive for tests/control code. It refuses to invalidate
-    // either a program pin or a live voice reference.
+    // either a program pin or a live phase-A voice reference.
     bool reset();
 
     ResidencyStats stats() const;
