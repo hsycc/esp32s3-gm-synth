@@ -1,0 +1,12 @@
+# Reference target: ESP32-S3-WROOM-1-N16R8
+# 16 MB Quad-SPI flash + 8 MB Octal-SPI PSRAM.
+# Final production sdkconfig must still be validated against the exact module SKU.
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
