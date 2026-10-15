@@ -31,6 +31,19 @@ struct DependencySet {
     std::size_t aligned_bytes = 0;
 };
 
+// kMaxResidentSamples is currently 512, so one DependencySet is already a
+// little over 2 KiB. Keeping two automatic instances here overflowed the
+// ESP-IDF main task's default ~3.5 KiB stack before the first benchmark log and
+// manifested as a repeatable LoadProhibited panic in QEMU. The benchmark is a
+// one-shot bring-up path, so fixed static workspace is preferable to either
+// dynamic allocation or inflating the production main-task stack.
+struct BenchmarkWorkspace {
+    DependencySet program_a{};
+    DependencySet program_b{};
+};
+
+static_assert(sizeof(BenchmarkWorkspace) >= 2u * kMaxSamples * sizeof(sample::SampleId));
+
 struct SourceFillContext {
     sf2::Sf2SampleSource* source = nullptr;
     sample::SampleId sample_id = 0;
@@ -206,6 +219,16 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
     using sf2::Sf2SampleSource;
     using storage::VfsRandomAccessReader;
 
+    static BenchmarkWorkspace workspace;
+    auto& program_a = workspace.program_a;
+    auto& program_b = workspace.program_b;
+
+    ESP_LOGI(
+        kTag,
+        "workspace static_bytes=%u dependency_set_bytes=%u",
+        static_cast<unsigned>(sizeof(workspace)),
+        static_cast<unsigned>(sizeof(DependencySet)));
+
     const char* path = CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH;
     VfsRandomAccessReader reader;
     if (!reader.open(path)) {
@@ -237,8 +260,6 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
     const std::size_t target_b = arena_capacity / 6u;
     const std::size_t max_each = arena_capacity / 4u;
 
-    DependencySet program_a{};
-    DependencySet program_b{};
     if (!buildDependencySet(source, false, nullptr, target_a, max_each, &program_a) ||
         !buildDependencySet(source, true, &program_a, target_b, max_each, &program_b)) {
         ESP_LOGE(kTag, "failed to construct deterministic dependency sets");
