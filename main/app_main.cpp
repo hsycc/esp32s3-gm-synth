@@ -43,7 +43,6 @@ bool mountQemuSf2Fixture() {
     mount_config.allocation_unit_size = 0;
     mount_config.disk_status_check_enable = false;
     mount_config.use_one_fat = true;
-    mount_config.read_only = true;
 
     const esp_err_t err = esp_vfs_fat_spiflash_mount_ro(
         "/sf2",
