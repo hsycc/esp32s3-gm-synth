@@ -22,6 +22,10 @@ bool fourccEquals(const std::uint8_t* bytes, const char text[4]) {
     return std::memcmp(bytes, text, 4) == 0;
 }
 
+bool textFourccEquals(const char lhs[4], const char rhs[4]) {
+    return std::memcmp(lhs, rhs, 4) == 0;
+}
+
 }  // namespace
 
 bool Sf2SampleSource::readExact(
@@ -161,11 +165,11 @@ bool Sf2SampleSource::scanList(
             return false;
         }
 
-        if (fourccEquals(expected_type, "sdta") && fourccEquals(child_header, "smpl")) {
+        if (textFourccEquals(expected_type, "sdta") && fourccEquals(child_header, "smpl")) {
             smpl_payload_offset_ = payload;
             smpl_payload_bytes_ = child_size;
         } else if (
-            fourccEquals(expected_type, "pdta") && fourccEquals(child_header, "shdr")) {
+            textFourccEquals(expected_type, "pdta") && fourccEquals(child_header, "shdr")) {
             shdr_payload_offset_ = payload;
             shdr_payload_bytes_ = child_size;
         }
@@ -283,7 +287,7 @@ bool Sf2SampleSource::fillSample(
         return false;
     }
 
-    std::uint64_t source_offset = sourceByteOffset(sample_id);
+    const std::uint64_t source_offset = sourceByteOffset(sample_id);
     std::size_t copied = 0;
     while (copied < pcm_bytes) {
         const std::size_t chunk = std::min(kReadChunkBytes, pcm_bytes - copied);
