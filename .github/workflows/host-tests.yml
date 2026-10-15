@@ -25,6 +25,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Generate real-bank dependency fixture and pressure report
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/generated reports
+          python -m tools.residency_fixture.generate_cpp_fixture \
+            assets/sf2/manifests/FM_GM_Open_subset_6MiB.analysis.json \
+            assets/sf2/manifests/GeneralUser_GS_subset_6MiB.analysis.json \
+            assets/sf2/manifests/FluidR3_GM_subset_6MiB.analysis.json \
+            --output build/generated/real_bank_dependencies.h \
+            --report reports/residency_pressure.json \
+            --budgets-mib 2 4 5 6
+
       - name: Build sample residency host tests
         shell: bash
         run: |
@@ -50,9 +64,30 @@ jobs:
             firmware/sample/ProgramPrepareController.cpp \
             tests/sample/test_program_prepare.cpp \
             -o build/host-tests/test_program_prepare
+
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Ibuild/generated \
+            firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencyView.cpp \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            firmware/sample/ProgramPrepareController.cpp \
+            tests/sample/test_real_bank_dependencies.cpp \
+            -o build/host-tests/test_real_bank_dependencies
+
       - name: Run sample residency host tests
         run: ./build/host-tests/test_sample_residency
       - name: Run publication and program snapshot host tests
         run: ./build/host-tests/test_sample_publication
       - name: Run transactional program prepare host tests
         run: ./build/host-tests/test_program_prepare
+      - name: Run generated real-bank dependency tests
+        run: ./build/host-tests/test_real_bank_dependencies
+      - name: Print residency pressure report
+        run: cat reports/residency_pressure.json
+      - name: Upload residency pressure report
+        uses: actions/upload-artifact@v4
+        with:
+          name: residency-pressure-report
+          path: reports/residency_pressure.json
+          if-no-files-found: error
