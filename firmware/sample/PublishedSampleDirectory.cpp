@@ -116,7 +116,7 @@ PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
     return result;
 }
 
-bool PublishedSampleDirectory::release(const PublishedVoiceRef& ref) {
+bool PublishedSampleDirectory::release(PublishedVoiceRef& ref) {
     if (!ref.valid()) {
         stale_release_faults_.fetch_add(1, std::memory_order_relaxed);
         return false;
@@ -138,6 +138,7 @@ bool PublishedSampleDirectory::release(const PublishedVoiceRef& ref) {
                 std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             live_voice_refs_.fetch_sub(1, std::memory_order_acq_rel);
+            ref.invalidate();
             return true;
         }
     }
