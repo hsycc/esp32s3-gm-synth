@@ -6,6 +6,7 @@ idf_component_register(
         "sample/PublishedSampleDirectory.cpp"
         "sample/ProgramSnapshot.cpp"
         "sample/ProgramPrepareController.cpp"
+        "storage/VfsRandomAccessReader.cpp"
         "sf2/Sf2SampleSource.cpp"
         "gm/ProgramChangeMailbox.cpp"
         "platform/EspPsramArena.cpp"

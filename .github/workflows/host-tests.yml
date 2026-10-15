@@ -106,6 +106,12 @@ jobs:
             -o build/host-tests/test_sf2_sample_source
 
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
+            firmware/storage/VfsRandomAccessReader.cpp \
+            firmware/sf2/Sf2SampleSource.cpp \
+            tests/storage/test_vfs_random_access_reader.cpp \
+            -o build/host-tests/test_vfs_random_access_reader
+
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
             firmware/gm/ProgramChangeMailbox.cpp \
             firmware/sample/ProgramSnapshot.cpp \
             tests/gm/test_program_change_mailbox.cpp \
@@ -125,6 +131,8 @@ jobs:
         run: ./build/host-tests/test_real_bank_dependencies
       - name: Run native SF2 sample-source tests
         run: ./build/host-tests/test_sf2_sample_source
+      - name: Run VFS random-access reader integration tests
+        run: ./build/host-tests/test_vfs_random_access_reader
       - name: Run rapid Program Change mailbox tests
         run: ./build/host-tests/test_program_change_mailbox
       - name: Print residency pressure report
