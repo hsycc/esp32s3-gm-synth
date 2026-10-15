@@ -1,0 +1,13 @@
+menu "GM Synth bring-up"
+
+config GM_SYNTH_PCM_ARENA_BYTES
+    int "PCM PSRAM arena size (bytes)"
+    range 1048576 6291456
+    default 4194304
+    help
+        Initial M0/M3 PCM residency arena reserved from external PSRAM.
+        The default is intentionally conservative (4 MiB) on an 8 MiB N16R8
+        target so later Voice/FX/index/system allocations retain headroom.
+        This is a bring-up value, not the final production memory budget.
+
+endmenu
