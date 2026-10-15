@@ -12,6 +12,7 @@ idf_component_register(
         "gm/ProgramChangeMailbox.cpp"
         "voice/PitchMath.cpp"
         "voice/VoiceRenderer.cpp"
+        "voice/AudioBlockRenderer.cpp"
         "platform/EspPsramArena.cpp"
         "platform/EspStorageBenchmark.cpp"
     INCLUDE_DIRS "."
