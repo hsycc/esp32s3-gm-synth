@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace gm_synth::sample {
 
@@ -20,13 +21,38 @@ struct ResidentRecord {
     mutable std::atomic<std::uint32_t> voice_refs{0};
 };
 
+// One ownership token held by exactly one Voice. It is intentionally move-only
+// so a normal code path cannot duplicate one refcount ownership and release it
+// twice. release() invalidates the object on success.
 struct PublishedVoiceRef {
     const ResidentRecord* record = nullptr;
     SampleId sample_id = 0;
     std::uint32_t bank_generation = 0;
     std::uint32_t sample_generation = 0;
 
+    PublishedVoiceRef() = default;
+    PublishedVoiceRef(const PublishedVoiceRef&) = delete;
+    PublishedVoiceRef& operator=(const PublishedVoiceRef&) = delete;
+
+    PublishedVoiceRef(PublishedVoiceRef&& other) noexcept { *this = std::move(other); }
+    PublishedVoiceRef& operator=(PublishedVoiceRef&& other) noexcept {
+        if (this != &other) {
+            record = other.record;
+            sample_id = other.sample_id;
+            bank_generation = other.bank_generation;
+            sample_generation = other.sample_generation;
+            other.invalidate();
+        }
+        return *this;
+    }
+
     bool valid() const { return record != nullptr; }
+    void invalidate() {
+        record = nullptr;
+        sample_id = 0;
+        bank_generation = 0;
+        sample_generation = 0;
+    }
 };
 
 struct PublicationStats {
@@ -77,7 +103,7 @@ public:
 
     // Bounded audio-side acquire. No allocation, storage I/O, mutex or scan.
     PublishedVoiceRef acquire(SampleId sample_id);
-    bool release(const PublishedVoiceRef& ref);
+    bool release(PublishedVoiceRef& ref);
 
     // Control-side deferred-reclamation predicate. It verifies the record is
     // no longer published, no acquire critical section is in flight, and the
