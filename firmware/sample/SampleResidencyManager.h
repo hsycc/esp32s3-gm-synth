@@ -54,6 +54,7 @@ enum class ResidencyError : std::uint8_t {
     DescriptorMismatch,
     MetadataFull,
     NoContiguousSpace,
+    SourceFillFailed,
     NotResident,
     Busy,
     LeaseExhausted,
@@ -76,15 +77,24 @@ struct ResidencyStats {
     std::uint32_t descriptor_conflicts = 0;
 };
 
-// Phase-A residency core.
+// Called only from the control/storage domain. destination points directly into
+// the reserved arena allocation (PSRAM on target). The callback may perform
+// chunked storage reads into destination and must return true only after exactly
+// pcm_bytes bytes are valid.
+using SampleFillCallback = bool (*)(
+    void* context,
+    std::uint8_t* destination,
+    std::size_t pcm_bytes);
+
+// Phase-A/M3 residency core.
 //
 // The class deliberately owns no heap allocations. The caller supplies the
 // PCM arena (PSRAM on ESP32-S3, an aligned byte buffer in host tests). Metadata
 // capacity is fixed so load/acquire/release behavior remains bounded.
 //
-// Threading note: allocator/hash/pin methods and residentView() belong to the
-// control/storage domain. Audio cross-core access is provided separately by
-// PublishedSampleDirectory in M3 Phase B.
+// Threading note: allocator/hash/pin/load methods and residentView() belong to
+// the single control/storage domain. Audio cross-core access is provided
+// separately by PublishedSampleDirectory in M3 Phase B.
 class SampleResidencyManager {
 public:
     static constexpr std::size_t kAlignment = 4;
@@ -97,10 +107,24 @@ public:
 
     bool begin(void* arena, std::size_t arena_bytes);
 
-    // Control/storage-domain operation. Copies one 16-bit PCM payload into the
-    // resident arena. Re-loading an identical already-resident SampleId reuses
-    // the existing allocation and performs no second copy/allocation.
+    // Control/storage-domain convenience path for already-buffered PCM.
+    // Re-loading an identical resident SampleId reuses the existing allocation.
     bool load(const SampleDescriptor& descriptor, const void* pcm, std::size_t pcm_bytes);
+
+    // Control/storage-domain direct-fill transaction:
+    //   reserve free arena span -> fill callback writes directly into arena ->
+    //   commit hash/Entry only after successful fill.
+    //
+    // No same-sized staging buffer is required. If fill returns false, the
+    // reserved span is returned and the SampleId remains non-resident.
+    // Existing identical samples are reused without invoking fill.
+    //
+    // The callback executes synchronously on the caller's control/storage task;
+    // no other mutating SampleResidencyManager operation may run concurrently.
+    bool loadFromSource(
+        const SampleDescriptor& descriptor,
+        SampleFillCallback fill,
+        void* context);
 
     bool isResident(SampleId sample_id) const;
 
