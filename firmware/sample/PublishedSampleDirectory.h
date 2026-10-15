@@ -17,7 +17,7 @@ struct ResidentRecord {
     std::uint32_t sample_generation = 0;
     const std::int16_t* pcm = nullptr;
     SampleDescriptor descriptor{};
-    std::atomic<std::uint32_t> voice_refs{0};
+    mutable std::atomic<std::uint32_t> voice_refs{0};
 };
 
 struct PublishedVoiceRef {
@@ -33,6 +33,7 @@ struct PublicationStats {
     std::uint32_t bank_generation = 0;
     std::size_t published_sample_count = 0;
     std::uint32_t active_acquirers = 0;
+    std::uint32_t live_voice_refs = 0;
     std::uint64_t acquire_successes = 0;
     std::uint64_t acquire_misses = 0;
     std::uint64_t acquire_retries = 0;
@@ -101,6 +102,7 @@ private:
     std::array<Slot, kMaxSamples> slots_{};
     std::atomic<std::uint32_t> bank_generation_{1};
     std::atomic<std::uint32_t> active_acquirers_{0};
+    std::atomic<std::uint32_t> live_voice_refs_{0};
 
     std::atomic<std::uint64_t> acquire_successes_{0};
     std::atomic<std::uint64_t> acquire_misses_{0};
