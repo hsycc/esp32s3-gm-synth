@@ -7,19 +7,29 @@ on:
     paths:
       - "CMakeLists.txt"
       - "sdkconfig.defaults"
+      - "sdkconfig.qemu.defaults"
+      - "partitions_qemu.csv"
       - "main/**"
       - "firmware/**"
       - "scripts/build_idf.sh"
       - "scripts/run_qemu_ci.sh"
+      - "scripts/run_qemu_sf2_ci.sh"
+      - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
+      - "assets/sf2/manifests/subset-sha256.txt"
       - ".github/workflows/esp-idf-build.yml"
   pull_request:
     paths:
       - "CMakeLists.txt"
       - "sdkconfig.defaults"
+      - "sdkconfig.qemu.defaults"
+      - "partitions_qemu.csv"
       - "main/**"
       - "firmware/**"
       - "scripts/build_idf.sh"
       - "scripts/run_qemu_ci.sh"
+      - "scripts/run_qemu_sf2_ci.sh"
+      - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
+      - "assets/sf2/manifests/subset-sha256.txt"
       - ".github/workflows/esp-idf-build.yml"
 
 permissions:
@@ -75,6 +85,12 @@ jobs:
           set -euo pipefail
           bash scripts/run_qemu_ci.sh reports/qemu-smoke.log
 
+      - name: Run real SF2 from virtual flash FATFS in QEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run_qemu_sf2_ci.sh reports/qemu-sf2-flash.log
+
       - name: Upload flashable firmware artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -88,6 +104,8 @@ jobs:
             build/flash_args
             build/flasher_args.json
             sdkconfig
+            sdkconfig.qemu
             reports/idf-size.txt
             reports/qemu-smoke.log
+            reports/qemu-sf2-flash.log
           if-no-files-found: error

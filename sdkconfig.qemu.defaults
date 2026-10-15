@@ -1,0 +1,11 @@
+# Dedicated ESP32-S3 QEMU integration build. These settings are layered on top
+# of sdkconfig.defaults and never replace the production/default sdkconfig.
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_qemu.csv"
+
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304
+CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y

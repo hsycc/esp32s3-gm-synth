@@ -1,10 +1,16 @@
 # ESP-IDF / CMake
 build/
+build-qemu-sf2/
 managed_components/
 sdkconfig
 sdkconfig.old
+sdkconfig.qemu
+sdkconfig.qemu.old
 CMakeFiles/
 cmake-build-*/
+
+# QEMU-only generated filesystem staging
+.qemu_sf2_data/
 
 # Arduino / PlatformIO (if used during experiments)
 .pio/

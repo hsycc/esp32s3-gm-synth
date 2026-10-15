@@ -4,6 +4,11 @@
 #include "esp_psram.h"
 #include "esp_system.h"
 
+#ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
+#include "esp_err.h"
+#include "fatfs/vfs/esp_vfs_fat.h"
+#endif
+
 #include "platform/EspPsramArena.h"
 #include "platform/EspStorageBenchmark.h"
 #include "sample/SampleResidencyManager.h"
@@ -29,6 +34,30 @@ void logPsram(const char* phase, const gm_synth::platform::PsramHeapStats& stats
         static_cast<unsigned>(stats.largest_free_block_bytes),
         static_cast<unsigned>(stats.minimum_free_bytes));
 }
+
+#ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
+bool mountQemuSf2Fixture() {
+    esp_vfs_fat_mount_config_t mount_config{};
+    mount_config.format_if_mount_failed = false;
+    mount_config.max_files = 4;
+    mount_config.allocation_unit_size = 0;
+    mount_config.disk_status_check_enable = false;
+    mount_config.use_one_fat = true;
+    mount_config.read_only = true;
+
+    const esp_err_t err = esp_vfs_fat_spiflash_mount_ro(
+        "/sf2",
+        "qemu_sf2",
+        &mount_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "QEMU FATFS mount failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(kTag, "QEMU FATFS mounted: base=/sf2 partition=qemu_sf2");
+    return true;
+}
+#endif
 
 void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
 #ifdef CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE
@@ -56,6 +85,23 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             static_cast<unsigned>(source.lastError()));
         return;
     }
+
+    ESP_LOGI(
+        kTag,
+        "Storage benchmark SF2 parsed: playable_samples=%u",
+        static_cast<unsigned>(source.sampleCount()));
+
+#ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
+    // The QEMU fixture is the pinned FM/GM ~6 MiB subset. This makes the
+    // emulator test validate real SoundFont structure, not just arbitrary I/O.
+    if (source.sampleCount() != 67u) {
+        ESP_LOGE(
+            kTag,
+            "QEMU SF2 fixture sample-count mismatch: expected=67 actual=%u",
+            static_cast<unsigned>(source.sampleCount()));
+        return;
+    }
+#endif
 
     const std::size_t requested_bytes = CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES;
     const std::size_t benchmark_bytes = std::min(
@@ -154,6 +200,13 @@ extern "C" void app_main(void) {
         arena.reset();
         return;
     }
+
+#ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
+    if (!mountQemuSf2Fixture()) {
+        arena.reset();
+        return;
+    }
+#endif
 
     // Bring-up benchmark intentionally runs before residency metadata starts using
     // the arena. It overwrites PCM bytes only; the later residency initialization
