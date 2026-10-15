@@ -5,8 +5,12 @@
 #include "esp_system.h"
 
 #include "platform/EspPsramArena.h"
+#include "platform/EspStorageBenchmark.h"
 #include "sample/SampleResidencyManager.h"
+#include "sf2/Sf2SampleSource.h"
+#include "storage/VfsRandomAccessReader.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 
@@ -24,6 +28,66 @@ void logPsram(const char* phase, const gm_synth::platform::PsramHeapStats& stats
         static_cast<unsigned>(stats.free_bytes),
         static_cast<unsigned>(stats.largest_free_block_bytes),
         static_cast<unsigned>(stats.minimum_free_bytes));
+}
+
+void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
+#ifdef CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE
+    using gm_synth::platform::EspStorageBenchmarkSweepResult;
+    using gm_synth::platform::runEspStorageBenchmarkSweep;
+    using gm_synth::sf2::Sf2SampleSource;
+    using gm_synth::storage::VfsRandomAccessReader;
+
+    const char* path = CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH;
+    VfsRandomAccessReader reader;
+    if (!reader.open(path)) {
+        ESP_LOGE(
+            kTag,
+            "Storage benchmark enabled but VFS path cannot be opened: %s (filesystem must already be mounted)",
+            path);
+        return;
+    }
+
+    Sf2SampleSource source;
+    if (!source.begin(reader)) {
+        ESP_LOGE(
+            kTag,
+            "Storage benchmark SF2 parse failed: path=%s error=%u",
+            path,
+            static_cast<unsigned>(source.lastError()));
+        return;
+    }
+
+    const std::size_t requested_bytes = CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES;
+    const std::size_t benchmark_bytes = std::min(
+        requested_bytes,
+        std::min(arena.capacity(), static_cast<std::size_t>(source.smplPayloadBytes())));
+
+    if (benchmark_bytes == 0u) {
+        ESP_LOGE(kTag, "Storage benchmark has no readable smpl payload bytes");
+        return;
+    }
+
+    ESP_LOGI(
+        kTag,
+        "Storage benchmark source: path=%s smpl_offset=%llu smpl_bytes=%u benchmark_bytes=%u",
+        path,
+        static_cast<unsigned long long>(source.smplPayloadOffset()),
+        static_cast<unsigned>(source.smplPayloadBytes()),
+        static_cast<unsigned>(benchmark_bytes));
+
+    EspStorageBenchmarkSweepResult sweep{};
+    if (!runEspStorageBenchmarkSweep(
+            reader,
+            arena.data(),
+            arena.capacity(),
+            source.smplPayloadOffset(),
+            benchmark_bytes,
+            &sweep)) {
+        ESP_LOGW(kTag, "One or more storage benchmark chunk-size passes failed");
+    }
+#else
+    (void)arena;
+#endif
 }
 
 }  // namespace
@@ -90,6 +154,11 @@ extern "C" void app_main(void) {
         arena.reset();
         return;
     }
+
+    // Bring-up benchmark intentionally runs before residency metadata starts using
+    // the arena. It overwrites PCM bytes only; the later residency initialization
+    // owns allocation metadata and future sample loads overwrite these bytes.
+    runOptionalStorageBenchmark(arena);
 
     if (!residency.begin(arena.data(), arena.capacity())) {
         ESP_LOGE(kTag, "SampleResidencyManager failed to initialize over PSRAM arena");

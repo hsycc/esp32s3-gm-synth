@@ -10,4 +10,33 @@ config GM_SYNTH_PCM_ARENA_BYTES
         target so later Voice/FX/index/system allocations retain headroom.
         This is a bring-up value, not the final production memory budget.
 
+config GM_SYNTH_STORAGE_BENCHMARK_ENABLE
+    bool "Run SF2 VFS -> PSRAM storage benchmark at boot"
+    default n
+    help
+        Bring-up only. When enabled, app_main opens an already-mounted VFS path,
+        locates the SoundFont smpl payload, and benchmarks sequential reads into
+        the PCM PSRAM arena using 4/8/16/32/64 KiB chunks. This option does not
+        mount a filesystem and must remain disabled for normal runtime builds.
+
+if GM_SYNTH_STORAGE_BENCHMARK_ENABLE
+
+config GM_SYNTH_STORAGE_BENCHMARK_PATH
+    string "Mounted SF2 path used by storage benchmark"
+    default "/sf2/test.sf2"
+    help
+        Path visible through ESP-IDF VFS. Board-specific code must mount the
+        corresponding FAT/LittleFS/SD filesystem before this benchmark runs.
+
+config GM_SYNTH_STORAGE_BENCHMARK_BYTES
+    int "Maximum smpl bytes read per benchmark pass"
+    range 65536 4194304
+    default 4194304
+    help
+        Each chunk-size pass reads up to this many bytes from the contiguous SF2
+        smpl payload directly into the caller-owned PSRAM arena. The runtime also
+        clamps this value to the actual smpl payload and arena capacity.
+
+endif
+
 endmenu

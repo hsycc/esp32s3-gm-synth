@@ -37,6 +37,7 @@ public:
 
     std::size_t sampleCount() const { return sample_count_; }
     std::uint64_t smplPayloadOffset() const { return smpl_payload_offset_; }
+    std::uint32_t smplPayloadBytes() const { return smpl_payload_bytes_; }
     std::uint64_t sourceByteOffset(sample::SampleId sample_id) const;
     Error lastError() const { return last_error_; }
 
