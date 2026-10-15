@@ -122,7 +122,7 @@ jobs:
             tests/gm/test_program_change_mailbox.cpp \
             -o build/host-tests/test_program_change_mailbox
 
-          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/voice/VoiceRenderer.cpp \
             tests/voice/test_voice_renderer.cpp \
