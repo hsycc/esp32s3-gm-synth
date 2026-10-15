@@ -37,6 +37,16 @@ config GM_SYNTH_STORAGE_BENCHMARK_BYTES
         chunk-size sweep. The actual length is clamped to both smpl size and
         PCM arena capacity.
 
+config GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE
+    bool "Run source-backed Program Prepare benchmark"
+    default n
+    help
+        After the storage sweep and residency initialization, exercise cold and
+        warm Program Prepare, deterministic evictable-cache pressure, safe LRU
+        eviction, block-boundary commit/retire, and release-tail Voice Ref
+        survival using the same mounted real-SF2 fixture. This is an on-target
+        control/storage benchmark only; it must never run in the audio task.
+
 config GM_SYNTH_QEMU_FLASH_SF2_TEST
     bool "Mount QEMU-only raw FATFS SF2 flash fixture"
     default n
@@ -44,7 +54,8 @@ config GM_SYNTH_QEMU_FLASH_SF2_TEST
         QEMU/CI integration test only. Mounts the read-only raw SPI-flash FATFS
         partition labelled qemu_sf2 at /sf2 before the storage benchmark. The
         dedicated QEMU build generates that partition from a pinned public SF2.
-        Do not enable this option in production firmware.
+        The same raw-fixture mechanism is also reused by the dedicated physical
+        hardware benchmark build; do not enable it in production firmware.
 
 endif
 
