@@ -108,7 +108,7 @@ void test_publish_unpublish_and_deferred_reclaim() {
     CHECK(directory.publish(3, &record));
     CHECK(directory.published(3) == &record);
 
-    const PublishedVoiceRef voice = directory.acquire(3);
+    PublishedVoiceRef voice = directory.acquire(3);
     CHECK(voice.valid());
     CHECK(voice.record == &record);
     CHECK(record.voice_refs.load(std::memory_order_acquire) == 1);
@@ -120,6 +120,7 @@ void test_publish_unpublish_and_deferred_reclaim() {
     CHECK(!directory.setBankGeneration(2));
 
     CHECK(directory.release(voice));
+    CHECK(!voice.valid());
     CHECK(record.voice_refs.load(std::memory_order_acquire) == 0);
     CHECK(directory.canReclaim(&record));
     CHECK(directory.setBankGeneration(2));
@@ -164,7 +165,7 @@ void test_concurrent_publish_unpublish_acquire_release_stress() {
     for (int thread_index = 0; thread_index < 4; ++thread_index) {
         readers.emplace_back([&]() {
             while (!stop.load(std::memory_order_acquire)) {
-                const PublishedVoiceRef ref = directory.acquire(7);
+                PublishedVoiceRef ref = directory.acquire(7);
                 if (!ref.valid()) {
                     std::this_thread::yield();
                     continue;
@@ -174,7 +175,7 @@ void test_concurrent_publish_unpublish_acquire_release_stress() {
                     ref.record->pcm == nullptr) {
                     thread_failures.fetch_add(1, std::memory_order_relaxed);
                 }
-                if (!directory.release(ref)) {
+                if (!directory.release(ref) || ref.valid()) {
                     thread_failures.fetch_add(1, std::memory_order_relaxed);
                 }
             }
