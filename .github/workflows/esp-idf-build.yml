@@ -10,6 +10,7 @@ on:
       - "main/**"
       - "firmware/**"
       - "scripts/build_idf.sh"
+      - "scripts/run_qemu_ci.sh"
       - ".github/workflows/esp-idf-build.yml"
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - "main/**"
       - "firmware/**"
       - "scripts/build_idf.sh"
+      - "scripts/run_qemu_ci.sh"
       - ".github/workflows/esp-idf-build.yml"
 
 permissions:
@@ -26,7 +28,7 @@ permissions:
 jobs:
   build-esp32s3:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v6
@@ -67,6 +69,12 @@ jobs:
           mkdir -p reports
           idf.py size | tee reports/idf-size.txt
 
+      - name: Boot firmware in ESP32-S3 QEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run_qemu_ci.sh reports/qemu-smoke.log
+
       - name: Upload flashable firmware artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -81,4 +89,5 @@ jobs:
             build/flasher_args.json
             sdkconfig
             reports/idf-size.txt
+            reports/qemu-smoke.log
           if-no-files-found: error
