@@ -11,8 +11,38 @@ FIXTURE_SOURCE="$ROOT_DIR/assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
 FIXTURE_TARGET="$STAGING_DIR/test.sf2"
 FIXTURE_SHA256="9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62"
 PORT="${1:-}"
+IDF_PY="$IDF_PATH/tools/idf.py"
+
+if [[ ! -f "$IDF_PY" ]]; then
+    echo "ESP-IDF idf.py not found: $IDF_PY" >&2
+    exit 1
+fi
+
+# Some ESP-IDF environment managers (including Espressif's newer activation
+# flow) expose idf.py as a shell function instead of adding $IDF_PATH/tools to
+# PATH. Shell functions are not inherited by this bash script, so invoke the
+# real idf.py through the activated ESP-IDF Python environment explicitly.
+if [[ -n "${IDF_PYTHON_ENV_PATH:-}" && -x "$IDF_PYTHON_ENV_PATH/bin/python" ]]; then
+    IDF_PYTHON="$IDF_PYTHON_ENV_PATH/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    IDF_PYTHON="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+    IDF_PYTHON="$(command -v python)"
+else
+    echo "Python interpreter not found for ESP-IDF." >&2
+    exit 1
+fi
+
+run_idf() {
+    "$IDF_PYTHON" "$IDF_PY" "$@"
+}
 
 cd "$ROOT_DIR"
+
+echo "== ESP-IDF environment =="
+echo "IDF_PATH=$IDF_PATH"
+echo "IDF_PYTHON=$IDF_PYTHON"
+run_idf --version
 
 echo "== Verify pinned real-SF2 fixture =="
 if command -v sha256sum >/dev/null 2>&1; then
@@ -20,7 +50,7 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
     actual_sha="$(shasum -a 256 "$FIXTURE_SOURCE" | awk '{print $1}')"
 else
-    actual_sha="$(python - "$FIXTURE_SOURCE" <<'PY'
+    actual_sha="$("$IDF_PYTHON" - "$FIXTURE_SOURCE" <<'PY'
 import hashlib
 import pathlib
 import sys
@@ -55,13 +85,13 @@ if [[ "$fixture_bytes" -ne 5898214 ]]; then
 fi
 
 echo "== Configure ESP32-S3 N16R8 hardware benchmark =="
-idf.py -B "$BUILD_DIR" \
+run_idf -B "$BUILD_DIR" \
     -D "SDKCONFIG=$SDKCONFIG_PATH" \
     -D "SDKCONFIG_DEFAULTS=$ROOT_DIR/sdkconfig.defaults;$ROOT_DIR/sdkconfig.hwbench.defaults" \
     set-target esp32s3
 
 echo "== Build firmware + raw FATFS fixture =="
-idf.py -B "$BUILD_DIR" build
+run_idf -B "$BUILD_DIR" build
 
 echo "== Verify hardware benchmark configuration =="
 grep -q '^CONFIG_IDF_TARGET="esp32s3"$' "$SDKCONFIG_PATH"
@@ -98,14 +128,14 @@ echo "  sweep     : 4 MiB per chunk size (4/8/16/32/64 KiB)"
 if [[ -n "$PORT" ]]; then
     echo
     echo "== Flash hardware benchmark to $PORT =="
-    idf.py -B "$BUILD_DIR" -p "$PORT" flash
+    run_idf -B "$BUILD_DIR" -p "$PORT" flash
     echo
     echo "Flash complete. Start the serial monitor with:"
-    echo "  idf.py -B build-hwbench -p '$PORT' monitor"
+    echo "  \"$IDF_PYTHON\" \"$IDF_PY\" -B build-hwbench -p '$PORT' monitor"
 else
     echo
     echo "To flash later:"
     echo "  ./scripts/build_hwbench_idf.sh <PORT>"
     echo "or:"
-    echo "  idf.py -B build-hwbench -p <PORT> flash monitor"
+    echo "  \"$IDF_PYTHON\" \"$IDF_PY\" -B build-hwbench -p <PORT> flash monitor"
 fi
