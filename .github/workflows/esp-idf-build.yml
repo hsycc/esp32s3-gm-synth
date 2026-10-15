@@ -8,10 +8,12 @@ on:
       - "CMakeLists.txt"
       - "sdkconfig.defaults"
       - "sdkconfig.qemu.defaults"
+      - "sdkconfig.hwbench.defaults"
       - "partitions_qemu.csv"
       - "main/**"
       - "firmware/**"
       - "scripts/build_idf.sh"
+      - "scripts/build_hwbench_idf.sh"
       - "scripts/run_qemu_ci.sh"
       - "scripts/run_qemu_sf2_ci.sh"
       - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
@@ -22,10 +24,12 @@ on:
       - "CMakeLists.txt"
       - "sdkconfig.defaults"
       - "sdkconfig.qemu.defaults"
+      - "sdkconfig.hwbench.defaults"
       - "partitions_qemu.csv"
       - "main/**"
       - "firmware/**"
       - "scripts/build_idf.sh"
+      - "scripts/build_hwbench_idf.sh"
       - "scripts/run_qemu_ci.sh"
       - "scripts/run_qemu_sf2_ci.sh"
       - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
@@ -91,6 +95,12 @@ jobs:
           set -euo pipefail
           bash scripts/run_qemu_sf2_ci.sh reports/qemu-sf2-flash.log
 
+      - name: Build physical N16R8 storage benchmark image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build_hwbench_idf.sh
+
       - name: Upload QEMU diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -101,6 +111,23 @@ jobs:
             reports/qemu-sf2-flash.log
             reports/qemu-sf2-flash-preflight.log
           if-no-files-found: warn
+
+      - name: Upload physical N16R8 storage benchmark image
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-n16r8-storage-benchmark
+          path: |
+            build-hwbench/bootloader/bootloader.bin
+            build-hwbench/partition_table/partition-table.bin
+            build-hwbench/esp32s3_gm_synth.bin
+            build-hwbench/esp32s3_gm_synth.elf
+            build-hwbench/esp32s3_gm_synth.map
+            build-hwbench/qemu_sf2.bin
+            build-hwbench/flash_args
+            build-hwbench/flasher_args.json
+            sdkconfig.hwbench
+            sdkconfig.hwbench.defaults
+          if-no-files-found: error
 
       - name: Upload flashable firmware artifacts
         uses: actions/upload-artifact@v4

@@ -9,19 +9,46 @@ SDKCONFIG_PATH="$ROOT_DIR/sdkconfig.hwbench"
 STAGING_DIR="$ROOT_DIR/.qemu_sf2_data"
 FIXTURE_SOURCE="$ROOT_DIR/assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
 FIXTURE_TARGET="$STAGING_DIR/test.sf2"
+FIXTURE_SHA256="9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62"
 PORT="${1:-}"
 
 cd "$ROOT_DIR"
 
 echo "== Verify pinned real-SF2 fixture =="
-grep 'assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2$' \
-    assets/sf2/manifests/subset-sha256.txt | sha256sum -c -
+if command -v sha256sum >/dev/null 2>&1; then
+    actual_sha="$(sha256sum "$FIXTURE_SOURCE" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+    actual_sha="$(shasum -a 256 "$FIXTURE_SOURCE" | awk '{print $1}')"
+else
+    actual_sha="$(python - "$FIXTURE_SOURCE" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+h = hashlib.sha256()
+with path.open('rb') as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b''):
+        h.update(chunk)
+print(h.hexdigest())
+PY
+)"
+fi
+
+if [[ "$actual_sha" != "$FIXTURE_SHA256" ]]; then
+    echo "Unexpected FM/GM hardware-benchmark fixture SHA-256:" >&2
+    echo "  expected: $FIXTURE_SHA256" >&2
+    echo "  actual  : $actual_sha" >&2
+    exit 1
+fi
+
+echo "$actual_sha  assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
 
 rm -rf "$BUILD_DIR" "$STAGING_DIR" "$SDKCONFIG_PATH" "$ROOT_DIR/sdkconfig.hwbench.old"
 mkdir -p "$STAGING_DIR"
 cp "$FIXTURE_SOURCE" "$FIXTURE_TARGET"
 
-fixture_bytes="$(stat -c '%s' "$FIXTURE_TARGET" 2>/dev/null || stat -f '%z' "$FIXTURE_TARGET")"
+fixture_bytes="$(wc -c < "$FIXTURE_TARGET" | tr -d '[:space:]')"
 if [[ "$fixture_bytes" -ne 5898214 ]]; then
     echo "Unexpected FM/GM hardware-benchmark fixture size: $fixture_bytes" >&2
     exit 1
