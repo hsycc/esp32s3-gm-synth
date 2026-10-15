@@ -34,5 +34,14 @@ jobs:
             firmware/sample/SampleResidencyManager.cpp \
             tests/sample/test_sample_residency.cpp \
             -o build/host-tests/test_sample_residency
+
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            tests/sample/test_sample_publication.cpp \
+            -o build/host-tests/test_sample_publication
       - name: Run sample residency host tests
         run: ./build/host-tests/test_sample_residency
+      - name: Run publication and program snapshot host tests
+        run: ./build/host-tests/test_sample_publication
