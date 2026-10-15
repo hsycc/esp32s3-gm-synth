@@ -49,6 +49,13 @@ jobs:
             tests/sample/test_sample_residency.cpp \
             -o build/host-tests/test_sample_residency
 
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
+            firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencySourceLoad.cpp \
+            firmware/sample/SampleResidencyView.cpp \
+            tests/sample/test_sample_source_load.cpp \
+            -o build/host-tests/test_sample_source_load
+
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
             firmware/sample/SampleResidencyManager.cpp \
             firmware/sample/PublishedSampleDirectory.cpp \
@@ -77,6 +84,8 @@ jobs:
 
       - name: Run sample residency host tests
         run: ./build/host-tests/test_sample_residency
+      - name: Run direct-to-arena source load tests
+        run: ./build/host-tests/test_sample_source_load
       - name: Run publication and program snapshot host tests
         run: ./build/host-tests/test_sample_publication
       - name: Run transactional program prepare host tests
