@@ -94,6 +94,17 @@ jobs:
             tests/sample/test_real_bank_dependencies.cpp \
             -o build/host-tests/test_real_bank_dependencies
 
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencySourceLoad.cpp \
+            firmware/sample/SampleResidencyView.cpp \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            firmware/sample/ProgramPrepareController.cpp \
+            firmware/sf2/Sf2SampleSource.cpp \
+            tests/sf2/test_sf2_sample_source.cpp \
+            -o build/host-tests/test_sf2_sample_source
+
       - name: Run sample residency host tests
         run: ./build/host-tests/test_sample_residency
       - name: Run direct-to-arena source load tests
@@ -106,6 +117,8 @@ jobs:
         run: ./build/host-tests/test_program_source_prepare
       - name: Run generated real-bank dependency tests
         run: ./build/host-tests/test_real_bank_dependencies
+      - name: Run native SF2 sample-source tests
+        run: ./build/host-tests/test_sf2_sample_source
       - name: Print residency pressure report
         run: cat reports/residency_pressure.json
       - name: Upload residency pressure report
