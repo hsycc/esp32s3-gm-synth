@@ -18,6 +18,8 @@ enum class ProgramPrepareError : std::uint8_t {
     NotResident,
     SourceDescriptorFailed,
     SourceLoadFailed,
+    ResidencyCapacityFailed,
+    ResidencyConflict,
     PinFailed,
     PublicationConflict,
     RetiringGenerationBusy,
@@ -35,6 +37,10 @@ struct ProgramPrepareStats {
     std::uint64_t sample_bytes_loaded = 0;
     std::uint64_t samples_reused_resident = 0;
     std::uint64_t source_failures = 0;
+    std::uint64_t capacity_failures = 0;
+    std::uint64_t capacity_retries = 0;
+    std::uint64_t cache_evictions = 0;
+    std::uint64_t cache_evicted_bytes = 0;
     std::uint64_t samples_pinned = 0;
     std::uint64_t samples_published = 0;
     std::uint64_t samples_reused_published = 0;
@@ -49,6 +55,10 @@ struct ProgramPrepareStats {
 // SampleSource -> SampleResidencyManager::loadFromSource(). No source method is
 // ever called from Audio. Successfully loaded samples remain as unpinned cache
 // entries if a later dependency causes the prepare transaction to fail.
+//
+// If the arena/metadata is full, Prepare may evict least-recently-used cache
+// entries only when they are unpinned, unpublished and fully reclaimable. It
+// never evicts Active/READY ownership to force a Program Change to fit.
 class ProgramPrepareController {
 public:
     ProgramPrepareController(
@@ -62,7 +72,6 @@ public:
 
     bool setBankGeneration(std::uint32_t bank_generation);
 
-    // General startup path. Missing dependencies may be loaded from source_.
     bool activateInitialProgram(
         std::uint8_t channel,
         std::uint16_t bank,
@@ -71,7 +80,6 @@ public:
         const SampleId* dependencies,
         std::size_t dependency_count);
 
-    // General runtime path. Missing dependencies may be loaded from source_.
     bool prepareProgram(
         std::uint8_t channel,
         std::uint16_t bank,
@@ -80,8 +88,6 @@ public:
         const SampleId* dependencies,
         std::size_t dependency_count);
 
-    // Backward-compatible resident-only naming. With no source configured these
-    // retain the old behavior: a missing sample fails with NotResident.
     bool activateInitialResidentProgram(
         std::uint8_t channel,
         std::uint16_t bank,
@@ -103,7 +109,6 @@ public:
         return prepareProgram(channel, bank, program, token, dependencies, dependency_count);
     }
 
-    // Control-side commit acknowledgement + old-snapshot pin retirement.
     ProgramCommitAck acknowledgeAndRetire(std::uint8_t channel, std::uint32_t token);
 
     ProgramPrepareError lastError() const { return last_error_; }
@@ -125,6 +130,7 @@ private:
         std::size_t dependency_count);
 
     ResidentSampleView ensureResident(SampleId sample_id);
+    bool evictOneSafeCacheSample();
     ProgramSnapshot* selectFreeSnapshot(std::uint8_t channel);
     bool ensurePublished(const ResidentSampleView& view, bool* newly_published);
     bool recordMatchesView(const ResidentRecord& record, const ResidentSampleView& view) const;
