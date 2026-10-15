@@ -1,0 +1,19 @@
+# Dedicated real-hardware ESP32-S3 N16R8 internal-flash storage benchmark.
+# Layer this file after sdkconfig.defaults. It deliberately reuses the same
+# raw-FATFS fixture path exercised by QEMU so emulator and hardware runs parse
+# the exact same SF2 bytes and execute the exact same VFS -> PSRAM code path.
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_qemu.csv"
+
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"
+# Real hardware uses the production-sized sweep: every 4/8/16/32/64 KiB pass
+# reads 4 MiB from the real SF2 smpl payload directly into the PSRAM arena.
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304
+
+# Despite the historical QEMU name, this option only enables the generated
+# raw-flash FATFS fixture and its read-only mount. It is hardware-agnostic and
+# intentionally reused here until the configuration name is generalized.
+CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y

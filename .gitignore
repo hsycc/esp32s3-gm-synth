@@ -1,15 +1,18 @@
 # ESP-IDF / CMake
 build/
 build-qemu-sf2/
+build-hwbench/
 managed_components/
 sdkconfig
 sdkconfig.old
 sdkconfig.qemu
 sdkconfig.qemu.old
+sdkconfig.hwbench
+sdkconfig.hwbench.old
 CMakeFiles/
 cmake-build-*/
 
-# QEMU-only generated filesystem staging
+# Generated SF2 filesystem staging shared by QEMU and hardware benchmark builds
 .qemu_sf2_data/
 
 # Arduino / PlatformIO (if used during experiments)
