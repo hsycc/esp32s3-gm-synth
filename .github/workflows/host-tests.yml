@@ -65,6 +65,7 @@ jobs:
 
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
             firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencySourceLoad.cpp \
             firmware/sample/SampleResidencyView.cpp \
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/sample/ProgramSnapshot.cpp \
@@ -73,8 +74,19 @@ jobs:
             -o build/host-tests/test_program_prepare
 
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencySourceLoad.cpp \
+            firmware/sample/SampleResidencyView.cpp \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            firmware/sample/ProgramPrepareController.cpp \
+            tests/sample/test_program_source_prepare.cpp \
+            -o build/host-tests/test_program_source_prepare
+
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
             -Ibuild/generated \
             firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencySourceLoad.cpp \
             firmware/sample/SampleResidencyView.cpp \
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/sample/ProgramSnapshot.cpp \
@@ -90,6 +102,8 @@ jobs:
         run: ./build/host-tests/test_sample_publication
       - name: Run transactional program prepare host tests
         run: ./build/host-tests/test_program_prepare
+      - name: Run source-backed program prepare host tests
+        run: ./build/host-tests/test_program_source_prepare
       - name: Run generated real-bank dependency tests
         run: ./build/host-tests/test_real_bank_dependencies
       - name: Print residency pressure report
