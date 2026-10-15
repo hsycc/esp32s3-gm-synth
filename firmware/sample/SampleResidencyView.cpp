@@ -22,8 +22,10 @@ ResidentSampleView SampleResidencyManager::residentView(SampleId sample_id) cons
     view.generation = entry.generation;
     view.pcm = reinterpret_cast<const std::int16_t*>(arena_ + entry.offset);
     view.descriptor = entry.descriptor;
+    view.allocated_bytes = entry.allocated_bytes;
     view.pin_count = entry.pin_count;
     view.phase_a_voice_ref_count = entry.voice_ref_count;
+    view.touch_sequence = entry.touch_sequence;
     return view;
 }
 
