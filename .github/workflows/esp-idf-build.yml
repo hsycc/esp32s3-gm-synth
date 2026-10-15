@@ -1,0 +1,64 @@
+name: esp-idf-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "CMakeLists.txt"
+      - "sdkconfig.defaults"
+      - "main/**"
+      - "firmware/**"
+      - "scripts/build_idf.sh"
+      - ".github/workflows/esp-idf-build.yml"
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "sdkconfig.defaults"
+      - "main/**"
+      - "firmware/**"
+      - "scripts/build_idf.sh"
+      - ".github/workflows/esp-idf-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-esp32s3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pinned ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: "v6.1"
+
+      - name: Configure ESP32-S3 target
+        shell: bash
+        run: |
+          set -euo pipefail
+          idf.py set-target esp32s3
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          idf.py build
+
+      - name: Verify N16R8 baseline configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '^CONFIG_IDF_TARGET="esp32s3"$' sdkconfig
+          grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM_SPEED_80M=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM_USE_CAPS_ALLOC=y$' sdkconfig
+          grep -q '^CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4194304$' sdkconfig
+
+      - name: Print firmware size
+        run: idf.py size
