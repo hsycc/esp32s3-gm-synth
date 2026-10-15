@@ -6,7 +6,7 @@
 
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
 #include "esp_err.h"
-#include "fatfs/vfs/esp_vfs_fat.h"
+#include "esp_vfs_fat.h"
 #endif
 
 #include "platform/EspPsramArena.h"
