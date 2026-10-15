@@ -35,7 +35,7 @@ release-publish ResidentRecord
                                      v
                             Published Sample Slot
                                      |
-                              acquire-load/recheck
+                              acquire / VoiceRef
                                      |
                                      v
                                Audio / Voice Core
@@ -47,6 +47,11 @@ The PCM allocation is private until the publication step. A partially written sa
 
 A SoundFont `SampleId` is local to one loaded SF2 bank. V1 treats the residency directory as scoped to the currently loaded SoundFont. Loading/replacing the whole bank creates a new bank generation; references from an older bank generation cannot match a new slot accidentally.
 
+Bank generation may change only when:
+- no sample is published;
+- no publication acquire critical section is in flight;
+- no live published Voice Ref from the previous bank remains.
+
 If multi-bank simultaneous playback is added later, identity becomes `(BankGeneration, SampleId)` rather than weakening this invariant.
 
 ## Published slot
@@ -56,28 +61,18 @@ Conceptually each parsed SF2 sample owns one directory slot:
 ```cpp
 struct PublishedSampleSlot {
     atomic<const ResidentRecord*> published;
-    atomic<uint32_t> voiceRefs;
-    uint32_t sampleId;
 };
 
 struct ResidentRecord {
     uint32_t bankGeneration;
     uint32_t sampleGeneration;
     const int16_t* pcm;
-    uint32_t pcmBytes;
-    uint32_t frames;
-    uint32_t loopStart;
-    uint32_t loopEnd;
-    uint32_t sampleRate;
-    uint8_t rootKey;
-    int8_t pitchCorrection;
-    uint16_t flags;
+    SampleDescriptor descriptor;
+    atomic<uint32_t> voiceRefs;
 };
 ```
 
-`ResidentRecord` is immutable after publication.
-
-The exact field packing may be optimized later, but immutability is part of the contract.
+`ResidentRecord` metadata and PCM are immutable after publication. Only `voiceRefs` changes.
 
 ## Publish protocol
 
@@ -88,104 +83,126 @@ Control/storage domain:
 3. Otherwise reserve aligned PSRAM from the control-owned arena.
 4. Read/copy the complete PCM payload into that private allocation.
 5. Fill the complete immutable `ResidentRecord`.
-6. Publish the record pointer with **release** semantics.
+6. Publish the record pointer atomically.
 7. Only after publication may a READY program snapshot refer to that sample.
 
-Publication of a null/partial record is forbidden.
+Publication of a null/partial record is forbidden. Replacing a live slot directly is also forbidden; replacement requires explicit unpublish followed by deferred reclamation.
+
+## Why pointer-load + refcount alone is not sufficient
+
+This commonly suggested sequence is still unsafe:
+
+```text
+audio:   record = published.load()
+control: published = nullptr
+control: sees record.refs == 0
+control: frees record/PCM
+
+audio:   record.refs++   // use-after-free
+```
+
+A second pointer check after `refs++` does not repair the fact that the record may already have been reclaimed before the increment.
+
+Therefore the implementation adds an **acquire grace-period guard** around the short publication-acquire critical section.
 
 ## Audio acquire protocol
 
-Audio/Voice domain performs a bounded operation; it does not allocate arena memory or touch storage.
-
-Conceptual loop:
+Implemented Phase-B model:
 
 ```text
-record1 = slot.published.load(acquire)
-if null: acquire fails
+activeAcquirers++        (seq_cst)
+record1 = published      (seq_cst)
+if null -> leave
 
-voiceRefs++
+record1.voiceRefs++
+record2 = published      (seq_cst)
 
-record2 = slot.published.load(acquire)
-if record2 == record1:
-    SampleRef succeeds
+if record2 == record1 and bank generation still matches:
+    totalLiveVoiceRefs++
+    activeAcquirers--    (seq_cst)
+    return move-only PublishedVoiceRef
 else:
-    voiceRefs--
-    retry/fail boundedly
+    record1.voiceRefs--
+    bounded retry/fail
+
+activeAcquirers--        (seq_cst)
 ```
 
-The second read closes the race where control unpublishes between the first pointer load and the reference increment.
+The publication pointer and acquire-grace counter use sequentially-consistent ordering intentionally. This provides a simple ordering argument:
 
-A production implementation may use a generation/tagged-pointer variant, but it must preserve the same safety property.
+- if Audio enters the acquire critical section before Control's reclaim check, Control observes an active acquirer and cannot reclaim;
+- if Control unpublishes and reaches the reclaim check first, a later Audio acquire can only see null/new publication, not the retired record.
+
+The work is bounded and occurs when a Voice acquires a sample, not once per rendered audio sample.
+
+`PublishedVoiceRef` is move-only and becomes invalid after successful release, preventing ordinary code paths from duplicating one ownership token and releasing it twice.
 
 ## Audio release protocol
 
-A `SampleRef` contains enough identity to reject stale releases:
+A `PublishedVoiceRef` carries:
 
-- bank generation
-- sample generation
-- SampleId/slot index
-- resident record pointer/token
+- bank generation;
+- sample generation;
+- SampleId;
+- exact `ResidentRecord*`.
 
-Release decrements only the reference count associated with the exact published/retiring generation it acquired.
+Release validates identity, decrements that exact record's `voiceRefs`, decrements the directory-wide live Voice Ref count, and invalidates the move-only ref object.
 
 Audio release never frees PSRAM.
 
 ## Unpublish / eviction protocol
 
-Control domain may consider a sample for eviction only when its program/prepared pin count is zero.
+Control domain may consider a sample for unpublish only when its program/prepared pin count is zero.
 
 Eviction is two-stage:
 
-1. Atomically replace `slot.published` with null using acquire-release semantics.
+1. Atomically replace `slot.published` with null.
 2. Mark the old `ResidentRecord`/allocation as **retiring**.
 
 After unpublish:
 - no new Voice may acquire that record;
 - existing Voice Refs remain valid;
-- the PSRAM allocation must not be returned to the free arena until its reference count reaches zero.
+- the PSRAM allocation and record storage must not be returned/reused until `canReclaim(record)` is true.
 
-This is effectively deferred reclamation. The control task periodically collects retiring records whose ref count is zero.
-
-## Why `refs == 0` check before unpublish is not sufficient
-
-This sequence is unsafe:
+Current `canReclaim(record)` requires:
 
 ```text
-control: sees refs == 0
-                        audio: reads published pointer
-control: frees PCM
-                        audio: refs++ and uses stale pointer
+record is no longer published
+&& activeAcquirers == 0
+&& record.voiceRefs == 0
 ```
 
-Therefore publication must be removed first, and reclamation happens only after the post-unpublish reference count is known to be zero.
+This is deferred reclamation. The control task polls/collects retiring records; Audio never waits for reclamation.
 
 ## Program residency snapshots
 
 Each MIDI channel logically has:
 
-- `ActiveProgramSnapshot`
-- at most one `Pending/ReadyProgramSnapshot`
-- a short `RetiringProgramSnapshot` handoff until control observes commit acknowledgement
+- `ActiveProgramSnapshot`;
+- at most one `ReadyProgramSnapshot`;
+- one temporary retired snapshot held until Control acknowledges the commit.
 
 A snapshot is immutable and contains at minimum:
 
 ```text
 channel
 bank/program
-program generation/token
-ResolvedZone/Program metadata reference
+program token
+audio-bank generation
 unique required SampleId set
 ```
+
+The current host implementation uses a fixed dependency array and no dynamic allocation.
 
 ### Prepare
 
 Control domain:
 
 1. Resolve unique SampleId dependency set for requested program.
-2. Ensure every required sample is published/resident.
+2. Ensure every required sample is resident/published.
 3. Increment program pins for the new dependency set.
 4. Build immutable READY snapshot.
-5. Publish only the READY snapshot/token to audio.
+5. Publish only the READY snapshot to the audio exchange.
 
 Failure at any step rolls back the new snapshot's pins. Successfully loaded but now-unpinned samples may remain as evictable cache entries.
 
@@ -193,26 +210,30 @@ Failure at any step rolls back the new snapshot's pins. Successfully loaded but 
 
 At an audio block boundary:
 
-1. Observe READY snapshot.
-2. Atomically/selectively replace the channel's Active snapshot.
-3. Emit commit acknowledgement/token for control.
-4. Continue rendering; no storage/arena work occurs here.
+1. Atomically take the READY snapshot.
+2. Atomically replace the channel's Active snapshot.
+3. Preserve the previous Active pointer as `retired`.
+4. Publish the committed token for Control acknowledgement.
+
+No dependency scan, sample load, pin/unpin, arena operation, filesystem I/O or mutex occurs here.
 
 ### Retire
 
-After control observes the commit acknowledgement:
+After Control observes and acknowledges the committed token:
 
-1. Retire pins owned by the previous Active snapshot.
-2. Samples still used by release-tail Voice Refs remain alive automatically.
-3. Unpinned + unreferenced cache entries become eviction candidates.
+1. Receive the exact previous Active snapshot pointer.
+2. Retire pins owned by that snapshot.
+3. Samples still used by release-tail Voice Refs remain alive automatically.
+4. Shared samples remain pinned if another active/prepared snapshot still owns them.
+5. Unpinned sample records may be unpublished and later reclaimed after the grace/ref conditions pass.
 
 ## Rapid Program Change policy
 
-V1 allows at most one published READY transition per channel. While a transition awaits block-boundary commit/ack, a newer desired Program Change is retained as the **latest desired program** and prepared after the in-flight transition settles.
+V1 allows at most one READY/commit/ack transition per channel. While a transition is in flight, another `publishReady()` is rejected.
 
-A not-yet-published preparation may be cancelled and its pins rolled back.
+The higher-level control state will retain only the **latest desired program** and prepare it after the current transition is acknowledged. A not-yet-published preparation may be cancelled and its pins rolled back.
 
-This creates bounded state and prevents an unbounded chain of residency snapshots during rapid MIDI Program Changes.
+This keeps state bounded and prevents an unbounded retiring chain during rapid MIDI Program Change traffic.
 
 ## Pin semantics
 
@@ -230,68 +251,85 @@ One physical PCM allocation is shared. Removing one channel's pin does not evict
 
 Only the control/storage domain mutates:
 
-- free-span list
-- allocation/eviction policy
-- LRU/cache policy
-- PSRAM allocation metadata
-- retiring allocation list
+- free-span list;
+- allocation/eviction policy;
+- LRU/cache policy;
+- PSRAM allocation metadata;
+- retiring allocation list.
 
 The audio domain never walks these structures.
-
-This means the Phase-A combined semantic class will be refactored into an arena/control portion and a publication/ref portion before final ESP32 cross-core use. Phase-A tests remain valuable because pin/ref/eviction invariants must still hold after the split.
 
 ## Realtime operations allowed on audio core
 
 Bounded operations only:
 
-- load active/pending snapshot pointer/token
-- published-slot acquire
-- atomic voice ref increment/decrement
-- immutable metadata reads
-- PCM reads
+- load active/ready snapshot pointer/token;
+- published-slot acquire;
+- atomic Voice Ref increment/decrement;
+- immutable metadata reads;
+- PCM reads.
 
 Forbidden:
 
-- filesystem/flash reads
-- malloc/free
-- arena allocation/coalescing
-- eviction scans
-- program dependency construction
-- logging
-- waiting on control task or mutex
+- filesystem/flash reads;
+- malloc/free;
+- arena allocation/coalescing;
+- eviction scans;
+- program dependency construction;
+- logging;
+- waiting on control task or mutex.
+
+## Host validation now implemented
+
+Phase-B host tests cover:
+
+- publish -> acquire -> unpublish -> deferred reclaim;
+- bank generation blocked while old Voice Refs exist;
+- explicit publish conflict handling;
+- move-only Voice Ref invalidation on release;
+- 4 concurrent reader threads with 250 control-side unpublish/reclaim/republish cycles;
+- READY visible before commit while Active remains old;
+- block-boundary Active swap;
+- one in-flight transition per channel;
+- commit acknowledgement returns the exact retired snapshot;
+- shared SampleId pin counts across old/new programs;
+- release-tail Voice Ref keeps an old-program-only sample resident after pin retirement.
 
 ## Diagnostics
 
 Control-side:
-- PSRAM arena capacity/used/high-water
-- largest free span
-- free span count
-- resident/cache/retiring sample counts
-- program prepare bytes loaded/reused
-- prepare latency
-- allocation/fragmentation failures
+- PSRAM arena capacity/used/high-water;
+- largest free span;
+- free span count;
+- resident/cache/retiring sample counts;
+- program prepare bytes loaded/reused;
+- prepare latency;
+- allocation/fragmentation failures.
 
-Audio-side:
-- published acquire misses
-- bounded acquire retry/failure count
-- stale generation faults
-- active Voice Refs
+Publication/audio-side:
+- published sample count;
+- active acquire critical sections;
+- live Voice Refs;
+- acquire successes/misses/retries;
+- stale-release faults;
+- publish conflicts.
 
 Program-change:
-- prepare token
-- READY timestamp
-- commit block/frame
-- retire acknowledgement
-- superseded request count
+- READY publish/rejection count;
+- committed token;
+- commit count;
+- acknowledgement count;
+- later: READY timestamp, commit block/frame and superseded desired-request count.
 
 ## Correctness invariants
 
-The implementation and tests must prove:
+The implementation and tests must preserve:
 
 1. **No partial publication** — Audio cannot observe PCM before copy + metadata completion.
-2. **No reuse while referenced** — PSRAM is not returned/reused until old Voice Refs reach zero after unpublish.
+2. **Grace before reclaim** — after unpublish, retired storage is not reused until acquire critical sections and old Voice Refs are both drained.
 3. **No audio-side reclamation** — Audio never frees/evicts/coalesces.
 4. **Snapshot atomicity** — one block sees either the old or new immutable program snapshot, never a partially prepared program.
 5. **Independent lifetimes** — Program pins may disappear while release-tail Voice Refs keep PCM valid.
 6. **Shared residency** — multiple programs/channels can pin one physical sample allocation.
 7. **Bounded realtime work** — audio acquire/release has a fixed upper work bound and performs no dynamic allocation.
+8. **Bank-generation isolation** — a new bank identity is not installed while old published Voice Refs remain.
