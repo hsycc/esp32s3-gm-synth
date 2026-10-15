@@ -103,6 +103,7 @@ grep -q '^CONFIG_SPIRAM_SPEED_80M=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
 
 if [[ ! -f "$BUILD_DIR/qemu_sf2.bin" ]]; then
@@ -123,7 +124,8 @@ echo "  build dir : $BUILD_DIR"
 echo "  sdkconfig : $SDKCONFIG_PATH"
 echo "  flash     : DIO / 80 MHz / 16 MiB"
 echo "  fixture   : $fixture_bytes bytes"
-echo "  sweep     : 4 MiB per chunk size (4/8/16/32/64 KiB)"
+echo "  storage   : 4 MiB per chunk size (4/8/16/32/64 KiB)"
+echo "  prepare   : cold/warm + cache pressure/LRU + commit/retire/release-tail"
 
 if [[ -n "$PORT" ]]; then
     echo
