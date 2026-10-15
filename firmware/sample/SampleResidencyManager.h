@@ -41,8 +41,10 @@ struct ResidentSampleView {
     std::uint32_t generation = 0;
     const std::int16_t* pcm = nullptr;
     SampleDescriptor descriptor{};
+    std::size_t allocated_bytes = 0;
     std::uint16_t pin_count = 0;
     std::uint16_t phase_a_voice_ref_count = 0;
+    std::uint64_t touch_sequence = 0;
 
     bool valid() const { return pcm != nullptr && generation != 0; }
 };
@@ -129,7 +131,9 @@ public:
     bool isResident(SampleId sample_id) const;
 
     // Control-only observation. No ownership is acquired; callers must pin the
-    // entry before publishing a returned pointer to another domain.
+    // entry before publishing a returned pointer to another domain. LRU age and
+    // allocated size are exposed so the control-domain admission policy can
+    // select safe cache victims without traversing private allocator state.
     ResidentSampleView residentView(SampleId sample_id) const;
 
     // Program/channel residency ownership. A pinned sample is not evictable.
