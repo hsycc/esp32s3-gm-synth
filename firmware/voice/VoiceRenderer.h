@@ -43,10 +43,15 @@ struct VoiceStartParams {
     EnvelopeConfig envelope{};
 };
 
+struct VoiceRenderResult {
+    std::size_t frames_rendered = 0;
+    bool finished = false;
+};
+
 struct VoicePoolStats {
     std::uint64_t start_attempts = 0;
     std::uint64_t start_successes = 0;
-    std::uint64_t start_failures_missing_sample = 0;
+    std::uint64_t start_failures_rejected = 0;
     std::uint64_t start_failures_full = 0;
     std::uint64_t note_off_matches = 0;
     std::uint64_t voices_finished = 0;
@@ -64,10 +69,10 @@ public:
     bool start(sample::PublishedSampleDirectory& directory, const VoiceStartParams& params);
     void noteOff();
 
-    // Adds signed stereo samples to an interleaved int32 accumulator.
-    // The caller owns final clipping/dither/16-bit conversion at the output
-    // boundary. Returns true when this call completed and released the Voice.
-    bool renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
+    // Adds signed stereo samples to an interleaved int32 accumulator. The
+    // caller owns final clipping/dither/16-bit conversion at the output
+    // boundary. frames_rendered is exact even when a Voice ends mid-block.
+    VoiceRenderResult renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
 
     void reset();
 
