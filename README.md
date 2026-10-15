@@ -2,15 +2,17 @@
 
 Experimental/product-oriented software GM sound module for ESP32-S3.
 
-The project targets a fixed/validated GM SoundFont profile and a realtime audio architecture suitable for embedded products rather than arbitrary desktop-class SF2 compatibility.
+The project targets a validated GM/SF2 profile and a realtime audio architecture suitable for embedded products rather than unrestricted desktop-class SF2 compatibility.
 
 ## Hardware baseline
 
 The product baseline is fixed to **ESP32-S3 N16R8**:
 
 - 16 MB on-module flash
-- 8 MB PSRAM
+- 8 MB Octal PSRAM
 - ESP32-S3 @ 240 MHz
+- ESP-IDF v6.1
+- initial PCM residency arena: 4 MiB
 
 R16 is not a target and must not be used to justify memory decisions.
 
@@ -21,56 +23,69 @@ R16 is not a target and must not be used to justify memory decisions.
 - 16 MIDI channels
 - 16 voices qualification target
 - 18–20 voices stretch target only when measured realtime budget permits
-- SoundFont size is not a product requirement; runtime working set is
-- PSRAM-backed sample residency
+- native `.sf2` as a first-class user asset
+- shared/per-program PSRAM-backed sample residency
 - 64-frame audio blocks as the initial baseline
 - global send FX (reverb / chorus)
 - realtime event queue with intra-block scheduling
 - adaptive polyphony and runtime deadline diagnostics
 
-## Candidate SoundFont profiles
+SoundFont file size is not itself the synth-engine limit. Runtime resident working set, storage latency, PSRAM reserve and realtime DSP cost are the relevant constraints.
 
-Two real candidate banks are currently used to drive architecture decisions:
+## Compatibility / qualification banks
 
-1. `TimGM6mb.sf2`
-   - compact GM bank
-   - approximately 5.72 MiB source file
-   - approximately 5.47 MiB aligned sample PCM
-   - potential full-residency candidate on R8, subject to measured runtime reserve
-   - significant instrument-modulator usage
-2. `GMBK5X128.sf2`
-   - approximately 15.06 MiB source file with many extra banks/presets
-   - approximately 14.84 MiB aligned sample PCM in the untrimmed source
-   - cannot be fully resident on R8
-   - raw source is also too large to treat as a practical in-flash product asset on N16 alongside firmware
-   - GM-only offline pruning plus shared/per-program residency is the intended evaluation path
+The repository uses multiple real banks because no single SoundFont is the specification:
 
-The project must support banks whose complete PCM does not fit PSRAM. Full residency is an optimization, not an architectural prerequisite.
+- FM/GM Open SoundFont — simple/open GM baseline
+- GeneralUser GS — real-world generator/modulator baseline
+- FluidR3_GM — larger classic GM / partial-residency stress baseline
+- TimGM6mb — compact real-world N16R8/modulator-heavy baseline
+- GMBK5X128 — non-standard robustness/stress input
 
-See `docs/SF2_BANK_ANALYSIS.md` for measured details.
+Deterministic ~6 MiB fixtures under `assets/sf2/subsets/` drive CI and residency tests. The pinned FM/GM fixture is also used by the ESP32-S3 QEMU and physical-Flash storage benchmark so both paths operate on identical SF2 bytes.
 
-## Reference projects
+See `docs/SF2_BANK_ANALYSIS.md` and `docs/SF2_COMPATIBILITY.md`.
 
-This project intentionally combines ideas from three existing ESP32-S3 sampler/synth projects:
+## Current architecture
 
-1. `copych/ESP32_SF2_Sampler_Synthesizer`
-   - SF2 parsing and zone resolution
-   - GM/MIDI channel state
-   - PSRAM sample pool
-   - voice engine and effects routing
-2. `copych/ESP32_SD_Sampler`
-   - adaptive polyphony
-   - smooth voice stealing / fast release
-   - streaming diagnostics and overload handling
-3. `RealTimeAudioLab/RTAL-EAI-004-Phoenix-Sound-Sampler`
-   - realtime task architecture
-   - timestamped event scheduling
-   - intra-block event placement
-   - deadline measurement
-   - SRAM/PSRAM placement methodology
-   - stress-validation discipline
+The M3 control/storage path is now implemented as:
 
-See `docs/ARCHITECTURE.md` and `docs/REFERENCES.md` for details.
+```text
+native .sf2
+  -> VFS RandomAccessReader
+  -> Sf2SampleSource
+  -> Program dependency set
+  -> ProgramPrepareController
+  -> direct-to-PSRAM chunked loading
+  -> Program Pins
+  -> PublishedSampleDirectory
+  -> immutable READY ProgramSnapshot
+  -> block-boundary Commit
+  -> move-only Voice Ref
+```
+
+The residency/admission design intentionally supports SF2 banks whose complete PCM does not fit in 8 MiB PSRAM. Full residency is an optional optimization, not an architectural prerequisite.
+
+## Validation layers
+
+The project keeps three different validation layers separate:
+
+1. **Host tests** — SF2 semantics, residency ownership, failure rollback, publication, Program Prepare, VFS reader and benchmark logic.
+2. **ESP32-S3 QEMU** — Xtensa/ESP-IDF/FreeRTOS integration, 8 MiB Octal PSRAM semantics, generated Flash FATFS, real SF2 parsing and VFS -> PSRAM execution.
+3. **Physical ESP32-S3 N16R8** — actual PSRAM reserve, internal-Flash/SD throughput and tail latency, DSP CPU cost, I2S deadlines and qualified polyphony.
+
+QEMU throughput is never treated as physical hardware performance evidence.
+
+The first complete QEMU real-SF2 storage path passed in `esp-idf-build #21`; see `benchmarks/QEMU_SF2_STORAGE_BASELINE_2026-10-15.md`.
+
+A dedicated physical N16R8 internal-Flash benchmark build is available through:
+
+```bash
+./scripts/build_hwbench_idf.sh <PORT>
+idf.py -B build-hwbench -p <PORT> monitor
+```
+
+It runs the same pinned real SF2 through 4/8/16/32/64 KiB reads, with 4 MiB read per pass. See `docs/HARDWARE_BRINGUP_N16R8.md`.
 
 ## Repository layout
 
@@ -91,19 +106,31 @@ See `docs/ARCHITECTURE.md` and `docs/REFERENCES.md` for details.
 │   ├── storage/
 │   └── diagnostics/
 ├── tools/
-│   └── sf2_analyzer/
+│   ├── sf2_analyzer/
+│   ├── sf2_conformance/
+│   ├── sf2_subset/
+│   ├── residency_fixture/
+│   └── storage_benchmark/
 ├── tests/
 ├── benchmarks/
-├── tasks/
 └── scripts/
 ```
 
 ## Development model
 
-The repository is designed to be usable both locally and by Codex Cloud.
+Cloud/host CI covers host tests, deterministic SF2 analysis/conformance, ESP32-S3 cross-builds, QEMU integration and construction of the physical benchmark firmware image.
 
-Cloud/host tasks should cover builds, static analysis, unit tests, SF2 analysis and code review. Hardware-only validation (I2S output, PSRAM behavior, underruns and realtime timing on a physical ESP32-S3 N16R8) remains a local/on-device step.
+Measurements that require the actual electrical/storage/audio characteristics of an N16R8 board remain on-device work: physical PSRAM reserve, Flash/SD timing, I2S underruns, render deadlines and stable polyphony.
 
 ## Status
 
-M1 SF2 analysis is active. Two real candidate GM banks have been measured; residency architecture will be designed for the N16R8 constraint rather than for a fixed SF2 file size.
+**M1/M2/M2.5 are established and CI-backed. M3 software/integration is complete through the ESP32-S3 QEMU real-SF2 path.**
+
+The current M3 gate is physical N16R8 evidence:
+
+- boot/PSRAM reserve on the exact module;
+- 4 MiB internal-Flash -> PSRAM sweep with p95/p99/max latency;
+- SD -> PSRAM comparison if SD is selected for the product;
+- on-target Program Prepare/cache-eviction timing.
+
+M4 Voice DSP/I2S integration starts after this storage/memory baseline is captured, so storage faults and realtime audio faults remain separable.
