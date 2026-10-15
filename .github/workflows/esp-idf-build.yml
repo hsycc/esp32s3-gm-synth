@@ -16,6 +16,7 @@ on:
       - "scripts/build_hwbench_idf.sh"
       - "scripts/run_qemu_ci.sh"
       - "scripts/run_qemu_sf2_ci.sh"
+      - "tools/program_prepare_benchmark/**"
       - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
       - "assets/sf2/manifests/subset-sha256.txt"
       - ".github/workflows/esp-idf-build.yml"
@@ -32,6 +33,7 @@ on:
       - "scripts/build_hwbench_idf.sh"
       - "scripts/run_qemu_ci.sh"
       - "scripts/run_qemu_sf2_ci.sh"
+      - "tools/program_prepare_benchmark/**"
       - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
       - "assets/sf2/manifests/subset-sha256.txt"
       - ".github/workflows/esp-idf-build.yml"
@@ -97,6 +99,23 @@ jobs:
           set -euo pipefail
           bash scripts/run_qemu_sf2_ci.sh reports/qemu-sf2-flash.log
 
+      - name: Render Program Prepare telemetry report
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f reports/qemu-sf2-flash.log ]]; then
+            python -m tools.program_prepare_benchmark.report \
+              reports/qemu-sf2-flash.log \
+              --expected-samples 67 \
+              --title "ESP32-S3 QEMU Program Prepare Functional Telemetry" \
+              --output reports/qemu-program-prepare.md
+            cat reports/qemu-program-prepare.md
+          else
+            echo "QEMU real-SF2 log was not produced; no Program Prepare report can be rendered." >&2
+          fi
+
       - name: Build physical N16R8 storage benchmark image
         shell: bash
         run: |
@@ -112,6 +131,10 @@ jobs:
             reports/qemu-smoke.log
             reports/qemu-sf2-flash.log
             reports/qemu-sf2-flash-preflight.log
+            reports/qemu-program-prepare.md
+            build-qemu-sf2/esp32s3_gm_synth.elf
+            build-qemu-sf2/esp32s3_gm_synth.map
+            sdkconfig.qemu
           if-no-files-found: warn
 
       - name: Upload physical N16R8 storage benchmark image
@@ -149,4 +172,5 @@ jobs:
             reports/qemu-smoke.log
             reports/qemu-sf2-flash.log
             reports/qemu-sf2-flash-preflight.log
+            reports/qemu-program-prepare.md
           if-no-files-found: error
