@@ -8,8 +8,10 @@ namespace {
 
 std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
     const std::int64_t product = static_cast<std::int64_t>(sample) * gain_q15;
-    const std::int64_t rounding = product >= 0 ? (std::int64_t{1} << 14) : -(std::int64_t{1} << 14);
-    return static_cast<std::int32_t>((product + rounding) >> 15);
+    if (product >= 0) {
+        return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
+    }
+    return -static_cast<std::int32_t>(((-product) + (std::int64_t{1} << 14)) >> 15);
 }
 
 }  // namespace
@@ -250,9 +252,13 @@ void Voice::finish() {
     directory_ = nullptr;
 }
 
-bool Voice::renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count) {
+VoiceRenderResult Voice::renderAdd(
+    std::int32_t* interleaved_stereo,
+    std::size_t frame_count) {
+    VoiceRenderResult result{};
     if (!active_ || interleaved_stereo == nullptr || frame_count == 0) {
-        return false;
+        result.finished = !active_;
+        return result;
     }
 
     for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
@@ -273,6 +279,7 @@ bool Voice::renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count)
         const std::int32_t right_gain = multiplyQ15(params_.gain_right_q15, envelope);
         interleaved_stereo[frame * 2u] += scaleSampleQ15(mono, left_gain);
         interleaved_stereo[frame * 2u + 1u] += scaleSampleQ15(mono, right_gain);
+        ++result.frames_rendered;
 
         const bool release_finishes_after_frame = envelope_stage_ == EnvelopeStage::Done;
         advancePhase();
@@ -281,7 +288,8 @@ bool Voice::renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count)
         }
     }
 
-    return !active_;
+    result.finished = !active_;
+    return result;
 }
 
 void Voice::reset() {
@@ -295,7 +303,7 @@ bool VoicePool::start(const VoiceStartParams& params) {
             continue;
         }
         if (!voice.start(directory_, params)) {
-            ++stats_.start_failures_missing_sample;
+            ++stats_.start_failures_rejected;
             return false;
         }
         ++stats_.start_successes;
@@ -330,9 +338,9 @@ void VoicePool::renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_co
         if (!voice.active()) {
             continue;
         }
-        const bool finished = voice.renderAdd(interleaved_stereo, frame_count);
-        stats_.rendered_voice_frames += frame_count;
-        if (finished) {
+        const VoiceRenderResult result = voice.renderAdd(interleaved_stereo, frame_count);
+        stats_.rendered_voice_frames += result.frames_rendered;
+        if (result.finished) {
             ++stats_.voices_finished;
         }
     }
