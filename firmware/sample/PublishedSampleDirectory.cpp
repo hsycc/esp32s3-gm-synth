@@ -1,7 +1,5 @@
 #include "PublishedSampleDirectory.h"
 
-#include <limits>
-
 namespace gm_synth::sample {
 
 PublishedSampleDirectory::PublishedSampleDirectory() = default;
@@ -29,14 +27,11 @@ bool PublishedSampleDirectory::isRecordPublished(const ResidentRecord* record) c
 
 bool PublishedSampleDirectory::setBankGeneration(std::uint32_t bank_generation) {
     if (bank_generation == 0 || anyPublished() ||
-        active_acquirers_.load(std::memory_order_acquire) != 0) {
+        active_acquirers_.load(std::memory_order_acquire) != 0 ||
+        live_voice_refs_.load(std::memory_order_acquire) != 0) {
         return false;
     }
 
-    // Changing bank identity while an unpublished old-bank record still has a
-    // Voice Ref would make reclamation/accounting ambiguous. The caller owns
-    // those records, so enforce the stronger contract through publication use:
-    // bank generation changes only after all old records are reclaimable.
     bank_generation_.store(bank_generation, std::memory_order_release);
     return true;
 }
@@ -102,6 +97,7 @@ PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
         const ResidentRecord* confirm = slot.published.load(std::memory_order_acquire);
         const std::uint32_t confirm_bank = bank_generation_.load(std::memory_order_acquire);
         if (confirm == record && record->bank_generation == confirm_bank) {
+            live_voice_refs_.fetch_add(1, std::memory_order_acq_rel);
             result.record = record;
             result.sample_id = sample_id;
             result.bank_generation = record->bank_generation;
@@ -141,6 +137,7 @@ bool PublishedSampleDirectory::release(const PublishedVoiceRef& ref) {
                 count - 1,
                 std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
+            live_voice_refs_.fetch_sub(1, std::memory_order_acq_rel);
             return true;
         }
     }
@@ -175,6 +172,7 @@ PublicationStats PublishedSampleDirectory::stats() const {
         }
     }
     out.active_acquirers = active_acquirers_.load(std::memory_order_acquire);
+    out.live_voice_refs = live_voice_refs_.load(std::memory_order_acquire);
     out.acquire_successes = acquire_successes_.load(std::memory_order_relaxed);
     out.acquire_misses = acquire_misses_.load(std::memory_order_relaxed);
     out.acquire_retries = acquire_retries_.load(std::memory_order_relaxed);
