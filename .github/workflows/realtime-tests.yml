@@ -1,0 +1,32 @@
+name: realtime-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/realtime/**"
+      - "tests/realtime/**"
+      - ".github/workflows/realtime-tests.yml"
+  pull_request:
+    paths:
+      - "firmware/realtime/**"
+      - "tests/realtime/**"
+      - ".github/workflows/realtime-tests.yml"
+
+jobs:
+  scheduler-host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build M5 realtime scheduler tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            firmware/realtime/RealtimeEventQueue.cpp \
+            firmware/realtime/BlockEventScheduler.cpp \
+            tests/realtime/test_realtime_event_scheduler.cpp \
+            -o build/host-tests/test_realtime_event_scheduler
+      - name: Run M5 realtime scheduler tests
+        run: ./build/host-tests/test_realtime_event_scheduler
