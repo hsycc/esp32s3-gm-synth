@@ -10,6 +10,7 @@ idf_component_register(
         "storage/StorageReadBenchmark.cpp"
         "sf2/Sf2SampleSource.cpp"
         "gm/ProgramChangeMailbox.cpp"
+        "voice/VoiceRenderer.cpp"
         "platform/EspPsramArena.cpp"
         "platform/EspStorageBenchmark.cpp"
     INCLUDE_DIRS "."
