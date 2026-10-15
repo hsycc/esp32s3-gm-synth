@@ -7,6 +7,13 @@ namespace gm_synth::voice {
 namespace {
 
 std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
+    if (gain_q15 >= kQ15Unity) {
+        return sample;
+    }
+    if (gain_q15 <= 0) {
+        return 0;
+    }
+
     const std::int64_t product = static_cast<std::int64_t>(sample) * gain_q15;
     if (product >= 0) {
         return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
@@ -21,7 +28,19 @@ std::int32_t Voice::clampQ15(std::int32_t value) {
 }
 
 std::int32_t Voice::multiplyQ15(std::int32_t a, std::int32_t b) {
-    const std::int64_t product = static_cast<std::int64_t>(clampQ15(a)) * clampQ15(b);
+    a = clampQ15(a);
+    b = clampQ15(b);
+    if (a == 0 || b == 0) {
+        return 0;
+    }
+    if (a == kQ15Unity) {
+        return b;
+    }
+    if (b == kQ15Unity) {
+        return a;
+    }
+
+    const std::int64_t product = static_cast<std::int64_t>(a) * b;
     return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
 }
 
