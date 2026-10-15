@@ -151,6 +151,26 @@ For every chunk size record:
 
 Do not compare these hardware numbers against the QEMU 2.3–2.4 MiB/s values as a pass/fail threshold. The QEMU figures are not representative of physical SPI flash timing.
 
+### Convert the serial log into a checked report
+
+Save the complete benchmark serial output, for example as:
+
+```text
+reports/local/n16r8-flash.log
+```
+
+Then run:
+
+```bash
+python -m tools.storage_benchmark.report reports/local/n16r8-flash.log \
+  --expected-bytes 4194304 \
+  --expected-samples 67 \
+  --title "N16R8 Internal Flash -> PSRAM" \
+  --output benchmarks/N16R8_FLASH_STORAGE.md
+```
+
+The parser extracts the five chunk rows, PSRAM/SF2/residency metadata and tail latency, and returns a non-zero exit status if a required row is missing, the byte/sample expectations do not match, or a panic/failure signature is present.
+
 ## 4. Hardware pass / fail rule
 
 ### Platform pass

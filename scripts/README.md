@@ -11,6 +11,16 @@ Current commands:
 - `test.sh` — host/unit tests.
 - `analyze_sf2.sh <file.sf2>` — run the SoundFont analyzer.
 
+Storage benchmark logs can be converted to a checked Markdown report with:
+
+```bash
+python -m tools.storage_benchmark.report reports/local/n16r8-flash.log \
+  --expected-bytes 4194304 \
+  --expected-samples 67 \
+  --title "N16R8 Internal Flash -> PSRAM" \
+  --output benchmarks/N16R8_FLASH_STORAGE.md
+```
+
 All ESP-IDF scripts expect `IDF_PATH` to point at the pinned ESP-IDF v6.1 checkout (normally set by sourcing `export.sh`).
 
 The hardware benchmark and QEMU SF2 integration intentionally use the same pinned fixture so parser/storage behavior can be compared without changing SoundFont content. QEMU storage throughput is never treated as physical hardware performance evidence.
