@@ -50,13 +50,20 @@ bool ProgramPrepareController::dependencyListIsValid(
         return false;
     }
 
-    std::array<bool, SampleResidencyManager::kMaxResidentSamples> seen{};
+    // Prepare is a control-domain operation and dependency lists are bounded at
+    // 512 entries. An O(n^2) duplicate check avoids a 512-byte automatic
+    // scratch array on the small ESP-IDF control/main task stack. Real program
+    // dependency sets are normally far smaller than the upper bound.
     for (std::size_t i = 0; i < dependency_count; ++i) {
         const SampleId sample_id = dependencies[i];
-        if (static_cast<std::size_t>(sample_id) >= seen.size() || seen[sample_id]) {
+        if (static_cast<std::size_t>(sample_id) >= SampleResidencyManager::kMaxResidentSamples) {
             return false;
         }
-        seen[sample_id] = true;
+        for (std::size_t previous = 0; previous < i; ++previous) {
+            if (dependencies[previous] == sample_id) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -257,21 +264,27 @@ bool ProgramPrepareController::ensurePublished(
 }
 
 void ProgramPrepareController::rollbackPinsAndPublications(
-    const std::array<SampleId, ProgramSnapshot::kMaxDependencies>& ids,
-    const std::array<bool, ProgramSnapshot::kMaxDependencies>& newly_published,
+    const ProgramSnapshot& working_snapshot,
+    const PublicationBitmap& newly_published,
     std::size_t count) {
     for (std::size_t i = count; i > 0; --i) {
-        (void)residency_.unpin(ids[i - 1]);
+        (void)residency_.unpin(working_snapshot.sample_ids[i - 1]);
     }
 
     for (std::size_t i = 0; i < count; ++i) {
-        if (!newly_published[i]) {
+        const std::size_t word = i / 64u;
+        const std::size_t bit = i % 64u;
+        const bool was_newly_published =
+            (newly_published[word] & (std::uint64_t{1} << bit)) != 0;
+        if (!was_newly_published) {
             continue;
         }
-        const ResidentSampleView view = residency_.residentView(ids[i]);
+
+        const SampleId sample_id = working_snapshot.sample_ids[i];
+        const ResidentSampleView view = residency_.residentView(sample_id);
         if (view.valid() && view.pin_count == 0 &&
-            directory_.published(ids[i]) == &records_[ids[i]]) {
-            (void)directory_.unpublish(ids[i]);
+            directory_.published(sample_id) == &records_[sample_id]) {
+            (void)directory_.unpublish(sample_id);
         }
     }
 }
@@ -306,59 +319,69 @@ bool ProgramPrepareController::prepareImpl(
         return false;
     }
 
-    std::array<SampleId, ProgramSnapshot::kMaxDependencies> pinned_ids{};
-    std::array<bool, ProgramSnapshot::kMaxDependencies> newly_published{};
+    // Reuse the selected, unpublished snapshot's existing dependency array as
+    // rollback storage. The only automatic transaction scratch is a 512-bit
+    // bitmap (64 bytes), keeping Prepare safe on the small ESP-IDF task stack.
+    target->token = 0;
+    target->dependency_count = 0;
+    PublicationBitmap newly_published{};
     std::size_t prepared_count = 0;
 
     for (std::size_t i = 0; i < dependency_count; ++i) {
         const SampleId sample_id = dependencies[i];
         const ResidentSampleView before_pin = ensureResident(sample_id);
         if (!before_pin.valid()) {
-            rollbackPinsAndPublications(pinned_ids, newly_published, prepared_count);
+            rollbackPinsAndPublications(*target, newly_published, prepared_count);
             ++stats_.prepare_failures;
             return false;
         }
 
         if (!residency_.pin(sample_id)) {
-            rollbackPinsAndPublications(pinned_ids, newly_published, prepared_count);
+            rollbackPinsAndPublications(*target, newly_published, prepared_count);
             ++stats_.prepare_failures;
             setError(ProgramPrepareError::PinFailed);
             return false;
         }
 
-        pinned_ids[prepared_count] = sample_id;
+        target->sample_ids[prepared_count] = sample_id;
         ++stats_.samples_pinned;
 
         const ResidentSampleView pinned_view = residency_.residentView(sample_id);
         bool did_publish = false;
         if (!ensurePublished(pinned_view, &did_publish)) {
+            if (did_publish) {
+                const std::size_t word = prepared_count / 64u;
+                const std::size_t bit = prepared_count % 64u;
+                newly_published[word] |= std::uint64_t{1} << bit;
+            }
             ++prepared_count;
-            newly_published[prepared_count - 1] = did_publish;
-            rollbackPinsAndPublications(pinned_ids, newly_published, prepared_count);
+            rollbackPinsAndPublications(*target, newly_published, prepared_count);
             ++stats_.prepare_failures;
             return false;
         }
 
-        newly_published[prepared_count] = did_publish;
+        if (did_publish) {
+            const std::size_t word = prepared_count / 64u;
+            const std::size_t bit = prepared_count % 64u;
+            newly_published[word] |= std::uint64_t{1} << bit;
+        }
         ++prepared_count;
     }
 
-    *target = ProgramSnapshot{};
     target->channel = channel;
     target->bank = bank;
     target->program = program;
     target->token = token;
     target->bank_generation = bank_generation_;
     target->dependency_count = static_cast<std::uint16_t>(dependency_count);
-    for (std::size_t i = 0; i < dependency_count; ++i) {
-        target->sample_ids[i] = dependencies[i];
-    }
 
     const bool published_snapshot = initial_activation
         ? exchange_.setInitialActive(target)
         : exchange_.publishReady(target);
     if (!published_snapshot) {
-        rollbackPinsAndPublications(pinned_ids, newly_published, prepared_count);
+        target->token = 0;
+        target->dependency_count = 0;
+        rollbackPinsAndPublications(*target, newly_published, prepared_count);
         ++stats_.prepare_failures;
         setError(initial_activation
             ? ProgramPrepareError::InitialActivationFailed
