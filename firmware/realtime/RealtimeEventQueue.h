@@ -29,14 +29,17 @@ struct RealtimeEvent {
 };
 
 static_assert(sizeof(RealtimeEvent) <= 16, "RealtimeEvent must remain compact");
+static_assert(
+    std::atomic<std::uint32_t>::is_always_lock_free,
+    "M5 realtime queue requires lock-free 32-bit atomics");
 
 struct RealtimeEventQueueStats {
-    std::uint64_t submitted = 0;
-    std::uint64_t accepted = 0;
-    std::uint64_t rejected_invalid = 0;
-    std::uint64_t rejected_full = 0;
-    std::uint64_t rejected_out_of_order = 0;
-    std::uint64_t popped = 0;
+    std::uint32_t submitted = 0;
+    std::uint32_t accepted = 0;
+    std::uint32_t rejected_invalid = 0;
+    std::uint32_t rejected_full = 0;
+    std::uint32_t rejected_out_of_order = 0;
+    std::uint32_t popped = 0;
 };
 
 // Single-producer/single-consumer bounded ring.
@@ -71,12 +74,14 @@ private:
     bool producer_has_timestamp_ = false;
     std::uint64_t producer_last_timestamp_ = 0;
 
-    std::atomic<std::uint64_t> submitted_{0};
-    std::atomic<std::uint64_t> accepted_{0};
-    std::atomic<std::uint64_t> rejected_invalid_{0};
-    std::atomic<std::uint64_t> rejected_full_{0};
-    std::atomic<std::uint64_t> rejected_out_of_order_{0};
-    std::atomic<std::uint64_t> popped_{0};
+    // Telemetry also stays on 32-bit lock-free atomics. Wrap is acceptable for
+    // lifetime counters; M6 can export deltas if longer observation is needed.
+    std::atomic<std::uint32_t> submitted_{0};
+    std::atomic<std::uint32_t> accepted_{0};
+    std::atomic<std::uint32_t> rejected_invalid_{0};
+    std::atomic<std::uint32_t> rejected_full_{0};
+    std::atomic<std::uint32_t> rejected_out_of_order_{0};
+    std::atomic<std::uint32_t> popped_{0};
 };
 
 }  // namespace gm_synth::realtime
