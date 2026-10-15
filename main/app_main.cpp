@@ -1,6 +1,7 @@
 #include "sdkconfig.h"
 
 #include "esp_log.h"
+#include "esp_psram.h"
 #include "esp_system.h"
 
 #include "platform/EspPsramArena.h"
@@ -37,14 +38,21 @@ extern "C" void app_main(void) {
         kTag,
         "Reference module: ESP32-S3-WROOM-1-N16R8 (16 MiB flash / 8 MiB octal PSRAM)");
 
-    const auto before = EspPsramArena::heapStats();
-    logPsram("before arena", before);
+    const std::size_t detected_psram_bytes = esp_psram_get_size();
+    ESP_LOGI(
+        kTag,
+        "Detected physical PSRAM: %u bytes (%.2f MiB)",
+        static_cast<unsigned>(detected_psram_bytes),
+        static_cast<double>(detected_psram_bytes) / static_cast<double>(kMiB));
 
-    if (before.total_bytes < 7u * kMiB) {
+    if (detected_psram_bytes < 7u * kMiB) {
         ESP_LOGW(
             kTag,
-            "Detected SPIRAM-capable heap is below 7 MiB; verify module SKU and PSRAM mode before performance testing");
+            "Detected physical PSRAM is below 7 MiB; verify module SKU and octal PSRAM configuration before performance testing");
     }
+
+    const auto before = EspPsramArena::heapStats();
+    logPsram("before arena", before);
 
     constexpr std::size_t kRequestedArenaBytes = CONFIG_GM_SYNTH_PCM_ARENA_BYTES;
     ESP_LOGI(
@@ -55,6 +63,15 @@ extern "C" void app_main(void) {
 
     static EspPsramArena arena;
     static SampleResidencyManager residency;
+
+    if (before.largest_free_block_bytes < kRequestedArenaBytes) {
+        ESP_LOGE(
+            kTag,
+            "Largest SPIRAM block is already smaller than requested arena: requested=%u largest=%u",
+            static_cast<unsigned>(kRequestedArenaBytes),
+            static_cast<unsigned>(before.largest_free_block_bytes));
+        return;
+    }
 
     if (!arena.allocate(kRequestedArenaBytes)) {
         const auto failed = EspPsramArena::heapStats();
