@@ -1,5 +1,7 @@
 #include "ProgramPrepareController.h"
 
+#include <limits>
+
 namespace gm_synth::sample {
 namespace {
 
@@ -12,6 +14,11 @@ bool fillFromSampleSource(void* opaque, std::uint8_t* destination, std::size_t p
     auto& context = *static_cast<SourceFillContext*>(opaque);
     return context.source != nullptr &&
            context.source->fillSample(context.sample_id, destination, pcm_bytes);
+}
+
+bool isCapacityError(ResidencyError error) {
+    return error == ResidencyError::NoContiguousSpace ||
+           error == ResidencyError::MetadataFull;
 }
 
 }  // namespace
@@ -54,6 +61,47 @@ bool ProgramPrepareController::dependencyListIsValid(
     return true;
 }
 
+bool ProgramPrepareController::evictOneSafeCacheSample() {
+    SampleId victim = static_cast<SampleId>(SampleResidencyManager::kMaxResidentSamples);
+    std::uint64_t oldest_touch = std::numeric_limits<std::uint64_t>::max();
+    std::size_t victim_bytes = 0;
+
+    for (std::size_t index = 0; index < SampleResidencyManager::kMaxResidentSamples; ++index) {
+        const SampleId sample_id = static_cast<SampleId>(index);
+        const ResidentSampleView view = residency_.residentView(sample_id);
+        if (!view.valid() || view.pin_count != 0 || view.phase_a_voice_ref_count != 0) {
+            continue;
+        }
+        if (directory_.published(sample_id) != nullptr) {
+            continue;
+        }
+
+        // records_[sample_id] may be a never-published zero-initialized record
+        // or a retired publication record. canReclaim() safely accepts either;
+        // a live release-tail Voice Ref makes it return false.
+        if (!directory_.canReclaim(&records_[sample_id])) {
+            continue;
+        }
+
+        if (view.touch_sequence < oldest_touch) {
+            oldest_touch = view.touch_sequence;
+            victim = sample_id;
+            victim_bytes = view.allocated_bytes;
+        }
+    }
+
+    if (static_cast<std::size_t>(victim) >= SampleResidencyManager::kMaxResidentSamples) {
+        return false;
+    }
+    if (!residency_.evict(victim)) {
+        return false;
+    }
+
+    ++stats_.cache_evictions;
+    stats_.cache_evicted_bytes += victim_bytes;
+    return true;
+}
+
 ResidentSampleView ProgramPrepareController::ensureResident(SampleId sample_id) {
     ResidentSampleView view = residency_.residentView(sample_id);
     if (view.valid()) {
@@ -75,23 +123,54 @@ ResidentSampleView ProgramPrepareController::ensureResident(SampleId sample_id) 
         return ResidentSampleView{};
     }
 
+    const ResidencyStats current_stats = residency_.stats();
+    if (SampleResidencyManager::alignedBytes(descriptor.pcm_bytes) > current_stats.capacity_bytes) {
+        ++stats_.capacity_failures;
+        setError(ProgramPrepareError::ResidencyCapacityFailed);
+        return ResidentSampleView{};
+    }
+
     SourceFillContext context{source_, sample_id};
-    if (!residency_.loadFromSource(descriptor, fillFromSampleSource, &context)) {
-        ++stats_.source_failures;
-        setError(ProgramPrepareError::SourceLoadFailed);
-        return ResidentSampleView{};
+    for (std::size_t attempt = 0;
+         attempt <= SampleResidencyManager::kMaxResidentSamples;
+         ++attempt) {
+        if (residency_.loadFromSource(descriptor, fillFromSampleSource, &context)) {
+            view = residency_.residentView(sample_id);
+            if (!view.valid() || view.descriptor != descriptor) {
+                ++stats_.source_failures;
+                setError(ProgramPrepareError::SourceLoadFailed);
+                return ResidentSampleView{};
+            }
+
+            ++stats_.samples_loaded;
+            stats_.sample_bytes_loaded += descriptor.pcm_bytes;
+            return view;
+        }
+
+        const ResidencyError residency_error = residency_.lastError();
+        if (!isCapacityError(residency_error)) {
+            if (residency_error == ResidencyError::SourceFillFailed) {
+                ++stats_.source_failures;
+                setError(ProgramPrepareError::SourceLoadFailed);
+            } else if (residency_error == ResidencyError::DescriptorMismatch) {
+                setError(ProgramPrepareError::ResidencyConflict);
+            } else {
+                setError(ProgramPrepareError::SourceLoadFailed);
+            }
+            return ResidentSampleView{};
+        }
+
+        if (!evictOneSafeCacheSample()) {
+            ++stats_.capacity_failures;
+            setError(ProgramPrepareError::ResidencyCapacityFailed);
+            return ResidentSampleView{};
+        }
+        ++stats_.capacity_retries;
     }
 
-    view = residency_.residentView(sample_id);
-    if (!view.valid() || view.descriptor != descriptor) {
-        ++stats_.source_failures;
-        setError(ProgramPrepareError::SourceLoadFailed);
-        return ResidentSampleView{};
-    }
-
-    ++stats_.samples_loaded;
-    stats_.sample_bytes_loaded += descriptor.pcm_bytes;
-    return view;
+    ++stats_.capacity_failures;
+    setError(ProgramPrepareError::ResidencyCapacityFailed);
+    return ResidentSampleView{};
 }
 
 ProgramSnapshot* ProgramPrepareController::selectFreeSnapshot(std::uint8_t channel) {
