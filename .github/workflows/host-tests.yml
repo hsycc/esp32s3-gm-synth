@@ -39,7 +39,7 @@ jobs:
             --report reports/residency_pressure.json \
             --budgets-mib 2 4 5 6
 
-      - name: Build sample residency host tests
+      - name: Build host tests
         shell: bash
         run: |
           set -euo pipefail
@@ -105,6 +105,12 @@ jobs:
             tests/sf2/test_sf2_sample_source.cpp \
             -o build/host-tests/test_sf2_sample_source
 
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
+            firmware/gm/ProgramChangeMailbox.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            tests/gm/test_program_change_mailbox.cpp \
+            -o build/host-tests/test_program_change_mailbox
+
       - name: Run sample residency host tests
         run: ./build/host-tests/test_sample_residency
       - name: Run direct-to-arena source load tests
@@ -119,6 +125,8 @@ jobs:
         run: ./build/host-tests/test_real_bank_dependencies
       - name: Run native SF2 sample-source tests
         run: ./build/host-tests/test_sf2_sample_source
+      - name: Run rapid Program Change mailbox tests
+        run: ./build/host-tests/test_program_change_mailbox
       - name: Print residency pressure report
         run: cat reports/residency_pressure.json
       - name: Upload residency pressure report
