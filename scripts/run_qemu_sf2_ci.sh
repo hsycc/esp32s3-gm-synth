@@ -33,6 +33,41 @@ stage() {
     echo "===== QEMU SF2 CI stage: $CURRENT_STAGE ====="
 }
 
+decode_qemu_backtrace_if_present() {
+    if ! grep -Eq "Guru Meditation|panic'ed" "$REPORT_PATH"; then
+        return 0
+    fi
+
+    local backtrace_line
+    backtrace_line="$(grep -am1 '^Backtrace:' "$REPORT_PATH" || true)"
+    if [[ -z "$backtrace_line" ]]; then
+        echo "QEMU panic detected but no Backtrace line was found" >&2
+        return 0
+    fi
+
+    local addr2line_bin
+    addr2line_bin="$(find "$TOOLS_ROOT/tools" -type f -name 'xtensa-esp32s3-elf-addr2line' -perm -u+x -print 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -z "$addr2line_bin" || ! -x "$addr2line_bin" ]]; then
+        echo "QEMU panic detected but xtensa-esp32s3-elf-addr2line was not found" >&2
+        return 0
+    fi
+
+    local -a addresses=()
+    mapfile -t addresses < <(
+        printf '%s\n' "$backtrace_line" |
+            grep -aoE '0x[0-9a-fA-F]{8}' |
+            awk '!seen[$0]++'
+    )
+    if [[ ${#addresses[@]} -eq 0 ]]; then
+        echo "QEMU panic detected but no PC addresses were parsed from Backtrace" >&2
+        return 0
+    fi
+
+    echo "---- decoded QEMU backtrace ----"
+    "$addr2line_bin" -pfiaC -e "$BUILD_DIR/esp32s3_gm_synth.elf" "${addresses[@]}" || true
+    echo "--------------------------------"
+}
+
 stage "verify real SF2 fixture"
 # Pin the real fixture before copying it into the generated FATFS staging
 # directory. This prevents a stale/corrupted test asset from silently becoming
@@ -111,7 +146,11 @@ fi
 echo "Merged flash image: $FLASH_IMAGE ($(stat -c '%s' "$FLASH_IMAGE") bytes)"
 
 stage "launch ESP32-S3 QEMU"
+# The firmware intentionally stays alive after app_main. A timeout is therefore
+# the normal stop condition. Temporarily remove the ERR trap as well as `-e` so
+# expected timeout statuses (124/143) do not abort before log verification.
 set +e
+trap - ERR
 timeout --signal=TERM "${TIMEOUT_SECONDS}s" \
     "$QEMU_BIN" \
     -nographic \
@@ -123,12 +162,15 @@ timeout --signal=TERM "${TIMEOUT_SECONDS}s" \
     -nic none \
     2>&1 | tee "$REPORT_PATH"
 qemu_status=${PIPESTATUS[0]}
+trap on_error ERR
 set -e
 
 if [[ $qemu_status -ne 0 && $qemu_status -ne 124 && $qemu_status -ne 143 ]]; then
     echo "QEMU SF2 integration run exited unexpectedly with status $qemu_status" >&2
     exit "$qemu_status"
 fi
+
+decode_qemu_backtrace_if_present
 
 stage "verify QEMU integration logs"
 require_log() {
@@ -144,6 +186,8 @@ require_log() {
 
 require_log "Detected physical PSRAM: 8388608 bytes (8.00 MiB)"
 require_log "QEMU FATFS mounted: base=/sf2 partition=qemu_sf2"
+require_log "Storage benchmark VFS open: path=/sf2/test.sf2 file_bytes=5898214"
+require_log "Storage benchmark parser metadata: static_bytes="
 require_log "Storage benchmark SF2 parsed: playable_samples=67"
 require_log "Storage benchmark source: path=/sf2/test.sf2"
 require_log "benchmark_bytes=${QEMU_BENCHMARK_BYTES}"
