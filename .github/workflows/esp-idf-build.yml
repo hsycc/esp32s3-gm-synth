@@ -99,6 +99,7 @@ jobs:
           path: |
             reports/qemu-smoke.log
             reports/qemu-sf2-flash.log
+            reports/qemu-sf2-flash-preflight.log
           if-no-files-found: warn
 
       - name: Upload flashable firmware artifacts
@@ -118,4 +119,5 @@ jobs:
             reports/idf-size.txt
             reports/qemu-smoke.log
             reports/qemu-sf2-flash.log
+            reports/qemu-sf2-flash-preflight.log
           if-no-files-found: error
