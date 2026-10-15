@@ -3,6 +3,7 @@
 #include "ProgramSnapshot.h"
 #include "PublishedSampleDirectory.h"
 #include "SampleResidencyManager.h"
+#include "SampleSource.h"
 
 #include <array>
 #include <cstddef>
@@ -15,6 +16,8 @@ enum class ProgramPrepareError : std::uint8_t {
     InvalidArgument,
     TransitionBusy,
     NotResident,
+    SourceDescriptorFailed,
+    SourceLoadFailed,
     PinFailed,
     PublicationConflict,
     RetiringGenerationBusy,
@@ -28,6 +31,10 @@ struct ProgramPrepareStats {
     std::uint64_t prepare_attempts = 0;
     std::uint64_t prepare_successes = 0;
     std::uint64_t prepare_failures = 0;
+    std::uint64_t samples_loaded = 0;
+    std::uint64_t sample_bytes_loaded = 0;
+    std::uint64_t samples_reused_resident = 0;
+    std::uint64_t source_failures = 0;
     std::uint64_t samples_pinned = 0;
     std::uint64_t samples_published = 0;
     std::uint64_t samples_reused_published = 0;
@@ -38,42 +45,65 @@ struct ProgramPrepareStats {
 
 // Control/storage-domain transaction coordinator for M3 Phase B.
 //
-// This first version intentionally prepares only samples already resident in
-// SampleResidencyManager. Missing-sample storage loading is added in the next
-// step; the transactional pin/publish/READY/rollback semantics stay the same.
+// Missing samples may be loaded synchronously on the control/storage task via
+// SampleSource -> SampleResidencyManager::loadFromSource(). No source method is
+// ever called from Audio. Successfully loaded samples remain as unpinned cache
+// entries if a later dependency causes the prepare transaction to fail.
 class ProgramPrepareController {
 public:
     ProgramPrepareController(
         SampleResidencyManager& residency,
         PublishedSampleDirectory& directory,
-        ProgramSnapshotExchange& exchange);
+        ProgramSnapshotExchange& exchange,
+        SampleSource* source = nullptr);
+
+    void setSampleSource(SampleSource* source) { source_ = source; }
+    SampleSource* sampleSource() const { return source_; }
 
     bool setBankGeneration(std::uint32_t bank_generation);
 
-    // Startup path: transactionally pin/publish dependencies and install the
-    // snapshot directly as Active before realtime playback begins.
+    // General startup path. Missing dependencies may be loaded from source_.
+    bool activateInitialProgram(
+        std::uint8_t channel,
+        std::uint16_t bank,
+        std::uint8_t program,
+        std::uint32_t token,
+        const SampleId* dependencies,
+        std::size_t dependency_count);
+
+    // General runtime path. Missing dependencies may be loaded from source_.
+    bool prepareProgram(
+        std::uint8_t channel,
+        std::uint16_t bank,
+        std::uint8_t program,
+        std::uint32_t token,
+        const SampleId* dependencies,
+        std::size_t dependency_count);
+
+    // Backward-compatible resident-only naming. With no source configured these
+    // retain the old behavior: a missing sample fails with NotResident.
     bool activateInitialResidentProgram(
         std::uint8_t channel,
         std::uint16_t bank,
         std::uint8_t program,
         std::uint32_t token,
         const SampleId* dependencies,
-        std::size_t dependency_count);
+        std::size_t dependency_count) {
+        return activateInitialProgram(
+            channel, bank, program, token, dependencies, dependency_count);
+    }
 
-    // Runtime path: transactionally pin/publish dependencies, build an
-    // immutable snapshot and publish it as READY. Audio later commits it at a
-    // block boundary through ProgramSnapshotExchange.
     bool prepareResidentProgram(
         std::uint8_t channel,
         std::uint16_t bank,
         std::uint8_t program,
         std::uint32_t token,
         const SampleId* dependencies,
-        std::size_t dependency_count);
+        std::size_t dependency_count) {
+        return prepareProgram(channel, bank, program, token, dependencies, dependency_count);
+    }
 
     // Control-side commit acknowledgement + old-snapshot pin retirement.
-    // Returns the exchange acknowledgement. If retirement fails, lastError()
-    // reports RetireFailed and the returned ack remains valid for diagnostics.
     ProgramCommitAck acknowledgeAndRetire(std::uint8_t channel, std::uint32_t token);
 
     ProgramPrepareError lastError() const { return last_error_; }
@@ -94,6 +124,7 @@ private:
         const SampleId* dependencies,
         std::size_t dependency_count);
 
+    ResidentSampleView ensureResident(SampleId sample_id);
     ProgramSnapshot* selectFreeSnapshot(std::uint8_t channel);
     bool ensurePublished(const ResidentSampleView& view, bool* newly_published);
     bool recordMatchesView(const ResidentRecord& record, const ResidentSampleView& view) const;
@@ -109,6 +140,7 @@ private:
     SampleResidencyManager& residency_;
     PublishedSampleDirectory& directory_;
     ProgramSnapshotExchange& exchange_;
+    SampleSource* source_ = nullptr;
 
     std::array<ResidentRecord, SampleResidencyManager::kMaxResidentSamples> records_{};
     std::array<ChannelSnapshots, ProgramSnapshotExchange::kMidiChannels> snapshots_{};
