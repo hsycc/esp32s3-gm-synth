@@ -2,6 +2,8 @@
 
 #include "esp_heap_caps.h"
 
+#include <cstdint>
+
 namespace gm_synth::platform {
 namespace {
 
