@@ -91,6 +91,16 @@ jobs:
           set -euo pipefail
           bash scripts/run_qemu_sf2_ci.sh reports/qemu-sf2-flash.log
 
+      - name: Upload QEMU diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-qemu-diagnostics
+          path: |
+            reports/qemu-smoke.log
+            reports/qemu-sf2-flash.log
+          if-no-files-found: warn
+
       - name: Upload flashable firmware artifacts
         uses: actions/upload-artifact@v4
         with:
