@@ -5,6 +5,7 @@ Benchmark reports and reproducible baselines belong here.
 Current baseline reports:
 
 - `QEMU_SF2_STORAGE_BASELINE_2026-10-15.md` — first green ESP32-S3 QEMU run of generated Flash FATFS -> VFS -> real SF2 -> PSRAM. Functional integration only; QEMU throughput is not hardware performance data.
+- `N16R8_FLASH_STORAGE_BASELINE_2026-10-15.md` — first physical N16R8-class internal-Flash -> PSRAM baseline. Records the 8 MiB Octal-PSRAM reserve, 4 MiB arena result, 4/8/16/32/64 KiB timing sweep and the decision to retain the 32 KiB SF2 read chunk plus 4 MiB arena for M4 entry.
 
 Hardware reports should record:
 - exact board/module
