@@ -37,10 +37,12 @@ Public full banks and deterministic ~6 MiB derived fixtures live under `assets/s
 
 ## M0 — N16R8 hardware baseline
 
+Status: hardware/toolchain integration still pending; Host semantic work is intentionally progressing in parallel.
+
 Goal: establish a trustworthy hardware/build starting point before performance claims.
 
 Tasks:
-- choose and pin ESP-IDF/Arduino integration strategy
+- choose and pin ESP-IDF integration/toolchain strategy
 - select/record actual N16R8 board/module
 - establish 44.1 kHz stereo I2S output
 - add block render-time telemetry
@@ -48,17 +50,15 @@ Tasks:
 - create repeatable dense-MIDI stress sequences
 
 Exit criteria:
-- reproducible build
+- reproducible ESP32-S3 build
 - known N16R8 hardware target/configuration
 - measured memory reserve and audio deadline baseline
 
 ## M1 — SF2 analyzer
 
-Status: first useful version implemented.
+Status: useful real-bank implementation complete and used by later CI.
 
-Goal: turn bank/storage/feature questions into measured data.
-
-Implemented/expected analysis includes:
+Implemented analysis includes:
 - RIFF/SF2 structure
 - source identity/hash and file size
 - `smpl` payload
@@ -71,86 +71,147 @@ Implemented/expected analysis includes:
 - realistic 16-channel sample unions
 - N16R8 residency estimates
 
+Its checked-in manifests now generate real dependency fixtures for M3 Host tests.
+
 ## M1.5 — SF2 compatibility baseline
 
-Goal: say precisely which standard SF2 semantics are supported, planned or unsupported.
+Status: core compatibility reporting exists; qualification expands as DSP/runtime support expands.
 
-Tasks:
-- compatibility matrix for generators/modulators/features
-- import warnings for unsupported or malformed features
-- classify default modulators, `imod`, `pmod`, stereo links, `sm24`, ROM samples, etc.
-- use FM/GM Open, GeneralUser GS, FluidR3 and TimGM as different qualification roles
+Coverage includes:
+- generator/modulator feature classification
+- unsupported/malformed feature reporting
+- stereo-link/sm24/ROM presence reporting
+- real-bank qualification roles
 
-Exit criteria:
-- importing a bank produces a deterministic compatibility report
-- unsupported features are explicit rather than silently ignored
+Parseability remains explicitly separate from audio-runtime qualification.
 
 ## M2 — Generator hierarchy and ResolvedZone
 
-Goal: convert general SF2 preset/instrument structures into final sample-playing zones before firmware DSP depends on them.
+Status: Host hierarchy/ResolvedZone implementation established and used by conformance tooling.
 
 Target flow:
 
 `Preset global/local -> Instrument global/local -> Sample -> ResolvedZone`
 
-Required semantics:
+Implemented/tested semantics include:
 - preset/instrument global/local range intersection
-- instrument local generator supersedes instrument global/default
-- preset local supersedes preset global
-- valid preset generators increment instrument/default generator values
-- invalid preset-level generators are ignored/reported
+- instrument local generator overrides
+- preset generator contribution rules
 - sample address/loop offsets
 - root key/tuning
 - envelopes/filter/pan/attenuation/FX sends in native SF2 units
 
-Status: host `ResolvedZone` implementation and hierarchy tests started.
-
-Exit criteria:
-- deterministic host tests cover four-level hierarchy
-- representative real banks resolve without invalid sample references
-- selected results are cross-checked against a standards-oriented reference such as FluidSynth
+Representative results are cross-checked through the M2.5 FluidSynth oracle.
 
 ## M2.5 — Modulator resolver
 
-Goal: support mainstream SoundFont dynamic behavior without interpreting all modulators inside the per-sample hot loop.
+Status: **L0/L1 complete and strict in CI.**
 
-Required semantics:
-- default SF2 modulators
-- instrument global/local `imod` identity/override rules
-- preset global/local `pmod` identity/add rules
-- zero-amount instrument modulators that intentionally disable defaults
-- common source curves: linear/concave/convex/switch, polarity/direction
-- primary and amount-source controls where qualification banks use them
+Pinned reference:
+- FluidSynth 2.6.1
+- commit `71e85b2ca6bf48641ba7e2261d8f2640ae473773`
+- internal `fluid_voice_gen_value()` effective-generator oracle
 
-Runtime strategy:
-- key/velocity/static modulation: NoteOn/preparation rate
-- CC/pitch/pressure modulation: event/control rate
-- only actual continuous DSP (LFO/envelope/filter) remains active in render path
+Strict real-bank baseline:
+- FM/GM Open subset
+- GeneralUser GS subset
+- FluidR3_GM subset
+- programs 8/16/32/50/56/80/88/96
+- key 60 / velocity 96
 
-Exit criteria:
-- GeneralUser GS/TimGM modulator cases produce documented expected parameter behavior
-- no per-sample scan over arbitrary `pmod/imod` tables
+Current strict result:
+- structural failures: 0
+- generator failures: 0
+- core Generator mismatch count: 0
+
+Runtime compatibility behavior such as FluidSynth/EMU attenuation scaling and the default Velocity->FilterFc compatibility quirk is kept separate from native parsed SF2 data.
+
+L2 dynamic CC/pitch/pressure expansion may continue in parallel with later runtime milestones.
 
 ## M3 — Sample residency manager
 
+Status: **Host architecture largely implemented and CI-backed. Hardware backend remains.**
+
 Goal: make large user SF2 files practical on R8 without storage I/O from NoteOn/audio render.
 
-Capabilities:
-- full-resident fast path for small banks that safely fit
-- shared/per-program PSRAM residency as general path
-- stable sample handles and voice references
-- background/control-domain sample loading
-- prepare -> READY -> block-boundary commit -> safe retire
-- fragmentation/high-water diagnostics
+### Implemented Host path
+
+```text
+native .sf2
+  -> RandomAccessReader
+  -> Sf2SampleSource
+  -> Program dependency set
+  -> ProgramPrepareController
+  -> direct-to-arena chunked loading
+  -> Program Pins
+  -> PublishedSampleDirectory
+  -> immutable READY ProgramSnapshot
+  -> block-boundary Commit
+  -> move-only Voice Ref
+```
+
+Implemented/tested capabilities:
+- fixed-capacity contiguous arena allocator
+- aligned first-fit + free-span coalescing
+- duplicate SampleId reuse
+- independent Program Pin / Voice Ref lifetimes
+- generation/lease protection
+- high-water/fragmentation telemetry
+- direct-to-arena transactional source loading with rollback after partial read failure
+- no sample-sized staging buffer requirement
+- cross-core publication protocol with acquire grace period and deferred reclamation
+- block-boundary READY/Active snapshot exchange
+- old release tails survive Program Change
+- source-backed transactional Prepare with resident-cache reuse
+- generated real-bank 16-channel dependency stress
+- native SF2 `smpl`/`shdr` random-access source validated against real files
+- safe LRU eviction of unowned/unpublished/reclaimable cache entries
+- explicit residency-capacity failure that preserves the previous Active Program
+- compact 16-channel latest-wins Program Change mailbox for rapid UI/MIDI changes
+
+### Measured residency pressure
+
+Checked-in qualification manifests currently show:
+- FM/GM subset greedy 16-program union: `2,221,452` B
+- GeneralUser subset greedy 16-program union: `5,675,820` B
+- FluidR3 subset greedy 16-program union: `5,887,528` B
+
+Therefore "only keep current 16 Programs" is not by itself a guarantee that a user SF2 fits R8. Arbitrary active working sets can exceed the available PCM arena.
+
+### Admission policy
+
+V1 rule:
+- Prepare may evict only safe unowned cache;
+- Active/READY Pins and live Voice Refs are never sacrificed to force a new Program Change to fit;
+- if the requested working set cannot coexist during safe Prepare, return a capacity failure/defer the change while the old Active Program remains valid;
+- streaming/degraded playback is a separate future feature, not a hidden fallback.
+
+### M3 remaining
+
+Host/control:
+- integrate compact latest-desired mailbox with the eventual program dependency resolver/control loop
+- add prepare latency/source byte/eviction diagnostics where useful
+- continue pathological fragmentation/capacity tests
+
+ESP32-S3 Phase C:
+- allocate arena from PSRAM (`MALLOC_CAP_SPIRAM` or selected abstraction)
+- implement Flash/LittleFS `RandomAccessReader`
+- optionally add SD/MMC backend later
+- keep hot publication/snapshot metadata in internal RAM where measurements justify it
+- verify storage calls never run on audio task
+- measure PSRAM high-water/load latency
+- measure atomic acquire/release and commit cost on actual S3
 
 Exit criteria:
-- large source SF2 can select playable presets while only required sample union is resident
-- active voices keep valid samples through release tails
-- no filesystem/flash read in audio hot path
+- large native SF2 can select playable presets using only required resident unions when the requested working set fits
+- capacity failure is explicit and non-destructive
+- active/releasing voices retain valid PCM through Program Changes
+- no filesystem/flash read occurs in the audio hot path
+- N16R8 hardware measurements validate the chosen memory reserve and realtime costs
 
 ## M4 — Voice DSP baseline
 
-Goal: make ResolvedZone produce sound correctly before aggressive optimization.
+Goal: make ResolvedZone + ModPlan + SampleRef produce sound correctly before aggressive optimization.
 
 Implement/validate:
 - sample interpolation
@@ -163,6 +224,9 @@ Implement/validate:
 - modulation envelope where required
 - dry/reverb/chorus sends
 
+Entry condition:
+- M3 sample lifetime/publication contract remains stable enough that Voice can own a `PublishedVoiceRef` without storage knowledge.
+
 Exit criteria:
 - representative reference notes render correctly enough for semantic A/B comparison
 - deterministic DSP tests exist where practical
@@ -171,11 +235,11 @@ Exit criteria:
 
 Goal: move MIDI/internal events into a bounded realtime-safe path.
 
-`input -> decoder -> timestamp -> bounded queue -> block scheduler -> frame-offset execution`
+`input -> MIDI/internal decoder -> timestamp -> bounded queue -> block scheduler -> frame-offset execution`
 
 Exit criteria:
-- multiple events can execute at distinct offsets within a 64-frame block
-- audio task never blocks on control/input work
+- multiple Note/CC events can execute at distinct offsets within a 64-frame block
+- audio task never blocks on producers
 
 ## M6 — Adaptive polyphony and safe voice stealing
 
@@ -217,6 +281,7 @@ Release metrics:
 - max/P95/P99 render time
 - internal SRAM/PSRAM high-water marks
 - sample residency pressure
+- source load/reuse/eviction bytes and latency
 - observed stable polyphony by DSP complexity class
 
 ## Current decision log
@@ -227,5 +292,8 @@ Release metrics:
 - Shared/per-program residency is mandatory architecture; full residency is only an optimization.
 - SF3 is not a V1 priority.
 - Private compiled-bank conversion is not required for user assets; disposable indexes/caches are allowed.
-- Modulators must be resolved outside the per-sample interpretation path; continuous DSP cost, not table parsing, is the main polyphony risk.
+- Modulators are resolved outside the per-sample interpretation path; continuous DSP cost, not arbitrary table scanning, is the main polyphony risk.
+- Native SF2 sample loading is random-access/chunked and control-domain only; no full-file or full-sample staging copy is required.
+- Residency admission never destroys Active/READY/live-Voice ownership merely to make a new Program Change fit.
+- Rapid Program Changes use latest-wins coalescing at the compact Program identity level; dependency sets are recomputed when the request is actually serviced.
 - 16 active sample voices remains the qualification goal; higher counts depend on measured N16R8 headroom.
