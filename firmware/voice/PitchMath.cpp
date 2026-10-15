@@ -14,17 +14,18 @@ std::uint64_t phaseIncrementQ32(
         return 0;
     }
 
-    const double rate_ratio = static_cast<double>(source_sample_rate) /
-        static_cast<double>(output_sample_rate);
-    const double pitch_ratio = std::exp2(cents_from_sample_root / 1200.0);
-    const double increment = rate_ratio * pitch_ratio * 4294967296.0;
+    const long double rate_ratio = static_cast<long double>(source_sample_rate) /
+        static_cast<long double>(output_sample_rate);
+    const long double pitch_ratio = std::exp2(cents_from_sample_root / 1200.0);
+    const long double increment = rate_ratio * pitch_ratio * 4294967296.0L;
+    const long double max_increment =
+        static_cast<long double>(std::numeric_limits<std::uint64_t>::max());
 
-    if (!std::isfinite(increment) || increment < 1.0 ||
-        increment > static_cast<double>(std::numeric_limits<std::uint64_t>::max())) {
+    if (!std::isfinite(increment) || increment < 1.0L || increment >= max_increment) {
         return 0;
     }
 
-    return static_cast<std::uint64_t>(std::llround(increment));
+    return static_cast<std::uint64_t>(increment + 0.5L);
 }
 
 }  // namespace gm_synth::voice
