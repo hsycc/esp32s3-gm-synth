@@ -1,12 +1,27 @@
 #include "ProgramPrepareController.h"
 
 namespace gm_synth::sample {
+namespace {
+
+struct SourceFillContext {
+    SampleSource* source = nullptr;
+    SampleId sample_id = 0;
+};
+
+bool fillFromSampleSource(void* opaque, std::uint8_t* destination, std::size_t pcm_bytes) {
+    auto& context = *static_cast<SourceFillContext*>(opaque);
+    return context.source != nullptr &&
+           context.source->fillSample(context.sample_id, destination, pcm_bytes);
+}
+
+}  // namespace
 
 ProgramPrepareController::ProgramPrepareController(
     SampleResidencyManager& residency,
     PublishedSampleDirectory& directory,
-    ProgramSnapshotExchange& exchange)
-    : residency_(residency), directory_(directory), exchange_(exchange) {
+    ProgramSnapshotExchange& exchange,
+    SampleSource* source)
+    : residency_(residency), directory_(directory), exchange_(exchange), source_(source) {
     bank_generation_ = directory_.bankGeneration();
 }
 
@@ -37,6 +52,46 @@ bool ProgramPrepareController::dependencyListIsValid(
         seen[sample_id] = true;
     }
     return true;
+}
+
+ResidentSampleView ProgramPrepareController::ensureResident(SampleId sample_id) {
+    ResidentSampleView view = residency_.residentView(sample_id);
+    if (view.valid()) {
+        ++stats_.samples_reused_resident;
+        return view;
+    }
+
+    if (source_ == nullptr) {
+        setError(ProgramPrepareError::NotResident);
+        return ResidentSampleView{};
+    }
+
+    SampleDescriptor descriptor{};
+    if (!source_->descriptorFor(sample_id, &descriptor) ||
+        descriptor.id != sample_id || descriptor.pcm_bytes == 0 ||
+        (descriptor.pcm_bytes & 1u) != 0u) {
+        ++stats_.source_failures;
+        setError(ProgramPrepareError::SourceDescriptorFailed);
+        return ResidentSampleView{};
+    }
+
+    SourceFillContext context{source_, sample_id};
+    if (!residency_.loadFromSource(descriptor, fillFromSampleSource, &context)) {
+        ++stats_.source_failures;
+        setError(ProgramPrepareError::SourceLoadFailed);
+        return ResidentSampleView{};
+    }
+
+    view = residency_.residentView(sample_id);
+    if (!view.valid() || view.descriptor != descriptor) {
+        ++stats_.source_failures;
+        setError(ProgramPrepareError::SourceLoadFailed);
+        return ResidentSampleView{};
+    }
+
+    ++stats_.samples_loaded;
+    stats_.sample_bytes_loaded += descriptor.pcm_bytes;
+    return view;
 }
 
 ProgramSnapshot* ProgramPrepareController::selectFreeSnapshot(std::uint8_t channel) {
@@ -178,11 +233,10 @@ bool ProgramPrepareController::prepareImpl(
 
     for (std::size_t i = 0; i < dependency_count; ++i) {
         const SampleId sample_id = dependencies[i];
-        const ResidentSampleView before_pin = residency_.residentView(sample_id);
+        const ResidentSampleView before_pin = ensureResident(sample_id);
         if (!before_pin.valid()) {
             rollbackPinsAndPublications(pinned_ids, newly_published, prepared_count);
             ++stats_.prepare_failures;
-            setError(ProgramPrepareError::NotResident);
             return false;
         }
 
@@ -238,7 +292,7 @@ bool ProgramPrepareController::prepareImpl(
     return true;
 }
 
-bool ProgramPrepareController::activateInitialResidentProgram(
+bool ProgramPrepareController::activateInitialProgram(
     std::uint8_t channel,
     std::uint16_t bank,
     std::uint8_t program,
@@ -255,7 +309,7 @@ bool ProgramPrepareController::activateInitialResidentProgram(
         dependency_count);
 }
 
-bool ProgramPrepareController::prepareResidentProgram(
+bool ProgramPrepareController::prepareProgram(
     std::uint8_t channel,
     std::uint16_t bank,
     std::uint8_t program,
