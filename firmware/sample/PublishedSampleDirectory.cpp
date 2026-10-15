@@ -6,7 +6,7 @@ PublishedSampleDirectory::PublishedSampleDirectory() = default;
 
 bool PublishedSampleDirectory::anyPublished() const {
     for (const Slot& slot : slots_) {
-        if (slot.published.load(std::memory_order_acquire) != nullptr) {
+        if (slot.published.load(std::memory_order_seq_cst) != nullptr) {
             return true;
         }
     }
@@ -18,7 +18,7 @@ bool PublishedSampleDirectory::isRecordPublished(const ResidentRecord* record) c
         return false;
     }
     for (const Slot& slot : slots_) {
-        if (slot.published.load(std::memory_order_acquire) == record) {
+        if (slot.published.load(std::memory_order_seq_cst) == record) {
             return true;
         }
     }
@@ -27,7 +27,7 @@ bool PublishedSampleDirectory::isRecordPublished(const ResidentRecord* record) c
 
 bool PublishedSampleDirectory::setBankGeneration(std::uint32_t bank_generation) {
     if (bank_generation == 0 || anyPublished() ||
-        active_acquirers_.load(std::memory_order_acquire) != 0 ||
+        active_acquirers_.load(std::memory_order_seq_cst) != 0 ||
         live_voice_refs_.load(std::memory_order_acquire) != 0) {
         return false;
     }
@@ -49,8 +49,8 @@ bool PublishedSampleDirectory::publish(SampleId sample_id, const ResidentRecord*
     if (slot.published.compare_exchange_strong(
             expected,
             record,
-            std::memory_order_release,
-            std::memory_order_acquire)) {
+            std::memory_order_seq_cst,
+            std::memory_order_seq_cst)) {
         return true;
     }
 
@@ -68,7 +68,7 @@ const ResidentRecord* PublishedSampleDirectory::unpublish(SampleId sample_id) {
     }
     return slots_[static_cast<std::size_t>(sample_id)].published.exchange(
         nullptr,
-        std::memory_order_acq_rel);
+        std::memory_order_seq_cst);
 }
 
 PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
@@ -78,11 +78,16 @@ PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
         return result;
     }
 
-    active_acquirers_.fetch_add(1, std::memory_order_acq_rel);
+    // The entry counter and published pointer operations are seq_cst on
+    // purpose. Together with unpublish()+canReclaim(), this gives a simple
+    // proof: either this reader enters before the writer's reclaim check and
+    // is observed, or the writer's unpublish occurs first and this reader can
+    // only observe nullptr/new publication, never the retired allocation.
+    active_acquirers_.fetch_add(1, std::memory_order_seq_cst);
     Slot& slot = slots_[static_cast<std::size_t>(sample_id)];
 
     for (std::size_t attempt = 0; attempt < kAcquireAttempts; ++attempt) {
-        const ResidentRecord* record = slot.published.load(std::memory_order_acquire);
+        const ResidentRecord* record = slot.published.load(std::memory_order_seq_cst);
         if (record == nullptr) {
             break;
         }
@@ -94,7 +99,7 @@ PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
 
         record->voice_refs.fetch_add(1, std::memory_order_acq_rel);
 
-        const ResidentRecord* confirm = slot.published.load(std::memory_order_acquire);
+        const ResidentRecord* confirm = slot.published.load(std::memory_order_seq_cst);
         const std::uint32_t confirm_bank = bank_generation_.load(std::memory_order_acquire);
         if (confirm == record && record->bank_generation == confirm_bank) {
             live_voice_refs_.fetch_add(1, std::memory_order_acq_rel);
@@ -103,7 +108,7 @@ PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
             result.bank_generation = record->bank_generation;
             result.sample_generation = record->sample_generation;
             acquire_successes_.fetch_add(1, std::memory_order_relaxed);
-            active_acquirers_.fetch_sub(1, std::memory_order_release);
+            active_acquirers_.fetch_sub(1, std::memory_order_seq_cst);
             return result;
         }
 
@@ -112,7 +117,7 @@ PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
     }
 
     acquire_misses_.fetch_add(1, std::memory_order_relaxed);
-    active_acquirers_.fetch_sub(1, std::memory_order_release);
+    active_acquirers_.fetch_sub(1, std::memory_order_seq_cst);
     return result;
 }
 
@@ -151,7 +156,7 @@ bool PublishedSampleDirectory::canReclaim(const ResidentRecord* record) const {
     if (record == nullptr || isRecordPublished(record)) {
         return false;
     }
-    if (active_acquirers_.load(std::memory_order_acquire) != 0) {
+    if (active_acquirers_.load(std::memory_order_seq_cst) != 0) {
         return false;
     }
     return record->voice_refs.load(std::memory_order_acquire) == 0;
