@@ -74,9 +74,9 @@ jobs:
           path: |
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
-            build/esp32s3-gm-synth.bin
-            build/esp32s3-gm-synth.elf
-            build/esp32s3-gm-synth.map
+            build/esp32s3_gm_synth.bin
+            build/esp32s3_gm_synth.elf
+            build/esp32s3_gm_synth.map
             build/flash_args
             build/flasher_args.json
             sdkconfig
