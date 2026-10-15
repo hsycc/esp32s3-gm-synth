@@ -78,7 +78,18 @@ QEMU throughput is never treated as physical hardware performance evidence.
 
 The first complete QEMU real-SF2 storage path passed in `esp-idf-build #21`; see `benchmarks/QEMU_SF2_STORAGE_BASELINE_2026-10-15.md`.
 
-A dedicated physical N16R8 internal-Flash benchmark build is available through:
+The first physical N16R8-class internal-Flash -> PSRAM baseline is also complete; see `benchmarks/N16R8_FLASH_STORAGE_BASELINE_2026-10-15.md`.
+
+Measured physical baseline:
+
+- 8 MiB Octal PSRAM detected at 80 MHz;
+- 4 MiB PCM arena allocation succeeds and leaves about 4 MiB PSRAM free at clean bring-up;
+- internal Flash -> PSRAM throughput is about 5.8–6.3 MiB/s over 4/8/16/32/64 KiB chunks;
+- the current 32 KiB SF2 source chunk reaches 6.184 MiB/s with 5.052 ms P99 per read;
+- 32 KiB is retained because 64 KiB gains only about 1.6% aggregate throughput while roughly doubling per-read tail latency;
+- the 4 MiB arena remains the baseline until M4 Voice/DSP/I2S memory high-water is measured.
+
+A dedicated physical N16R8 internal-Flash benchmark build remains available through:
 
 ```bash
 ./scripts/build_hwbench_idf.sh <PORT>
@@ -120,17 +131,17 @@ It runs the same pinned real SF2 through 4/8/16/32/64 KiB reads, with 4 MiB read
 
 Cloud/host CI covers host tests, deterministic SF2 analysis/conformance, ESP32-S3 cross-builds, QEMU integration and construction of the physical benchmark firmware image.
 
-Measurements that require the actual electrical/storage/audio characteristics of an N16R8 board remain on-device work: physical PSRAM reserve, Flash/SD timing, I2S underruns, render deadlines and stable polyphony.
+Measurements that require the actual electrical/storage/audio characteristics of an N16R8 board remain on-device work: Program Prepare/cache timing, optional SD timing, I2S underruns, render deadlines and stable polyphony.
 
 ## Status
 
-**M1/M2/M2.5 are established and CI-backed. M3 software/integration is complete through the ESP32-S3 QEMU real-SF2 path.**
+**M1/M2/M2.5 are established and CI-backed. M3 software/integration plus the first physical N16R8 internal-Flash/PSRAM baseline are complete.**
 
-The current M3 gate is physical N16R8 evidence:
+The remaining M3 hardware gate is now narrower:
 
-- boot/PSRAM reserve on the exact module;
-- 4 MiB internal-Flash -> PSRAM sweep with p95/p99/max latency;
-- SD -> PSRAM comparison if SD is selected for the product;
-- on-target Program Prepare/cache-eviction timing.
+- record the exact qualification board/module SKU;
+- measure on-target cold/warm Program Prepare latency using real sample dependencies;
+- measure cache-eviction and rapid Program Change prepare/commit/retire timing under arena pressure;
+- add SD -> PSRAM comparison only if SD is part of the intended product storage architecture.
 
-M4 Voice DSP/I2S integration starts after this storage/memory baseline is captured, so storage faults and realtime audio faults remain separable.
+After those control/storage measurements, M4 Voice DSP/I2S integration can begin with the 4 MiB arena and 32 KiB source chunk as the current measured baseline.
