@@ -66,6 +66,8 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
     using gm_synth::storage::VfsRandomAccessReader;
 
     const char* path = CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH;
+    ESP_LOGI(kTag, "Storage benchmark opening VFS path: %s", path);
+
     VfsRandomAccessReader reader;
     if (!reader.open(path)) {
         ESP_LOGE(
@@ -75,7 +77,22 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
         return;
     }
 
-    Sf2SampleSource source;
+    ESP_LOGI(
+        kTag,
+        "Storage benchmark VFS open: path=%s file_bytes=%llu",
+        path,
+        static_cast<unsigned long long>(reader.size()));
+
+    // Sf2SampleSource owns metadata for up to 512 samples and is ~16 KiB. The
+    // ESP-IDF main task stack defaults to only 3584 bytes, so this object must
+    // not be an automatic local. begin() fully resets its parser state before
+    // each use, which makes static storage safe for this one-shot bring-up path.
+    static Sf2SampleSource source;
+    ESP_LOGI(
+        kTag,
+        "Storage benchmark parser metadata: static_bytes=%u",
+        static_cast<unsigned>(sizeof(source)));
+
     if (!source.begin(reader)) {
         ESP_LOGE(
             kTag,
@@ -120,7 +137,10 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
         static_cast<unsigned>(source.smplPayloadBytes()),
         static_cast<unsigned>(benchmark_bytes));
 
-    EspStorageBenchmarkSweepResult sweep{};
+    // Keep benchmark result storage static too. It is small compared with the
+    // parser metadata, but this path deliberately keeps the main-task stack
+    // bounded and independent of benchmark telemetry growth.
+    static EspStorageBenchmarkSweepResult sweep{};
     if (!runEspStorageBenchmarkSweep(
             reader,
             arena.data(),
