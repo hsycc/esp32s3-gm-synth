@@ -60,5 +60,25 @@ jobs:
           grep -q '^CONFIG_SPIRAM_USE_CAPS_ALLOC=y$' sdkconfig
           grep -q '^CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4194304$' sdkconfig
 
-      - name: Print firmware size
-        run: idf.py size
+      - name: Capture firmware size
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          idf.py size | tee reports/idf-size.txt
+
+      - name: Upload flashable firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-n16r8-firmware
+          path: |
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/esp32s3-gm-synth.bin
+            build/esp32s3-gm-synth.elf
+            build/esp32s3-gm-synth.map
+            build/flash_args
+            build/flasher_args.json
+            sdkconfig
+            reports/idf-size.txt
+          if-no-files-found: error
