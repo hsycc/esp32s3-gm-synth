@@ -128,6 +128,11 @@ jobs:
             tests/voice/test_voice_renderer.cpp \
             -o build/host-tests/test_voice_renderer
 
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+            firmware/voice/PitchMath.cpp \
+            tests/voice/test_pitch_math.cpp \
+            -o build/host-tests/test_pitch_math
+
       - name: Run sample residency host tests
         run: ./build/host-tests/test_sample_residency
       - name: Run direct-to-arena source load tests
@@ -150,6 +155,8 @@ jobs:
         run: ./build/host-tests/test_program_change_mailbox
       - name: Run M4 voice renderer host tests
         run: ./build/host-tests/test_voice_renderer
+      - name: Run M4 pitch math host tests
+        run: ./build/host-tests/test_pitch_math
       - name: Print residency pressure report
         run: cat reports/residency_pressure.json
       - name: Upload residency pressure report
