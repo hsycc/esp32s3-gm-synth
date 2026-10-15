@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -43,6 +44,8 @@ void testInvalidInputsFailClosed() {
     assert(phaseIncrementQ32(44100, 0, 0.0) == 0);
     assert(phaseIncrementQ32(44100, 44100, std::nan("")) == 0);
     assert(phaseIncrementQ32(44100, 44100, std::numeric_limits<double>::infinity()) == 0);
+    assert(phaseIncrementQ32(44100, 44100, 1.0e9) == 0);
+    assert(phaseIncrementQ32(44100, 44100, -1.0e9) == 0);
 }
 
 }  // namespace
