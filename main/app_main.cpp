@@ -1,5 +1,7 @@
 #include "sdkconfig.h"
 
+#include "ProgramPrepareBenchmark.h"
+
 #include "esp_log.h"
 #include "esp_psram.h"
 #include "esp_system.h"
@@ -108,8 +110,8 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
         static_cast<unsigned>(source.sampleCount()));
 
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
-    // The QEMU fixture is the pinned FM/GM ~6 MiB subset. This makes the
-    // emulator test validate real SoundFont structure, not just arbitrary I/O.
+    // The fixture is the pinned FM/GM ~6 MiB subset. This makes both emulator
+    // and physical-board runs validate real SoundFont structure.
     if (source.sampleCount() != 67u) {
         ESP_LOGE(
             kTag,
@@ -227,9 +229,9 @@ extern "C" void app_main(void) {
     }
 #endif
 
-    // Bring-up benchmark intentionally runs before residency metadata starts using
-    // the arena. It overwrites PCM bytes only; the later residency initialization
-    // owns allocation metadata and future sample loads overwrite these bytes.
+    // Bring-up storage sweep intentionally runs before residency metadata starts
+    // using the arena. It overwrites PCM bytes only; later sample loads replace
+    // those bytes under residency ownership.
     runOptionalStorageBenchmark(arena);
 
     if (!residency.begin(arena.data(), arena.capacity())) {
@@ -249,6 +251,11 @@ extern "C" void app_main(void) {
         static_cast<unsigned>(residency_stats.used_bytes),
         static_cast<unsigned>(residency_stats.largest_free_span_bytes),
         static_cast<unsigned>(residency_stats.free_span_count));
+
+    if (!gm_synth::bringup::runOptionalProgramPrepareBenchmark(residency)) {
+        ESP_LOGE(kTag, "Program Prepare hardware benchmark FAILED");
+        return;
+    }
 
     ESP_LOGI(
         kTag,
