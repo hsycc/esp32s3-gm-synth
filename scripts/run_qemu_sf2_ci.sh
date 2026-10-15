@@ -12,6 +12,7 @@ SDKCONFIG_PATH="$ROOT_DIR/sdkconfig.qemu"
 STAGING_DIR="$ROOT_DIR/.qemu_sf2_data"
 FIXTURE_SOURCE="$ROOT_DIR/assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
 FIXTURE_TARGET="$STAGING_DIR/test.sf2"
+QEMU_BENCHMARK_BYTES=262144
 
 mkdir -p "$(dirname "$REPORT_PATH")"
 
@@ -50,6 +51,7 @@ grep -q '^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"$' "$SDKCO
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
+grep -q "^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=${QEMU_BENCHMARK_BYTES}$" "$SDKCONFIG_PATH"
 
 if [[ ! -f "$BUILD_DIR/qemu_sf2.bin" ]]; then
     echo "QEMU FATFS image was not generated at $BUILD_DIR/qemu_sf2.bin" >&2
@@ -98,6 +100,9 @@ require_log() {
     local pattern="$1"
     if ! grep -Fq "$pattern" "$REPORT_PATH"; then
         echo "Missing expected QEMU SF2 integration log: $pattern" >&2
+        echo "---- QEMU SF2 log tail ----" >&2
+        tail -n 120 "$REPORT_PATH" >&2 || true
+        echo "---------------------------" >&2
         exit 1
     fi
 }
@@ -106,17 +111,18 @@ require_log "Detected physical PSRAM: 8388608 bytes (8.00 MiB)"
 require_log "QEMU FATFS mounted: base=/sf2 partition=qemu_sf2"
 require_log "Storage benchmark SF2 parsed: playable_samples=67"
 require_log "Storage benchmark source: path=/sf2/test.sf2"
-require_log "benchmark_bytes=4194304"
-require_log "chunk=4096 bytes=4194304"
-require_log "chunk=8192 bytes=4194304"
-require_log "chunk=16384 bytes=4194304"
-require_log "chunk=32768 bytes=4194304"
-require_log "chunk=65536 bytes=4194304"
+require_log "benchmark_bytes=${QEMU_BENCHMARK_BYTES}"
+require_log "chunk=4096 bytes=${QEMU_BENCHMARK_BYTES}"
+require_log "chunk=8192 bytes=${QEMU_BENCHMARK_BYTES}"
+require_log "chunk=16384 bytes=${QEMU_BENCHMARK_BYTES}"
+require_log "chunk=32768 bytes=${QEMU_BENCHMARK_BYTES}"
+require_log "chunk=65536 bytes=${QEMU_BENCHMARK_BYTES}"
 require_log "Residency ready: capacity=4194304 used=0"
 require_log "M3 core linked successfully"
 
 if grep -Eq "QEMU FATFS mount failed|VFS path cannot be opened|SF2 parse failed|fixture sample-count mismatch|One or more storage benchmark chunk-size passes failed|Guru Meditation|assert failed|abort\(\)|panic'ed" "$REPORT_PATH"; then
     echo "QEMU SF2 integration log contains a failure/panic signature" >&2
+    tail -n 120 "$REPORT_PATH" >&2 || true
     exit 1
 fi
 
