@@ -1,7 +1,7 @@
 #include "VoiceRenderer.h"
 
 #include <algorithm>
-#include <limits>
+#include <utility>
 
 namespace gm_synth::voice {
 namespace {
@@ -55,7 +55,7 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
 
     const auto& descriptor = acquired.record->descriptor;
     const bool descriptor_valid = descriptor.frames != 0 &&
-        descriptor.pcm_bytes >= descriptor.frames * sizeof(std::int16_t) &&
+        descriptor.pcm_bytes >= static_cast<std::size_t>(descriptor.frames) * sizeof(std::int16_t) &&
         acquired.record->pcm != nullptr;
     const bool loop_valid = params.loop_mode == LoopMode::None ||
         (descriptor.loop_start < descriptor.loop_end &&
@@ -210,7 +210,7 @@ std::int32_t Voice::interpolatedSample() const {
     const std::int64_t delta = static_cast<std::int64_t>(b) - a;
     return static_cast<std::int32_t>(
         static_cast<std::int64_t>(a) +
-        ((delta * static_cast<std::uint64_t>(fraction)) >> 32));
+        ((delta * static_cast<std::int64_t>(fraction)) >> 32));
 }
 
 void Voice::advancePhase() {
