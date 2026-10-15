@@ -120,6 +120,10 @@ private:
         ProgramSnapshot b{};
     };
 
+    static constexpr std::size_t kPublicationBitmapWords =
+        (ProgramSnapshot::kMaxDependencies + 63u) / 64u;
+    using PublicationBitmap = std::array<std::uint64_t, kPublicationBitmapWords>;
+
     bool prepareImpl(
         bool initial_activation,
         std::uint8_t channel,
@@ -136,8 +140,8 @@ private:
     bool recordMatchesView(const ResidentRecord& record, const ResidentSampleView& view) const;
     void initializeRecord(ResidentRecord& record, const ResidentSampleView& view);
     void rollbackPinsAndPublications(
-        const std::array<SampleId, ProgramSnapshot::kMaxDependencies>& ids,
-        const std::array<bool, ProgramSnapshot::kMaxDependencies>& newly_published,
+        const ProgramSnapshot& working_snapshot,
+        const PublicationBitmap& newly_published,
         std::size_t count);
     bool retireSnapshot(const ProgramSnapshot& snapshot);
     bool dependencyListIsValid(const SampleId* dependencies, std::size_t dependency_count) const;
