@@ -139,16 +139,6 @@ void testFullQueueIsExplicitAndRecoverable() {
     assert(queue.size() == RealtimeEventQueue::kCapacity);
 }
 
-void testOneBlockCanDrainFullCapacity() {
-    RealtimeEventQueue queue;
-    for (std::size_t i = 0; i < RealtimeEventQueue::kCapacity; ++i) {
-        assert(queue.tryPush(note(1000 + (i % 64), static_cast<std::uint8_t>(i & 0x7f))));
-    }
-
-    // Above timestamps wrapped after 63 and therefore intentionally violate the
-    // monotonic contract. Rebuild with equal timestamps to exercise full drain.
-}
-
 void testFullBatchDrainWithEqualTimestamp() {
     RealtimeEventQueue queue;
     for (std::size_t i = 0; i < RealtimeEventQueue::kCapacity; ++i) {
