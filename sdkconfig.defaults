@@ -4,6 +4,11 @@
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
+# Pin the physical-storage timing baseline explicitly. These are ESP-IDF v6.1
+# defaults for ESP32-S3, but keeping them here prevents a future IDF/default
+# change from silently invalidating Flash -> PSRAM benchmark comparisons.
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
 CONFIG_SPIRAM=y

@@ -65,8 +65,11 @@ idf.py -B "$BUILD_DIR" build
 
 echo "== Verify hardware benchmark configuration =="
 grep -q '^CONFIG_IDF_TARGET="esp32s3"$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESPTOOLPY_FLASHMODE_DIO=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESPTOOLPY_FLASHFREQ_80M=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_SPIRAM_SPEED_80M=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304$' "$SDKCONFIG_PATH"
@@ -77,10 +80,18 @@ if [[ ! -f "$BUILD_DIR/qemu_sf2.bin" ]]; then
     exit 1
 fi
 
+if [[ -f "$BUILD_DIR/flash_args" ]]; then
+    grep -q -- '--flash-mode dio' "$BUILD_DIR/flash_args"
+    grep -q -- '--flash-freq 80m' "$BUILD_DIR/flash_args"
+    grep -q -- '--flash-size 16MB' "$BUILD_DIR/flash_args"
+    grep -q '^0x210000 qemu_sf2.bin$' "$BUILD_DIR/flash_args"
+fi
+
 echo
 echo "Hardware benchmark image is ready."
 echo "  build dir : $BUILD_DIR"
 echo "  sdkconfig : $SDKCONFIG_PATH"
+echo "  flash     : DIO / 80 MHz / 16 MiB"
 echo "  fixture   : $fixture_bytes bytes"
 echo "  sweep     : 4 MiB per chunk size (4/8/16/32/64 KiB)"
 

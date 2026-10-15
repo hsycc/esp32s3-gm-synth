@@ -69,6 +69,8 @@ jobs:
         run: |
           set -euo pipefail
           grep -q '^CONFIG_IDF_TARGET="esp32s3"$' sdkconfig
+          grep -q '^CONFIG_ESPTOOLPY_FLASHMODE_DIO=y$' sdkconfig
+          grep -q '^CONFIG_ESPTOOLPY_FLASHFREQ_80M=y$' sdkconfig
           grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' sdkconfig
           grep -q '^CONFIG_SPIRAM=y$' sdkconfig
           grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' sdkconfig

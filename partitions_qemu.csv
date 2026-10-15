@@ -1,4 +1,5 @@
-# QEMU-only 16 MiB flash layout for the real-SF2 FATFS integration test.
+# 16 MiB benchmark layout shared by the real-SF2 QEMU integration test and
+# the dedicated physical N16R8 internal-Flash benchmark build.
 # Name,      Type, SubType, Offset,   Size,      Flags
 nvs,         data, nvs,     0x9000,   0x6000,
 phy_init,    data, phy,     0xF000,   0x1000,
