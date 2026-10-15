@@ -10,7 +10,6 @@ namespace {
 using gm_synth::sample::PublishedSampleDirectory;
 using gm_synth::sample::ResidentRecord;
 using gm_synth::sample::SampleDescriptor;
-using gm_synth::voice::EnvelopeConfig;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::VoicePool;
 using gm_synth::voice::VoiceStartParams;
@@ -76,6 +75,25 @@ void testOneShotAndVoiceRefLifetime() {
     assert(out[6] == 4000 && out[7] == 4000);
     assert(out[8] == 0 && out[9] == 0 && out[10] == 0 && out[11] == 0);
     assert(pool.activeVoiceCount() == 0);
+    assert(pool.stats().rendered_voice_frames == 4);
+    assert(pool.stats().voices_finished == 1);
+    assert(fixture.directory.stats().live_voice_refs == 0);
+}
+
+void testSignedPcmUsesSymmetricQ15Rounding() {
+    constexpr std::array<std::int16_t, 4> pcm{-1000, -2000, 1000, 2000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    assert(pool.start(basicParams()));
+
+    std::array<std::int32_t, 8> out{};
+    pool.renderAdd(out.data(), 4);
+    assert(out[0] == -1000 && out[1] == -1000);
+    assert(out[2] == -2000 && out[3] == -2000);
+    assert(out[4] == 1000 && out[5] == 1000);
+    assert(out[6] == 2000 && out[7] == 2000);
     assert(fixture.directory.stats().live_voice_refs == 0);
 }
 
@@ -97,6 +115,24 @@ void testLinearInterpolationAtHalfRate() {
     assert(out[6] == 15000);
     pool.allSoundOff();
     assert(fixture.directory.stats().live_voice_refs == 0);
+}
+
+void testLinearInterpolationAcrossNegativeSlope() {
+    constexpr std::array<std::int16_t, 3> pcm{10000, -10000, -20000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    auto params = basicParams();
+    params.phase_increment_q32 = kPhaseOneQ32 / 2u;
+    assert(pool.start(params));
+
+    std::array<std::int32_t, 6> out{};
+    pool.renderAdd(out.data(), 3);
+    assert(out[0] == 10000);
+    assert(out[2] == 0);
+    assert(out[4] == -10000);
+    pool.allSoundOff();
 }
 
 void testContinuousLoopWrapsDeterministically() {
@@ -175,7 +211,7 @@ void testReleaseEnvelopeCompletesOnContinuousLoop() {
     assert(fixture.directory.stats().live_voice_refs == 0);
 }
 
-void testHardVoiceCapAndMissingSampleAreBounded() {
+void testHardVoiceCapAndRejectedStartAreBounded() {
     constexpr std::array<std::int16_t, 8> pcm{100, 100, 100, 100, 100, 100, 100, 100};
     PublishedFixture fixture;
     assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
@@ -183,7 +219,7 @@ void testHardVoiceCapAndMissingSampleAreBounded() {
     VoicePool pool(fixture.directory);
     auto missing = basicParams(1);
     assert(!pool.start(missing));
-    assert(pool.stats().start_failures_missing_sample == 1);
+    assert(pool.stats().start_failures_rejected == 1);
 
     auto params = basicParams();
     params.loop_mode = LoopMode::Continuous;
@@ -215,17 +251,20 @@ void testInvalidLoopAndZeroPhaseRejectWithoutLeakingRef() {
     zero_phase.phase_increment_q32 = 0;
     assert(!pool.start(zero_phase));
     assert(fixture.directory.stats().live_voice_refs == 0);
+    assert(pool.stats().start_failures_rejected == 2);
 }
 
 }  // namespace
 
 int main() {
     testOneShotAndVoiceRefLifetime();
+    testSignedPcmUsesSymmetricQ15Rounding();
     testLinearInterpolationAtHalfRate();
+    testLinearInterpolationAcrossNegativeSlope();
     testContinuousLoopWrapsDeterministically();
     testUntilReleaseLeavesLoopAndPlaysTail();
     testReleaseEnvelopeCompletesOnContinuousLoop();
-    testHardVoiceCapAndMissingSampleAreBounded();
+    testHardVoiceCapAndRejectedStartAreBounded();
     testInvalidLoopAndZeroPhaseRejectWithoutLeakingRef();
     std::cout << "voice renderer tests passed\n";
     return 0;
