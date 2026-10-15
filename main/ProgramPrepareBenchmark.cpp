@@ -17,6 +17,8 @@
 #include <cstdint>
 
 namespace gm_synth::bringup {
+
+#ifdef CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE
 namespace {
 
 constexpr char kTag[] = "prepare_bench";
@@ -386,6 +388,7 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
 }
 
 }  // namespace
+#endif
 
 bool runOptionalProgramPrepareBenchmark(sample::SampleResidencyManager& residency) {
 #ifdef CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE
