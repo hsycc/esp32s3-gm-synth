@@ -106,6 +106,7 @@ grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
 grep -q "^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=${QEMU_BENCHMARK_BYTES}$" "$SDKCONFIG_PATH"
@@ -178,7 +179,7 @@ require_log() {
     if ! grep -Fq "$pattern" "$REPORT_PATH"; then
         echo "Missing expected QEMU SF2 integration log: $pattern" >&2
         echo "---- QEMU SF2 log tail ----" >&2
-        tail -n 120 "$REPORT_PATH" >&2 || true
+        tail -n 160 "$REPORT_PATH" >&2 || true
         echo "---------------------------" >&2
         exit 1
     fi
@@ -197,14 +198,25 @@ require_log "chunk=16384 bytes=${QEMU_BENCHMARK_BYTES}"
 require_log "chunk=32768 bytes=${QEMU_BENCHMARK_BYTES}"
 require_log "chunk=65536 bytes=${QEMU_BENCHMARK_BYTES}"
 require_log "Residency ready: capacity=4194304 used=0"
+
+# M3 Program Prepare functional gate. QEMU elapsed times are intentionally not
+# asserted; only the state/ownership/storage behavior is part of this gate.
+require_log "prepare_bench: case=cold_initial ok=1"
+require_log "prepare_bench: case=warm_same_program ok=1"
+require_log "prepare_bench: case=warm_commit_retire commit_ok=1 ack_ok=1"
+require_log "prepare_bench: case=prime_cache ok=1"
+require_log "prepare_bench: case=eviction_program_change ok=1"
+require_log "prepare_bench: case=eviction_commit_retire commit_ok=1 ack_ok=1"
+require_log "release_tail_survived=1 release_ok=1"
+require_log "prepare_bench: PASS"
 require_log "M3 core linked successfully"
 
-if grep -Eq "QEMU FATFS mount failed|VFS path cannot be opened|SF2 parse failed|fixture sample-count mismatch|One or more storage benchmark chunk-size passes failed|Guru Meditation|assert failed|abort\(\)|panic'ed" "$REPORT_PATH"; then
+if grep -Eq "QEMU FATFS mount failed|VFS path cannot be opened|SF2 parse failed|fixture sample-count mismatch|One or more storage benchmark chunk-size passes failed|Program Prepare hardware benchmark FAILED|prepare_bench: .*ok=0|Guru Meditation|assert failed|abort\(\)|panic'ed" "$REPORT_PATH"; then
     echo "QEMU SF2 integration log contains a failure/panic signature" >&2
-    tail -n 120 "$REPORT_PATH" >&2 || true
+    tail -n 160 "$REPORT_PATH" >&2 || true
     exit 1
 fi
 
 stage "complete"
-echo "ESP32-S3 QEMU real-SF2 flash/FATFS integration test passed"
+echo "ESP32-S3 QEMU real-SF2 storage + Program Prepare integration test passed"
 echo "NOTE: emulator throughput/latency values are functional telemetry only, not N16R8 hardware performance data."
