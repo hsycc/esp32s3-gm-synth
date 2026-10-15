@@ -7,5 +7,9 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions_qemu.csv"
 
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"
-CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304
+# QEMU validates the complete VFS -> real SF2 smpl -> PSRAM code path, but its
+# emulated SPI-flash timing is not representative of N16R8 hardware. Keep the
+# functional sweep deliberately small so CI still covers every 4/8/16/32/64 KiB
+# chunk size without spending the job timeout rereading 20 MiB in emulation.
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=262144
 CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y
