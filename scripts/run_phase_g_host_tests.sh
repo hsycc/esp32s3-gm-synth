@@ -22,7 +22,7 @@ printf 'Phase G host validation\n'
 printf '  compiler: %s\n' "${CXX}"
 printf '  output:   %s\n' "${BUILD_DIR}"
 
-printf '\n[1/6] Validate analyzed realtime zone bounds\n'
+printf '\n[1/8] Validate analyzed realtime zone bounds\n'
 python3 - <<'PY'
 import glob
 import json
@@ -94,11 +94,12 @@ print(
 )
 PY
 
-printf '\n[2/6] Build and run playback-zone runtime tests\n'
+printf '\n[2/8] Build and run playback-zone runtime tests\n'
 "${CXX}" "${COMMON_FLAGS[@]}" -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
   firmware/voice/VoiceRenderer.cpp \
+  firmware/sf2/Sf2ModulationMath.cpp \
   firmware/gm/PlaybackProgramSnapshot.cpp \
   firmware/gm/ZoneResolver.cpp \
   firmware/realtime/RealtimeEventQueue.cpp \
@@ -108,14 +109,14 @@ printf '\n[2/6] Build and run playback-zone runtime tests\n'
   -o "${BUILD_DIR}/test_playback_zone_runtime"
 "${BUILD_DIR}/test_playback_zone_runtime"
 
-printf '\n[3/6] Build and run random-access PDTA reader tests\n'
+printf '\n[3/8] Build and run random-access PDTA reader tests\n'
 "${CXX}" "${COMMON_FLAGS[@]}" \
   firmware/sf2/Sf2PdtaReader.cpp \
   tests/sf2/test_sf2_pdta_reader.cpp \
   -o "${BUILD_DIR}/test_sf2_pdta_reader"
 "${BUILD_DIR}/test_sf2_pdta_reader"
 
-printf '\n[4/6] Build and run native resolved-zone tests\n'
+printf '\n[4/8] Build and run native resolved-zone tests\n'
 "${CXX}" "${COMMON_FLAGS[@]}" \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -123,7 +124,22 @@ printf '\n[4/6] Build and run native resolved-zone tests\n'
   -o "${BUILD_DIR}/test_sf2_resolved_zone"
 "${BUILD_DIR}/test_sf2_resolved_zone"
 
-printf '\n[5/6] Build and run playback materializer tests\n'
+printf '\n[5/8] Build and run fixed-point modulation-math tests\n'
+"${CXX}" "${COMMON_FLAGS[@]}" \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  tests/sf2/test_sf2_modulation_math.cpp \
+  -o "${BUILD_DIR}/test_sf2_modulation_math"
+"${BUILD_DIR}/test_sf2_modulation_math"
+
+printf '\n[6/8] Build and run per-zone modulator resolver tests\n'
+"${CXX}" "${COMMON_FLAGS[@]}" \
+  firmware/sf2/Sf2PdtaReader.cpp \
+  firmware/sf2/Sf2ZoneModulatorResolver.cpp \
+  tests/sf2/test_sf2_zone_modulator_resolver.cpp \
+  -o "${BUILD_DIR}/test_sf2_zone_modulator_resolver"
+"${BUILD_DIR}/test_sf2_zone_modulator_resolver"
+
+printf '\n[7/8] Build and run playback materializer tests\n'
 "${CXX}" "${COMMON_FLAGS[@]}" \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
@@ -131,10 +147,11 @@ printf '\n[5/6] Build and run playback materializer tests\n'
   -o "${BUILD_DIR}/test_sf2_playback_materializer"
 "${BUILD_DIR}/test_sf2_playback_materializer"
 
-printf '\n[6/6] Build and run playback program prepare tests\n'
+printf '\n[8/8] Build and run playback program prepare tests\n'
 "${CXX}" "${COMMON_FLAGS[@]}" \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
+  firmware/sf2/Sf2ZoneModulatorResolver.cpp \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
   firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
