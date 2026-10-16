@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <type_traits>
 
 namespace {
 
@@ -19,10 +20,16 @@ using gm_synth::realtime::RealtimeEventQueue;
 using gm_synth::realtime::RenderDeadlineMonitor;
 using gm_synth::realtime::ScheduledAudioBlockRenderer;
 using gm_synth::realtime::TimedAudioBlockRenderer;
+using gm_synth::realtime::TimedRenderMeasurement;
 using gm_synth::sample::PublishedSampleDirectory;
 using gm_synth::voice::AdaptivePolyphonyConfig;
 using gm_synth::voice::AdaptivePolyphonyController;
 using gm_synth::voice::VoicePool;
+
+static_assert(!std::is_copy_constructible_v<TimedRenderMeasurement>);
+static_assert(!std::is_copy_assignable_v<TimedRenderMeasurement>);
+static_assert(!std::is_move_constructible_v<TimedRenderMeasurement>);
+static_assert(!std::is_move_assignable_v<TimedRenderMeasurement>);
 
 struct FakeClock {
     std::array<std::uint64_t, 4> values{};
@@ -90,6 +97,52 @@ void testMeasuredRenderFeedsMonitor() {
     assert(snapshot.min_us == 234);
     assert(snapshot.avg_us == 234);
     assert(snapshot.max_us == 234);
+}
+
+void testDeferredObservationCombinesPostRenderMissOnce() {
+    RenderFixture fixture;
+    FakeClock clock{};
+    clock.values[0] = 3000;
+    clock.values[1] = 3125;
+    clock.count = 2;
+
+    TimedAudioBlockRenderer timed(
+        fixture.renderer,
+        fixture.monitor,
+        fakeNowUs,
+        &clock);
+
+    auto measurement = timed.renderMeasured(0, fixture.output.data());
+    assert(measurement.timingValid());
+    assert(measurement.renderTimeUs() == 125);
+    assert(fixture.renderer.stats().blocks_rendered == 1);
+    assert(fixture.monitor.stats().blocks_observed == 0);
+    assert(fixture.controller.stats().blocks_observed == 0);
+
+    // This models a short I2S write discovered after render completed. The
+    // measured render time and the output deadline miss become one observation.
+    assert(timed.observeMeasurement(measurement, true) == 6);
+    assert(fixture.monitor.stats().blocks_observed == 1);
+    assert(fixture.monitor.stats().deadline_misses == 1);
+    assert(fixture.monitor.stats().window_count == 1);
+    assert(fixture.controller.stats().blocks_observed == 1);
+    assert(fixture.controller.stats().deadline_misses == 1);
+    assert(fixture.voices.admissionLimit() == 6);
+
+    const auto snapshot = fixture.monitor.snapshot();
+    assert(snapshot.sample_count == 1);
+    assert(snapshot.min_us == 125);
+    assert(snapshot.max_us == 125);
+
+    // The same measurement is single-use. A caller bug must not feed the same
+    // block into adaptive policy twice or double-count its deadline miss.
+    assert(timed.observeMeasurement(measurement, true) == 6);
+    assert(timed.stats().duplicate_observations == 1);
+    assert(fixture.monitor.stats().blocks_observed == 1);
+    assert(fixture.monitor.stats().deadline_misses == 1);
+    assert(fixture.controller.stats().blocks_observed == 1);
+    assert(fixture.controller.stats().deadline_misses == 1);
+    assert(fixture.monitor.snapshot().sample_count == 1);
 }
 
 void testMissingClockDoesNotPoisonAdaptivePolicy() {
@@ -200,6 +253,7 @@ void testUnrepresentableDurationClampsAndTripsDeadline() {
 
 int main() {
     testMeasuredRenderFeedsMonitor();
+    testDeferredObservationCombinesPostRenderMissOnce();
     testMissingClockDoesNotPoisonAdaptivePolicy();
     testMissingClockStillForwardsExplicitMiss();
     testClockRegressionIsRejected();
