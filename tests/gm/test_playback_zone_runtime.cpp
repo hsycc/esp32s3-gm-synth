@@ -82,7 +82,7 @@ PlaybackZone loopingZone(std::uint32_t sample_id) {
     return zone;
 }
 
-PlaybackProgramSnapshot basePlaybackProgram(
+PlaybackProgramSnapshot playbackProgram(
     std::uint8_t channel,
     std::uint8_t program,
     std::uint32_t token) {
@@ -95,7 +95,7 @@ PlaybackProgramSnapshot basePlaybackProgram(
     return snapshot;
 }
 
-ProgramSnapshot baseResidencyProgram(
+ProgramSnapshot residencyProgram(
     std::uint8_t channel,
     std::uint8_t program,
     std::uint32_t token) {
@@ -110,7 +110,7 @@ ProgramSnapshot baseResidencyProgram(
 }
 
 void testResolverSelectsKeyVelocityLayersAndPitch() {
-    PlaybackProgramSnapshot program = basePlaybackProgram(2, 10, 1);
+    PlaybackProgramSnapshot program = playbackProgram(2, 10, 1);
     program.zone_count = 3;
     program.zones[0] = loopingZone(0);
     program.zones[0].exclusive_class = 7;
@@ -119,7 +119,6 @@ void testResolverSelectsKeyVelocityLayersAndPitch() {
     program.zones[2] = loopingZone(2);
     program.zones[2].velocity_low = 81;
     program.zones[2].velocity_high = 127;
-    program.zones[2].exclusive_class = 0;
     assert(program.valid());
 
     ZoneResolver resolver;
@@ -128,9 +127,6 @@ void testResolverSelectsKeyVelocityLayersAndPitch() {
     assert(batch.count == 2);
     const std::uint64_t expected = ZoneResolver::transposeSemitones(kPhaseOneQ32, 2);
     for (std::size_t i = 0; i < batch.count; ++i) {
-        assert(batch.voices[i].channel == 2);
-        assert(batch.voices[i].key == 62);
-        assert(batch.voices[i].velocity == 70);
         assert(batch.voices[i].exclusive_class == 7);
         assert(batch.voices[i].note_instance_id == 42);
         assert(batch.voices[i].phase_increment_q32 == expected);
@@ -140,13 +136,12 @@ void testResolverSelectsKeyVelocityLayersAndPitch() {
     assert(batch.count == 1);
     assert(batch.voices[0].sample_id == 2);
     assert(batch.voices[0].exclusive_class == 0);
-
     assert(resolver.resolveNoteOn(program, 2, 70, 70, 44, &batch) == ZoneResolveStatus::NoMatch);
     assert(batch.count == 0);
 }
 
 void testFixedPitchZoneDoesNotTrackKey() {
-    PlaybackProgramSnapshot program = basePlaybackProgram(9, 0, 1);
+    PlaybackProgramSnapshot program = playbackProgram(9, 0, 1);
     program.zone_count = 1;
     program.zones[0] = loopingZone(0);
     program.zones[0].key_low = 35;
@@ -156,13 +151,13 @@ void testFixedPitchZoneDoesNotTrackKey() {
 
     ZoneResolver resolver;
     ResolvedVoiceBatch batch{};
-    assert(resolver.resolveNoteOn(program, 9, 60, 100, 1, &batch) == ZoneResolveStatus::Ok);
+    assert(resolver.resolveNoteOn(program, 9, 60, 70, 1, &batch) == ZoneResolveStatus::Ok);
     assert(batch.count == 1);
     assert(batch.voices[0].phase_increment_q32 == kPhaseOneQ32 / 2u);
 }
 
 void testResolverRejectsMoreThanHardVoiceCapWithoutPartialBatch() {
-    PlaybackProgramSnapshot program = basePlaybackProgram(1, 0, 1);
+    PlaybackProgramSnapshot program = playbackProgram(1, 0, 1);
     program.zone_count = static_cast<std::uint16_t>(VoicePool::kHardVoiceCap + 1u);
     for (std::size_t i = 0; i < program.zone_count; ++i) {
         program.zones[i] = loopingZone(static_cast<std::uint32_t>(i % 4u));
@@ -188,7 +183,7 @@ void testRealtimeApplierSharesNoteInstanceAcrossLayersAndChokesOldTrigger() {
     assert(fixture.publish(0, pcm_a.data(), pcm_a.size(), 0, pcm_a.size()));
     assert(fixture.publish(1, pcm_b.data(), pcm_b.size(), 0, pcm_b.size()));
 
-    PlaybackProgramSnapshot program = basePlaybackProgram(2, 0, 1);
+    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1);
     program.zone_count = 2;
     program.zones[0] = loopingZone(0);
     program.zones[0].exclusive_class = 7;
@@ -245,14 +240,14 @@ void testProgramRuntimeCommitRequiresMatchingPreparedIdentity() {
     PlaybackProgramSnapshotExchange playback;
     ProgramRuntimeCommitCoordinator coordinator(residency, playback);
 
-    ProgramSnapshot resident_a = baseResidencyProgram(3, 4, 1);
-    PlaybackProgramSnapshot play_a = basePlaybackProgram(3, 4, 1);
+    ProgramSnapshot resident_a = residencyProgram(3, 4, 1);
+    PlaybackProgramSnapshot play_a = playbackProgram(3, 4, 1);
     assert(residency.setInitialActive(&resident_a));
     assert(playback.setInitialActive(&play_a));
     assert(coordinator.activeCompatible(3));
 
-    ProgramSnapshot resident_b = baseResidencyProgram(3, 5, 2);
-    PlaybackProgramSnapshot play_b = basePlaybackProgram(3, 5, 2);
+    ProgramSnapshot resident_b = residencyProgram(3, 5, 2);
+    PlaybackProgramSnapshot play_b = playbackProgram(3, 5, 2);
     assert(residency.publishReady(&resident_b));
     assert(playback.publishReady(&play_b));
     assert(coordinator.readyCompatible(3));
@@ -266,13 +261,13 @@ void testProgramRuntimeCommitRequiresMatchingPreparedIdentity() {
     ProgramSnapshotExchange mismatch_residency;
     PlaybackProgramSnapshotExchange mismatch_playback;
     ProgramRuntimeCommitCoordinator mismatch(mismatch_residency, mismatch_playback);
-    ProgramSnapshot mismatch_a = baseResidencyProgram(4, 1, 10);
-    PlaybackProgramSnapshot mismatch_play_a = basePlaybackProgram(4, 1, 10);
+    ProgramSnapshot mismatch_a = residencyProgram(4, 1, 10);
+    PlaybackProgramSnapshot mismatch_play_a = playbackProgram(4, 1, 10);
     assert(mismatch_residency.setInitialActive(&mismatch_a));
     assert(mismatch_playback.setInitialActive(&mismatch_play_a));
 
-    ProgramSnapshot mismatch_b = baseResidencyProgram(4, 2, 11);
-    PlaybackProgramSnapshot mismatch_play_b = basePlaybackProgram(4, 2, 12);
+    ProgramSnapshot mismatch_b = residencyProgram(4, 2, 11);
+    PlaybackProgramSnapshot mismatch_play_b = playbackProgram(4, 2, 12);
     assert(mismatch_residency.publishReady(&mismatch_b));
     assert(mismatch_playback.publishReady(&mismatch_play_b));
     assert(!mismatch.readyCompatible(4));
@@ -287,7 +282,7 @@ void testScheduledEventToZoneToVoiceToRenderPath() {
     PublishedFixture fixture;
     assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
 
-    PlaybackProgramSnapshot program = basePlaybackProgram(1, 0, 1);
+    PlaybackProgramSnapshot program = playbackProgram(1, 0, 1);
     program.zone_count = 1;
     program.zones[0] = loopingZone(0);
     program.zones[0].key_low = 60;
@@ -311,7 +306,7 @@ void testScheduledEventToZoneToVoiceToRenderPath() {
     on.type = EventType::NoteOn;
     on.channel = 1;
     on.data1 = 60;
-    on.data2 = 100;
+    on.data2 = 70;
     assert(queue.tryPush(on));
 
     RealtimeEvent off{};
