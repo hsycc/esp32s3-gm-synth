@@ -363,10 +363,11 @@ void testExclusiveTailBudgetRejectsWithoutPartialChoke() {
     VoicePool pool(fixture.directory);
     pool.setVoiceStealConfig(fastReleaseConfig(8, 1));
     assert(pool.start(loopingParams(20, 1)));
-    assert(pool.start(loopingParams(20, 2)));
+    assert(pool.start(loopingParams(20, 1)));
     assert(pool.activeVoiceCount() == 2);
+    assert(pool.activeFastReleaseTailCount() == 0);
 
-    assert(!pool.start(loopingParams(20, 3)));
+    assert(!pool.start(loopingParams(20, 2)));
     assert(pool.activeVoiceCount() == 2);
     assert(pool.activeFastReleaseTailCount() == 0);
     assert(pool.stats().exclusive_choke_attempts == 1);
