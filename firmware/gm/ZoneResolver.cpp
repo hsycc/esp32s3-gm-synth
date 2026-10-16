@@ -125,6 +125,23 @@ void prepareNoteOnFilter(
         output);
 }
 
+std::int32_t vibratoDepthCents(
+    const VibratoLfoConfig& config,
+    const MidiChannelState& state) {
+    const std::int64_t depth =
+        static_cast<std::int64_t>(config.static_pitch_depth_cents) +
+        sf2::positiveLinearToAmount(
+            state.channel_pressure,
+            config.channel_pressure_to_pitch_cents) +
+        sf2::positiveLinearToAmount(
+            state.modulation_wheel,
+            config.modulation_wheel_to_pitch_cents);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        depth,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+}
+
 struct ActiveVoiceRefreshContext {
     const MidiChannelState* state = nullptr;
 };
@@ -149,6 +166,7 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     update.gain_right_q15 = voice.gainRightQ15();
     update.reverb_send_units = voice.reverbSendUnits();
     update.chorus_send_units = voice.chorusSendUnits();
+    update.vibrato_pitch_depth_cents = voice.vibratoLfoConfig().pitch_depth_cents;
 
     if (source.gain_enabled) {
         sf2::channelNoteOnGainQ15(
@@ -177,6 +195,22 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
                 source.chorus_send_base_units,
                 context->state->chorus_send,
                 source.chorus_send_cc_amount));
+    }
+
+    if (source.vibrato_enabled) {
+        const std::int64_t depth =
+            static_cast<std::int64_t>(source.static_vibrato_pitch_depth_cents) +
+            sf2::positiveLinearToAmount(
+                context->state->channel_pressure,
+                source.channel_pressure_to_vibrato_pitch_cents) +
+            sf2::positiveLinearToAmount(
+                context->state->modulation_wheel,
+                source.modulation_wheel_to_vibrato_pitch_cents);
+        update.vibrato_pitch_depth_cents = static_cast<std::int32_t>(
+            std::clamp<std::int64_t>(
+                depth,
+                std::numeric_limits<std::int32_t>::min(),
+                std::numeric_limits<std::int32_t>::max()));
     }
 
     return voice.applyRuntimeControlUpdate(update);
@@ -311,6 +345,13 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.envelope = zone.envelope;
         applyEnvelopeKeyScaling(zone, key, &params.envelope);
         prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
+        if (zone.vibrato_lfo.enabled) {
+            params.vibrato_lfo.enabled = true;
+            params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
+            params.vibrato_lfo.phase_step_q32 = zone.vibrato_lfo.phase_step_q32;
+            params.vibrato_lfo.pitch_depth_cents =
+                zone.vibrato_lfo.static_pitch_depth_cents;
+        }
         batch->voices[batch->count++] = params;
     }
 
@@ -395,9 +436,18 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.envelope = zone.envelope;
         applyEnvelopeKeyScaling(zone, key, &params.envelope);
         prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
+        if (zone.vibrato_lfo.enabled) {
+            params.vibrato_lfo.enabled = true;
+            params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
+            params.vibrato_lfo.phase_step_q32 = zone.vibrato_lfo.phase_step_q32;
+            params.vibrato_lfo.pitch_depth_cents = vibratoDepthCents(
+                zone.vibrato_lfo,
+                channel_state);
+        }
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
+        params.realtime_control.vibrato_enabled = zone.vibrato_lfo.enabled;
         params.realtime_control.unbent_phase_increment_q32 = key_increment;
         params.realtime_control.initial_attenuation_cb =
             zone.note_on_gain.initial_attenuation_cb;
@@ -417,6 +467,12 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             zone.effects_send.reverb_cc_amount;
         params.realtime_control.chorus_send_cc_amount =
             zone.effects_send.chorus_cc_amount;
+        params.realtime_control.static_vibrato_pitch_depth_cents =
+            zone.vibrato_lfo.static_pitch_depth_cents;
+        params.realtime_control.channel_pressure_to_vibrato_pitch_cents =
+            zone.vibrato_lfo.channel_pressure_to_pitch_cents;
+        params.realtime_control.modulation_wheel_to_vibrato_pitch_cents =
+            zone.vibrato_lfo.modulation_wheel_to_pitch_cents;
         batch->voices[batch->count++] = params;
     }
 
@@ -491,6 +547,7 @@ bool RealtimeProgramEventApplier::apply(
             ChannelControlPanChanged |
             ChannelControlEffectsChanged |
             ChannelControlPitchRangeChanged |
+            ChannelControlVibratoChanged |
             ChannelControlResetControllers;
         if ((action & kRefreshMask) != 0 &&
             (action & ChannelControlAllSoundOff) == 0) {
@@ -502,6 +559,17 @@ bool RealtimeProgramEventApplier::apply(
     if (event.type == realtime::EventType::PitchBend) {
         util::saturatingIncrement(stats_.pitch_bend_events);
         if (!channel_states_.applyPitchBend(event.channel, event.value)) {
+            util::saturatingIncrement(stats_.invalid_events);
+            return false;
+        }
+        util::saturatingIncrement(stats_.controller_state_changes);
+        refreshActiveVoices(event.channel, voices);
+        return true;
+    }
+
+    if (event.type == realtime::EventType::ChannelPressure) {
+        util::saturatingIncrement(stats_.channel_pressure_events);
+        if (!channel_states_.applyChannelPressure(event.channel, event.data1)) {
             util::saturatingIncrement(stats_.invalid_events);
             return false;
         }
