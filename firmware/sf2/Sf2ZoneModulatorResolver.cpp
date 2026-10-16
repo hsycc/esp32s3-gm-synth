@@ -10,8 +10,11 @@ namespace {
 constexpr std::size_t kNoZone = std::numeric_limits<std::size_t>::max();
 constexpr std::uint16_t kVelocityAttenuationSourceOper = 0x0502u;
 constexpr std::uint16_t kVelocityFilterSourceOper = 0x0102u;
+constexpr std::uint16_t kChannelPressureSourceOper = 0x000Du;
+constexpr std::uint16_t kModulationWheelSourceOper = 0x0081u;
 constexpr std::uint16_t kInitialAttenuationDestination = 48u;
 constexpr std::uint16_t kInitialFilterFcDestination = 8u;
+constexpr std::uint16_t kVibratoLfoToPitchDestination = 6u;
 constexpr std::uint16_t kReverbSourceOper = 0x00DBu;
 constexpr std::uint16_t kReverbDestination = 16u;
 constexpr std::uint16_t kChorusSourceOper = 0x00DDu;
@@ -34,12 +37,17 @@ struct ModulatorScan {
     std::int32_t velocity_attenuation_amount = 0;
     bool velocity_filter_found = false;
     std::int32_t velocity_filter_amount = 0;
+    bool channel_pressure_vibrato_found = false;
+    std::int32_t channel_pressure_vibrato_amount = 0;
+    bool modulation_wheel_vibrato_found = false;
+    std::int32_t modulation_wheel_vibrato_amount = 0;
     bool reverb_send_found = false;
     std::int32_t reverb_send_amount = 0;
     bool chorus_send_found = false;
     std::int32_t chorus_send_amount = 0;
     std::uint32_t supported_velocity_records = 0;
     std::uint32_t supported_velocity_filter_records = 0;
+    std::uint32_t supported_vibrato_records = 0;
     std::uint32_t supported_effects_send_records = 0;
     std::uint32_t supported_records = 0;
     std::uint32_t unsupported_records = 0;
@@ -227,6 +235,20 @@ bool isIgnoredSf201VelocityFilterCancellation(
            modulator.transform_oper == 0 && modulator.amount == 0;
 }
 
+bool isSupportedChannelPressureVibratoRoute(
+    const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.source_oper == kChannelPressureSourceOper &&
+           modulator.destination_oper == kVibratoLfoToPitchDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
+bool isSupportedModulationWheelVibratoRoute(
+    const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.source_oper == kModulationWheelSourceOper &&
+           modulator.destination_oper == kVibratoLfoToPitchDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
 bool isSupportedReverbSendRoute(const Sf2PdtaReader::Modulator& modulator) {
     return modulator.source_oper == kReverbSourceOper &&
            modulator.destination_oper == kReverbDestination &&
@@ -274,6 +296,16 @@ bool scanModulators(
             scan.supported_velocity_filter_records = saturatingAdd32(
                 scan.supported_velocity_filter_records, 1);
             scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedChannelPressureVibratoRoute(modulator)) {
+            scan.channel_pressure_vibrato_found = true;
+            scan.channel_pressure_vibrato_amount = modulator.amount;
+            scan.supported_vibrato_records = saturatingAdd32(scan.supported_vibrato_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedModulationWheelVibratoRoute(modulator)) {
+            scan.modulation_wheel_vibrato_found = true;
+            scan.modulation_wheel_vibrato_amount = modulator.amount;
+            scan.supported_vibrato_records = saturatingAdd32(scan.supported_vibrato_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
         } else if (isSupportedReverbSendRoute(modulator)) {
             scan.reverb_send_found = true;
             scan.reverb_send_amount = modulator.amount;
@@ -317,6 +349,22 @@ ResolvedZoneModulation combine(
     if (instrument_local.velocity_filter_found) {
         resolved.velocity_to_filter_fc_cents =
             instrument_local.velocity_filter_amount;
+    }
+    if (instrument_global.channel_pressure_vibrato_found) {
+        resolved.channel_pressure_to_vib_lfo_pitch_cents =
+            instrument_global.channel_pressure_vibrato_amount;
+    }
+    if (instrument_local.channel_pressure_vibrato_found) {
+        resolved.channel_pressure_to_vib_lfo_pitch_cents =
+            instrument_local.channel_pressure_vibrato_amount;
+    }
+    if (instrument_global.modulation_wheel_vibrato_found) {
+        resolved.modulation_wheel_to_vib_lfo_pitch_cents =
+            instrument_global.modulation_wheel_vibrato_amount;
+    }
+    if (instrument_local.modulation_wheel_vibrato_found) {
+        resolved.modulation_wheel_to_vib_lfo_pitch_cents =
+            instrument_local.modulation_wheel_vibrato_amount;
     }
     if (instrument_global.reverb_send_found) {
         resolved.reverb_send_amount = instrument_global.reverb_send_amount;
@@ -365,6 +413,38 @@ ResolvedZoneModulation combine(
             preset_filter_amount);
     }
 
+    bool preset_pressure_found = false;
+    std::int32_t preset_pressure_amount = 0;
+    if (preset_global.channel_pressure_vibrato_found) {
+        preset_pressure_found = true;
+        preset_pressure_amount = preset_global.channel_pressure_vibrato_amount;
+    }
+    if (preset_local.channel_pressure_vibrato_found) {
+        preset_pressure_found = true;
+        preset_pressure_amount = preset_local.channel_pressure_vibrato_amount;
+    }
+    if (preset_pressure_found) {
+        resolved.channel_pressure_to_vib_lfo_pitch_cents = saturatingAddI32(
+            resolved.channel_pressure_to_vib_lfo_pitch_cents,
+            preset_pressure_amount);
+    }
+
+    bool preset_modwheel_found = false;
+    std::int32_t preset_modwheel_amount = 0;
+    if (preset_global.modulation_wheel_vibrato_found) {
+        preset_modwheel_found = true;
+        preset_modwheel_amount = preset_global.modulation_wheel_vibrato_amount;
+    }
+    if (preset_local.modulation_wheel_vibrato_found) {
+        preset_modwheel_found = true;
+        preset_modwheel_amount = preset_local.modulation_wheel_vibrato_amount;
+    }
+    if (preset_modwheel_found) {
+        resolved.modulation_wheel_to_vib_lfo_pitch_cents = saturatingAddI32(
+            resolved.modulation_wheel_to_vib_lfo_pitch_cents,
+            preset_modwheel_amount);
+    }
+
     bool preset_reverb_found = false;
     std::int32_t preset_reverb_amount = 0;
     if (preset_global.reverb_send_found) {
@@ -411,6 +491,13 @@ ResolvedZoneModulation combine(
         saturatingAdd32(
             instrument_global.supported_velocity_filter_records,
             instrument_local.supported_velocity_filter_records));
+    const std::uint32_t supported_vibrato = saturatingAdd32(
+        saturatingAdd32(
+            preset_global.supported_vibrato_records,
+            preset_local.supported_vibrato_records),
+        saturatingAdd32(
+            instrument_global.supported_vibrato_records,
+            instrument_local.supported_vibrato_records));
     const std::uint32_t supported_effects = saturatingAdd32(
         saturatingAdd32(
             preset_global.supported_effects_send_records,
@@ -423,6 +510,7 @@ ResolvedZoneModulation combine(
         saturatingAdd32(instrument_global.unsupported_records, instrument_local.unsupported_records));
     resolved.supported_velocity_attenuation_records = clampU16(supported_velocity);
     resolved.supported_velocity_filter_records = clampU16(supported_filter);
+    resolved.supported_vibrato_records = clampU16(supported_vibrato);
     resolved.supported_effects_send_records = clampU16(supported_effects);
     resolved.unsupported_modulator_records = clampU16(unsupported);
     return resolved;
@@ -634,7 +722,9 @@ ZoneModulatorResolveStatus Sf2ZoneModulatorResolver::resolveProgram(
                     saturatingAdd32(
                         resolved.supported_velocity_attenuation_records,
                         resolved.supported_velocity_filter_records),
-                    resolved.supported_effects_send_records));
+                    saturatingAdd32(
+                        resolved.supported_vibrato_records,
+                        resolved.supported_effects_send_records)));
             result->unsupported_records = saturatingAdd32(
                 result->unsupported_records,
                 resolved.unsupported_modulator_records);
