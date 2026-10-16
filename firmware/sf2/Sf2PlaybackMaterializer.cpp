@@ -1,5 +1,6 @@
 #include "Sf2PlaybackMaterializer.h"
 
+#include "Sf2FilterMath.h"
 #include "../voice/PitchMath.h"
 
 #include <algorithm>
@@ -130,9 +131,9 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         return result;
     }
 
-    // Velocity/CC7/CC10/CC11/PitchWheel and CC91/CC93 controller state are
-    // represented by the runtime now. Keep this conservative bit until the
-    // remaining mandatory default filter/LFO-facing modulators are implemented.
+    // Velocity/CC7/CC10/CC11/PitchWheel, velocity->filter and CC91/CC93 are
+    // represented now. Keep the conservative default-modulator bit until the
+    // mandatory channel-pressure/mod-wheel vibrato-LFO routes are implemented.
     std::uint64_t issues = PlaybackIssueDefaultModulatorsPending;
     if ((native.flags & NativeZoneFlagUnknownGenerator) != 0) {
         issues |= PlaybackIssueUnknownGenerator;
@@ -191,16 +192,12 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     if (has_fixed_velocity && (fixed_velocity < 0 || fixed_velocity > 127)) {
         issues |= PlaybackIssueInvalidFixedVelocity;
     }
-    if (differs(native, 33, -12000)) {
-        issues |= PlaybackIssueVolumeEnvelopeDelayPending;
-    }
-    if (differs(native, 35, -12000)) {
-        issues |= PlaybackIssueVolumeEnvelopeHoldPending;
-    }
-    if (differs(native, 39, 0) || differs(native, 40, 0)) {
-        issues |= PlaybackIssueVolumeEnvelopeKeyScalingPending;
-    }
-    if (differs(native, 8, 13500) || differs(native, 9, 0) ||
+
+    // Static cutoff + NoteOn velocity modulation is now represented. Dynamic
+    // mod-envelope/LFO cutoff movement and non-zero resonance remain explicit
+    // until their per-voice DSP semantics are validated.
+    if (output_sample_rate_ != kSf2FilterOutputSampleRate ||
+        native.initialFilterQCb() != 0 ||
         differs(native, 10, 0) || differs(native, 11, 0)) {
         issues |= PlaybackIssueFilterPending;
     }
@@ -310,6 +307,16 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         ? static_cast<std::int16_t>(fixed_velocity)
         : -1;
 
+    candidate.note_on_filter.enabled = true;
+    candidate.note_on_filter.initial_cutoff_cents = std::clamp<std::int32_t>(
+        native.initialFilterFcCents(),
+        kSf2MinFilterCutoffCents,
+        kSf2MaxFilterCutoffCents);
+    candidate.note_on_filter.velocity_to_cutoff_cents =
+        modulation.velocity_to_filter_fc_cents;
+    candidate.note_on_filter.resonance_cb = static_cast<std::int16_t>(
+        std::clamp<std::int32_t>(native.initialFilterQCb(), 0, 960));
+
     candidate.effects_send.enabled = true;
     candidate.effects_send.reverb_sf2_units = static_cast<std::int16_t>(
         std::clamp<std::int32_t>(native.generators.value(16, 0), 0, 1000));
@@ -318,8 +325,14 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     candidate.effects_send.reverb_cc_amount = modulation.reverb_send_amount;
     candidate.effects_send.chorus_cc_amount = modulation.chorus_send_amount;
 
+    candidate.envelope.delay_frames = timecentsToFrames(
+        native.generators.value(33, -12000),
+        output_sample_rate_);
     candidate.envelope.attack_frames = timecentsToFrames(
         native.generators.value(34, -12000),
+        output_sample_rate_);
+    candidate.envelope.hold_frames = timecentsToFrames(
+        native.generators.value(35, -12000),
         output_sample_rate_);
     candidate.envelope.decay_frames = timecentsToFrames(
         native.generators.value(36, -12000),
@@ -330,6 +343,10 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     candidate.envelope.release_frames = timecentsToFrames(
         native.generators.value(38, -12000),
         output_sample_rate_);
+    candidate.envelope_key_scaling.hold_timecents_per_key = static_cast<std::int16_t>(
+        std::clamp<std::int32_t>(native.generators.value(39, 0), -1200, 1200));
+    candidate.envelope_key_scaling.decay_timecents_per_key = static_cast<std::int16_t>(
+        std::clamp<std::int32_t>(native.generators.value(40, 0), -1200, 1200));
 
     if ((issues & kHardIssueMask) == 0 && !candidate.valid()) {
         issues |= PlaybackIssueInvalidSampleAddress;
