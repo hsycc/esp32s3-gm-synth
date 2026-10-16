@@ -16,6 +16,7 @@ idf_component_register(
         "sf2/Sf2PlaybackMaterializer.cpp"
         "sf2/Sf2PlaybackProgramPreparer.cpp"
         "gm/ProgramChangeMailbox.cpp"
+        "gm/MidiChannelState.cpp"
         "gm/PlaybackProgramSnapshot.cpp"
         "gm/ZoneResolver.cpp"
         "voice/PitchMath.cpp"
