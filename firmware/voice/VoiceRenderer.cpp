@@ -1,5 +1,7 @@
 #include "VoiceRenderer.h"
 
+#include "util/SaturatingCounter.h"
+
 #include <algorithm>
 #include <limits>
 #include <utility>
@@ -393,31 +395,31 @@ void VoicePool::recordStartedVoice(std::size_t slot, std::size_t active_before) 
     if (next_start_serial_ != std::numeric_limits<std::uint64_t>::max()) {
         ++next_start_serial_;
     }
-    ++stats_.start_successes;
+    util::saturatingIncrement(stats_.start_successes);
     stats_.active_voices = active_before + 1u;
     stats_.peak_active_voices = std::max(stats_.peak_active_voices, stats_.active_voices);
 }
 
 bool VoicePool::start(const VoiceStartParams& params) {
-    ++stats_.start_attempts;
+    util::saturatingIncrement(stats_.start_attempts);
     const std::size_t active = activeVoiceCount();
 
     // Preserve the M4 hard-cap meaning: a 33rd active voice is a physical
     // pool-capacity failure even if the M6 policy would otherwise steal.
     if (active >= kHardVoiceCap) {
-        ++stats_.start_failures_full;
+        util::saturatingIncrement(stats_.start_failures_full);
         return false;
     }
 
     const std::size_t target = findInactiveSlot();
     if (target >= kHardVoiceCap) {
-        ++stats_.start_failures_full;
+        util::saturatingIncrement(stats_.start_failures_full);
         return false;
     }
 
     if (active < admission_limit_) {
         if (!voices_[target].start(directory_, params)) {
-            ++stats_.start_failures_rejected;
+            util::saturatingIncrement(stats_.start_failures_rejected);
             return false;
         }
         recordStartedVoice(target, active);
@@ -426,11 +428,11 @@ bool VoicePool::start(const VoiceStartParams& params) {
     }
 
     if (!steal_config_.enabled) {
-        ++stats_.start_failures_admission;
+        util::saturatingIncrement(stats_.start_failures_admission);
         return false;
     }
 
-    ++stats_.steal_attempts;
+    util::saturatingIncrement(stats_.steal_attempts);
     const std::size_t steal_tails = activeStealTailCount();
     const std::size_t non_tail_active = active - steal_tails;
 
@@ -438,29 +440,29 @@ bool VoicePool::start(const VoiceStartParams& params) {
     // count. Do not use stealing to admit even more work until natural/normal
     // releases have brought the non-tail population back to the new target.
     if (non_tail_active > admission_limit_) {
-        ++stats_.steal_failures_over_target;
-        ++stats_.start_failures_admission;
+        util::saturatingIncrement(stats_.steal_failures_over_target);
+        util::saturatingIncrement(stats_.start_failures_admission);
         return false;
     }
 
     if (steal_config_.max_tail_voices == 0 ||
         steal_tails >= steal_config_.max_tail_voices) {
-        ++stats_.steal_failures_tail_budget;
-        ++stats_.start_failures_admission;
+        util::saturatingIncrement(stats_.steal_failures_tail_budget);
+        util::saturatingIncrement(stats_.start_failures_admission);
         return false;
     }
 
     const std::size_t victim = chooseStealVictim();
     if (victim >= kHardVoiceCap) {
-        ++stats_.steal_failures_no_victim;
-        ++stats_.start_failures_admission;
+        util::saturatingIncrement(stats_.steal_failures_no_victim);
+        util::saturatingIncrement(stats_.start_failures_admission);
         return false;
     }
 
     // Acquire and validate the incoming SampleRef before changing the victim.
     // A rejected/missing sample must never sacrifice a currently sounding voice.
     if (!voices_[target].start(directory_, params)) {
-        ++stats_.start_failures_rejected;
+        util::saturatingIncrement(stats_.start_failures_rejected);
         return false;
     }
 
@@ -469,17 +471,17 @@ bool VoicePool::start(const VoiceStartParams& params) {
     const std::uint8_t victim_key = voices_[victim].key();
     if (!voices_[victim].beginFastRelease(steal_config_.fade_frames)) {
         voices_[target].reset();
-        ++stats_.steal_failures_no_victim;
-        ++stats_.start_failures_admission;
+        util::saturatingIncrement(stats_.steal_failures_no_victim);
+        util::saturatingIncrement(stats_.start_failures_admission);
         return false;
     }
 
     recordStartedVoice(target, active);
-    ++stats_.steal_successes;
+    util::saturatingIncrement(stats_.steal_successes);
     if (victim_was_releasing) {
-        ++stats_.steals_from_release;
+        util::saturatingIncrement(stats_.steals_from_release);
     } else {
-        ++stats_.steals_from_active;
+        util::saturatingIncrement(stats_.steals_from_active);
     }
     stats_.last_stolen_channel = victim_channel;
     stats_.last_stolen_key = victim_key;
@@ -495,7 +497,7 @@ std::size_t VoicePool::noteOff(std::uint8_t channel, std::uint8_t key) {
             ++matches;
         }
     }
-    stats_.note_off_matches += matches;
+    util::saturatingAdd(stats_.note_off_matches, matches);
     stats_.active_voices = activeVoiceCount();
     stats_.active_steal_tails = activeStealTailCount();
     return matches;
@@ -511,9 +513,9 @@ void VoicePool::renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_co
             continue;
         }
         const VoiceRenderResult result = voice.renderAdd(interleaved_stereo, frame_count);
-        stats_.rendered_voice_frames += result.frames_rendered;
+        util::saturatingAdd(stats_.rendered_voice_frames, result.frames_rendered);
         if (result.finished) {
-            ++stats_.voices_finished;
+            util::saturatingIncrement(stats_.voices_finished);
         }
     }
     stats_.active_voices = activeVoiceCount();
@@ -524,7 +526,7 @@ void VoicePool::allSoundOff() {
     for (Voice& voice : voices_) {
         if (voice.active()) {
             voice.reset();
-            ++stats_.voices_finished;
+            util::saturatingIncrement(stats_.voices_finished);
         }
     }
     stats_.active_voices = 0;

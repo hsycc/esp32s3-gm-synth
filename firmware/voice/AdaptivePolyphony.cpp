@@ -1,5 +1,7 @@
 #include "AdaptivePolyphony.h"
 
+#include "util/SaturatingCounter.h"
+
 #include <algorithm>
 #include <cstdint>
 
@@ -52,7 +54,7 @@ void AdaptivePolyphonyController::reduceOne() {
     stats_.current_limit = voices_.admissionLimit();
     stats_.minimum_limit_observed = std::min(
         stats_.minimum_limit_observed, stats_.current_limit);
-    ++stats_.limit_reductions;
+    util::saturatingIncrement(stats_.limit_reductions);
 }
 
 void AdaptivePolyphonyController::reduceForDeadlineMiss() {
@@ -68,7 +70,7 @@ void AdaptivePolyphonyController::reduceForDeadlineMiss() {
     stats_.current_limit = voices_.admissionLimit();
     stats_.minimum_limit_observed = std::min(
         stats_.minimum_limit_observed, stats_.current_limit);
-    ++stats_.limit_reductions;
+    util::saturatingIncrement(stats_.limit_reductions);
 }
 
 void AdaptivePolyphonyController::recoverOne() {
@@ -79,19 +81,19 @@ void AdaptivePolyphonyController::recoverOne() {
     stats_.current_limit = voices_.admissionLimit();
     stats_.maximum_limit_observed = std::max(
         stats_.maximum_limit_observed, stats_.current_limit);
-    ++stats_.limit_recoveries;
+    util::saturatingIncrement(stats_.limit_recoveries);
 }
 
 std::size_t AdaptivePolyphonyController::observeBlock(
     std::uint32_t render_time_us,
     bool deadline_missed) {
-    ++stats_.blocks_observed;
+    util::saturatingIncrement(stats_.blocks_observed);
     stats_.peak_render_us = std::max(stats_.peak_render_us, render_time_us);
 
     const bool missed = deadline_missed || render_time_us >= config_.block_budget_us;
     if (missed) {
-        ++stats_.deadline_misses;
-        ++stats_.high_pressure_events;
+        util::saturatingIncrement(stats_.deadline_misses);
+        util::saturatingIncrement(stats_.high_pressure_events);
         high_pressure_streak_ = 0;
         recovery_streak_ = 0;
         reduceForDeadlineMiss();
@@ -104,7 +106,7 @@ std::size_t AdaptivePolyphonyController::observeBlock(
             ++high_pressure_streak_;
         }
         if (high_pressure_streak_ >= config_.high_pressure_blocks) {
-            ++stats_.high_pressure_events;
+            util::saturatingIncrement(stats_.high_pressure_events);
             reduceOne();
             high_pressure_streak_ = 0;
         }

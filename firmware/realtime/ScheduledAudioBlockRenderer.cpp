@@ -1,5 +1,7 @@
 #include "ScheduledAudioBlockRenderer.h"
 
+#include "util/SaturatingCounter.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -31,7 +33,7 @@ void ScheduledAudioBlockRenderer::renderSegment(
         return;
     }
     voices_.renderAdd(mix_.data() + (start_frame * kChannels), frame_count);
-    ++stats_.render_segments;
+    util::saturatingIncrement(stats_.render_segments);
 }
 
 void ScheduledAudioBlockRenderer::finalize(std::int16_t* interleaved_stereo) {
@@ -49,7 +51,7 @@ void ScheduledAudioBlockRenderer::finalize(std::int16_t* interleaved_stereo) {
         bool clipped = false;
         interleaved_stereo[index] = saturateToI16(value, &clipped);
         if (clipped) {
-            ++stats_.clipped_samples;
+            util::saturatingIncrement(stats_.clipped_samples);
         }
     }
 }
@@ -81,13 +83,13 @@ void ScheduledAudioBlockRenderer::render(
         // offset. FIFO is inherited from the SPSC queue and scheduler batch.
         while (event_index < batch.count &&
                batch.events[event_index].frame_offset == offset) {
-            ++stats_.events_attempted;
+            util::saturatingIncrement(stats_.events_attempted);
             const bool applied = apply_event_ != nullptr &&
                 apply_event_(apply_context_, batch.events[event_index].event, voices_);
             if (applied) {
-                ++stats_.events_applied;
+                util::saturatingIncrement(stats_.events_applied);
             } else {
-                ++stats_.events_rejected;
+                util::saturatingIncrement(stats_.events_rejected);
             }
             ++event_index;
         }
@@ -98,8 +100,8 @@ void ScheduledAudioBlockRenderer::render(
     }
 
     finalize(interleaved_stereo);
-    ++stats_.blocks_rendered;
-    stats_.output_frames += kFramesPerBlock;
+    util::saturatingIncrement(stats_.blocks_rendered);
+    util::saturatingAdd(stats_.output_frames, static_cast<std::uint64_t>(kFramesPerBlock));
 }
 
 }  // namespace gm_synth::realtime
