@@ -5,16 +5,28 @@ on:
     branches: [main]
     paths:
       - "firmware/realtime/RenderDeadlineMonitor.*"
+      - "firmware/realtime/TimedAudioBlockRenderer.*"
+      - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "firmware/realtime/BlockEventScheduler.*"
+      - "firmware/realtime/RealtimeEventQueue.*"
+      - "firmware/platform/EspRealtimeClock.*"
       - "firmware/voice/AdaptivePolyphony.*"
       - "firmware/voice/VoiceRenderer.*"
       - "tests/realtime/test_render_deadline_monitor.cpp"
+      - "tests/realtime/test_timed_audio_block_renderer.cpp"
       - ".github/workflows/m6-deadline-tests.yml"
   pull_request:
     paths:
       - "firmware/realtime/RenderDeadlineMonitor.*"
+      - "firmware/realtime/TimedAudioBlockRenderer.*"
+      - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "firmware/realtime/BlockEventScheduler.*"
+      - "firmware/realtime/RealtimeEventQueue.*"
+      - "firmware/platform/EspRealtimeClock.*"
       - "firmware/voice/AdaptivePolyphony.*"
       - "firmware/voice/VoiceRenderer.*"
       - "tests/realtime/test_render_deadline_monitor.cpp"
+      - "tests/realtime/test_timed_audio_block_renderer.cpp"
       - ".github/workflows/m6-deadline-tests.yml"
 
 jobs:
@@ -36,3 +48,20 @@ jobs:
             -o build/host-tests/test_render_deadline_monitor
       - name: Run render deadline monitor tests
         run: ./build/host-tests/test_render_deadline_monitor
+      - name: Build timed audio block renderer tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/AdaptivePolyphony.cpp \
+            firmware/realtime/RealtimeEventQueue.cpp \
+            firmware/realtime/BlockEventScheduler.cpp \
+            firmware/realtime/ScheduledAudioBlockRenderer.cpp \
+            firmware/realtime/RenderDeadlineMonitor.cpp \
+            firmware/realtime/TimedAudioBlockRenderer.cpp \
+            tests/realtime/test_timed_audio_block_renderer.cpp \
+            -o build/host-tests/test_timed_audio_block_renderer
+      - name: Run timed audio block renderer tests
+        run: ./build/host-tests/test_timed_audio_block_renderer
