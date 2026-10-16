@@ -16,6 +16,7 @@ enum class EventType : std::uint8_t {
     NoteOff,
     ControlChange,
     ProgramChange,
+    PitchBend,
 };
 
 struct RealtimeEvent {
@@ -24,6 +25,7 @@ struct RealtimeEvent {
     std::uint8_t channel = 0;
     std::uint8_t data1 = 0;
     std::uint8_t data2 = 0;
+    // PitchBend uses the full 14-bit value here (0..16383, center 8192).
     std::uint16_t value = 0;
 
     bool valid() const { return channel < 16; }
