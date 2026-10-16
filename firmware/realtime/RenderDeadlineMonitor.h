@@ -67,7 +67,6 @@ private:
         const std::array<std::uint32_t, kWindowSize>& sorted,
         std::size_t count,
         std::uint32_t percent);
-    static void saturatingIncrement(std::uint64_t& value);
 
     voice::AdaptivePolyphonyController& controller_;
     std::array<std::uint32_t, kWindowSize> durations_us_{};

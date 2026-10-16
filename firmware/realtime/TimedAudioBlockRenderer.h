@@ -43,8 +43,6 @@ public:
     const TimedAudioBlockStats& stats() const { return stats_; }
 
 private:
-    static void saturatingIncrement(std::uint64_t& value);
-
     ScheduledAudioBlockRenderer& renderer_;
     RenderDeadlineMonitor& monitor_;
     RealtimeNowUsFn now_us_ = nullptr;
