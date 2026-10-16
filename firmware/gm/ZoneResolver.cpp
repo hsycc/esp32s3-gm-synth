@@ -1,5 +1,6 @@
 #include "ZoneResolver.h"
 
+#include "sf2/Sf2ModulationMath.h"
 #include "util/SaturatingCounter.h"
 
 #include <algorithm>
@@ -92,6 +93,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
     batch->clear();
     for (std::size_t i = 0; i < program.zone_count; ++i) {
         const PlaybackZone& zone = program.zones[i];
+        // SF2 key/velocity ranges are selected using the incoming NoteOn values;
+        // generator 46/47 overrides are applied only after a zone has matched.
         if (!zone.matches(key, velocity)) {
             continue;
         }
@@ -101,11 +104,16 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             return ZoneResolveStatus::TooManyMatches;
         }
 
+        const std::uint8_t effective_velocity = zone.note_on_gain.enabled &&
+                zone.note_on_gain.fixed_velocity >= 0
+            ? static_cast<std::uint8_t>(zone.note_on_gain.fixed_velocity)
+            : velocity;
+
         voice::VoiceStartParams params{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
         params.key = key;
-        params.velocity = velocity;
+        params.velocity = effective_velocity;
         params.exclusive_class = zone.exclusive_class;
         params.note_instance_id = note_instance_id;
         params.phase_increment_q32 = zone.key_tracking
@@ -117,6 +125,15 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.sample_region = zone.sample_region;
         params.gain_left_q15 = zone.gain_left_q15;
         params.gain_right_q15 = zone.gain_right_q15;
+        if (zone.note_on_gain.enabled) {
+            sf2::noteOnGainQ15(
+                zone.note_on_gain.initial_attenuation_cb,
+                zone.note_on_gain.velocity_to_attenuation_cb,
+                effective_velocity,
+                zone.note_on_gain.pan_sf2_units,
+                &params.gain_left_q15,
+                &params.gain_right_q15);
+        }
         params.envelope = zone.envelope;
         batch->voices[batch->count++] = params;
     }
