@@ -10,6 +10,7 @@ on:
       - "firmware/sample/ProgramSnapshot.*"
       - "firmware/sf2/Sf2ModulationMath.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceRuntimeControl.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
@@ -24,6 +25,7 @@ on:
       - "firmware/sample/ProgramSnapshot.*"
       - "firmware/sf2/Sf2ModulationMath.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceRuntimeControl.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
@@ -122,6 +124,7 @@ jobs:
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/sample/ProgramSnapshot.cpp \
             firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceRuntimeControl.cpp \
             firmware/sf2/Sf2ModulationMath.cpp \
             firmware/gm/MidiChannelState.cpp \
             firmware/gm/PlaybackProgramSnapshot.cpp \

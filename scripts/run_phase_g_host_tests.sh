@@ -18,11 +18,18 @@ COMMON_FLAGS=(
   -Ifirmware
 )
 
+build_and_run() {
+  local output="$1"
+  shift
+  "${CXX}" "${COMMON_FLAGS[@]}" "$@" -o "${BUILD_DIR}/${output}"
+  "${BUILD_DIR}/${output}"
+}
+
 printf 'Phase G host validation\n'
 printf '  compiler: %s\n' "${CXX}"
 printf '  output:   %s\n' "${BUILD_DIR}"
 
-printf '\n[1/11] Validate analyzed realtime zone bounds\n'
+printf '\n[1/12] Validate analyzed realtime zone bounds\n'
 python3 - <<'PY'
 import glob
 import json
@@ -94,11 +101,12 @@ print(
 )
 PY
 
-printf '\n[2/11] Build and run playback-zone runtime tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" -pthread \
+printf '\n[2/12] Build and run playback-zone runtime tests\n'
+build_and_run test_playback_zone_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
   firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
   firmware/sf2/Sf2ModulationMath.cpp \
   firmware/gm/MidiChannelState.cpp \
   firmware/gm/PlaybackProgramSnapshot.cpp \
@@ -106,94 +114,88 @@ printf '\n[2/11] Build and run playback-zone runtime tests\n'
   firmware/realtime/RealtimeEventQueue.cpp \
   firmware/realtime/BlockEventScheduler.cpp \
   firmware/realtime/ScheduledAudioBlockRenderer.cpp \
-  tests/gm/test_playback_zone_runtime.cpp \
-  -o "${BUILD_DIR}/test_playback_zone_runtime"
-"${BUILD_DIR}/test_playback_zone_runtime"
+  tests/gm/test_playback_zone_runtime.cpp
 
-printf '\n[3/11] Build and run random-access PDTA reader tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" \
+printf '\n[3/12] Build and run random-access PDTA reader tests\n'
+build_and_run test_sf2_pdta_reader \
   firmware/sf2/Sf2PdtaReader.cpp \
-  tests/sf2/test_sf2_pdta_reader.cpp \
-  -o "${BUILD_DIR}/test_sf2_pdta_reader"
-"${BUILD_DIR}/test_sf2_pdta_reader"
+  tests/sf2/test_sf2_pdta_reader.cpp
 
-printf '\n[4/11] Build and run native resolved-zone tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" \
+printf '\n[4/12] Build and run native resolved-zone tests\n'
+build_and_run test_sf2_resolved_zone \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
-  tests/sf2/test_sf2_resolved_zone.cpp \
-  -o "${BUILD_DIR}/test_sf2_resolved_zone"
-"${BUILD_DIR}/test_sf2_resolved_zone"
+  tests/sf2/test_sf2_resolved_zone.cpp
 
-printf '\n[5/11] Build and run fixed-point modulation-math tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" \
+printf '\n[5/12] Build and run fixed-point modulation-math tests\n'
+build_and_run test_sf2_modulation_math \
   firmware/sf2/Sf2ModulationMath.cpp \
-  tests/sf2/test_sf2_modulation_math.cpp \
-  -o "${BUILD_DIR}/test_sf2_modulation_math"
-"${BUILD_DIR}/test_sf2_modulation_math"
+  tests/sf2/test_sf2_modulation_math.cpp
 
-printf '\n[6/11] Build and run per-zone modulator resolver tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" \
+printf '\n[6/12] Build and run per-zone modulator resolver tests\n'
+build_and_run test_sf2_zone_modulator_resolver \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ZoneModulatorResolver.cpp \
-  tests/sf2/test_sf2_zone_modulator_resolver.cpp \
-  -o "${BUILD_DIR}/test_sf2_zone_modulator_resolver"
-"${BUILD_DIR}/test_sf2_zone_modulator_resolver"
+  tests/sf2/test_sf2_zone_modulator_resolver.cpp
 
-printf '\n[7/11] Build and run playback materializer tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" \
+printf '\n[7/12] Build and run playback materializer tests\n'
+build_and_run test_sf2_playback_materializer \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
-  tests/sf2/test_sf2_playback_materializer.cpp \
-  -o "${BUILD_DIR}/test_sf2_playback_materializer"
-"${BUILD_DIR}/test_sf2_playback_materializer"
+  tests/sf2/test_sf2_playback_materializer.cpp
 
-printf '\n[8/11] Build and run SF2 note-on modulation runtime tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" -pthread \
+printf '\n[8/12] Build and run SF2 note-on modulation runtime tests\n'
+build_and_run test_sf2_note_on_modulation_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
   firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2ModulationMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
   firmware/gm/MidiChannelState.cpp \
   firmware/gm/PlaybackProgramSnapshot.cpp \
   firmware/gm/ZoneResolver.cpp \
-  tests/sf2/test_sf2_note_on_modulation_runtime.cpp \
-  -o "${BUILD_DIR}/test_sf2_note_on_modulation_runtime"
-"${BUILD_DIR}/test_sf2_note_on_modulation_runtime"
+  tests/sf2/test_sf2_note_on_modulation_runtime.cpp
 
-printf '\n[9/11] Build and run playback program prepare tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" \
+printf '\n[9/12] Build and run playback program prepare tests\n'
+build_and_run test_sf2_playback_program_preparer \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
   firmware/sf2/Sf2ZoneModulatorResolver.cpp \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
   firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
-  tests/sf2/test_sf2_playback_program_preparer.cpp \
-  -o "${BUILD_DIR}/test_sf2_playback_program_preparer"
-"${BUILD_DIR}/test_sf2_playback_program_preparer"
+  tests/sf2/test_sf2_playback_program_preparer.cpp
 
-printf '\n[10/11] Build and run GM MIDI channel-state tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" \
+printf '\n[10/12] Build and run GM MIDI channel-state tests\n'
+build_and_run test_midi_channel_state \
   firmware/gm/MidiChannelState.cpp \
-  tests/gm/test_midi_channel_state.cpp \
-  -o "${BUILD_DIR}/test_midi_channel_state"
-"${BUILD_DIR}/test_midi_channel_state"
+  tests/gm/test_midi_channel_state.cpp
 
-printf '\n[11/11] Build and run channel-state NoteOn runtime tests\n'
-"${CXX}" "${COMMON_FLAGS[@]}" -pthread \
+printf '\n[11/12] Build and run channel-state NoteOn runtime tests\n'
+build_and_run test_midi_channel_note_on -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
   firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
   firmware/sf2/Sf2ModulationMath.cpp \
   firmware/gm/MidiChannelState.cpp \
   firmware/gm/PlaybackProgramSnapshot.cpp \
   firmware/gm/ZoneResolver.cpp \
   firmware/realtime/RealtimeEventQueue.cpp \
-  tests/gm/test_midi_channel_note_on.cpp \
-  -o "${BUILD_DIR}/test_midi_channel_note_on"
-"${BUILD_DIR}/test_midi_channel_note_on"
+  tests/gm/test_midi_channel_note_on.cpp
+
+printf '\n[12/12] Build and run active-voice controller/sustain tests\n'
+build_and_run test_midi_channel_active_voice -pthread \
+  firmware/sample/PublishedSampleDirectory.cpp \
+  firmware/sample/ProgramSnapshot.cpp \
+  firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  firmware/gm/MidiChannelState.cpp \
+  firmware/gm/PlaybackProgramSnapshot.cpp \
+  firmware/gm/ZoneResolver.cpp \
+  tests/gm/test_midi_channel_active_voice.cpp
 
 printf '\nPhase G host validation passed.\n'

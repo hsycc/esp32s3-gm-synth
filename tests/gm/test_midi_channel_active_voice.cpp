@@ -1,7 +1,6 @@
 #include "gm/PlaybackProgramSnapshot.h"
 #include "gm/ZoneResolver.h"
 #include "sample/PublishedSampleDirectory.h"
-#include "sample/SampleTypes.h"
 #include "voice/VoiceRenderer.h"
 
 #include <array>
@@ -134,7 +133,7 @@ bool captureVoice(void* opaque, Voice& voice) {
     snapshot->phase_increment_q32 = voice.phaseIncrementQ32();
     snapshot->gain_left_q15 = voice.gainLeftQ15();
     snapshot->gain_right_q15 = voice.gainRightQ15();
-    return false;  // inspection only; do not count as a runtime update
+    return false;
 }
 
 VoiceSnapshot activeVoice(VoicePool& voices) {
@@ -163,8 +162,6 @@ struct RuntimeFixture {
         assert(programs.setInitialActive(&program));
     }
 };
-
-constexpr std::array<std::int16_t, 16> RuntimeFixture::pcm;
 
 void testLiveGainPanAndPitchUpdateAlreadySoundingVoice() {
     RuntimeFixture f;
@@ -262,8 +259,8 @@ void testResetControllersReleasesSustainAndRecentersActivePitch() {
 
     assert(f.applier.apply(cc(121, 0), f.voices));
     const auto& state = f.applier.channelState(2);
-    assert(state.volume == 80);   // CC121 preserves Channel Volume
-    assert(state.pan == 32);     // and Pan
+    assert(state.volume == 80);
+    assert(state.pan == 32);
     assert(state.expression == 127);
     assert(!state.sustainDown());
     assert(state.pitch_bend == state.kPitchBendCenter);
@@ -271,8 +268,8 @@ void testResetControllersReleasesSustainAndRecentersActivePitch() {
 
     const VoiceSnapshot after = activeVoice(f.voices);
     assert(after.phase_increment_q32 == kPhaseOneQ32);
-    assert(after.gain_left_q15 < kQ15Unity);  // volume=80 still applies
-    assert(after.gain_right_q15 == 0);        // pan=32 still applies
+    assert(after.gain_left_q15 < kQ15Unity);
+    assert(after.gain_right_q15 == 0);
     assert(f.applier.stats().sustain_releases == 1);
 
     std::array<std::int32_t, 12> release{};
