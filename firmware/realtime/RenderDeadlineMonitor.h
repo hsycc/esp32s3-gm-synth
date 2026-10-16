@@ -32,6 +32,8 @@ struct RenderTimingSnapshot {
 // O(1) audio-side render timing recorder feeding AdaptivePolyphonyController.
 // No allocation, lock, sorting or I/O occurs in observeBlock(). snapshot() is
 // intended for the control/reporting domain and uses only fixed stack storage.
+// Do not call snapshot() concurrently with observeBlock() without external
+// synchronization; currentAdmissionLimit() is the O(1) audio-safe accessor.
 //
 // QEMU timing is useful as a regression baseline only. Physical N16R8 timing
 // remains authoritative for CPU headroom, I2S deadlines and stable polyphony.
@@ -45,6 +47,10 @@ public:
     std::size_t observeBlock(
         std::uint32_t render_time_us,
         bool deadline_missed = false);
+
+    std::size_t currentAdmissionLimit() const {
+        return controller_.stats().current_limit;
+    }
 
     RenderTimingSnapshot snapshot() const;
     const RenderDeadlineStats& stats() const { return stats_; }
