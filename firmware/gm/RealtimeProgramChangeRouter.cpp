@@ -13,9 +13,61 @@ std::uint32_t RealtimeProgramChangeRouter::allocateProgramToken() {
     return token;
 }
 
+bool RealtimeProgramChangeRouter::publishProgramRequest(
+    std::uint8_t channel,
+    std::uint8_t program) {
+    if (channel >= MidiChannelStateBank::kMidiChannels || program > 127) {
+        util::saturatingIncrement(stats_.requests_rejected);
+        return false;
+    }
+
+    ProgramChangeRequest request{};
+    request.channel = channel;
+    request.bank = events_.channelStates().programBank(channel);
+    request.program = program;
+    request.token = allocateProgramToken();
+    if (!handoff_.publish(request)) {
+        util::saturatingIncrement(stats_.requests_rejected);
+        return false;
+    }
+
+    util::saturatingIncrement(stats_.requests_published);
+    return true;
+}
+
+bool RealtimeProgramChangeRouter::applyGmReset(voice::VoicePool& voices) {
+    // GM System On is intentionally bounded on the audio side: stop the current
+    // voices, reset 16 small channel-state records, and publish at most one
+    // compact latest-wins Program identity per channel. All SF2 parsing/sample
+    // loading remains in the control task.
+    voices.allSoundOff();
+    events_.channelStates().resetGm();
+
+    bool success = true;
+    for (std::uint8_t channel = 0;
+         channel < MidiChannelStateBank::kMidiChannels;
+         ++channel) {
+        if (publishProgramRequest(channel, 0)) {
+            util::saturatingIncrement(stats_.gm_reset_program_requests);
+        } else {
+            success = false;
+        }
+    }
+    return success;
+}
+
 bool RealtimeProgramChangeRouter::apply(
     const realtime::RealtimeEvent& event,
     voice::VoicePool& voices) {
+    if (event.type == realtime::EventType::GmReset) {
+        util::saturatingIncrement(stats_.gm_reset_events);
+        if (!event.valid()) {
+            util::saturatingIncrement(stats_.requests_rejected);
+            return false;
+        }
+        return applyGmReset(voices);
+    }
+
     if (event.type != realtime::EventType::ProgramChange) {
         return events_.apply(event, voices);
     }
@@ -32,18 +84,7 @@ bool RealtimeProgramChangeRouter::apply(
         return false;
     }
 
-    ProgramChangeRequest request{};
-    request.channel = event.channel;
-    request.bank = state.selectedBank();
-    request.program = event.data1;
-    request.token = allocateProgramToken();
-    if (!handoff_.publish(request)) {
-        util::saturatingIncrement(stats_.requests_rejected);
-        return false;
-    }
-
-    util::saturatingIncrement(stats_.requests_published);
-    return true;
+    return publishProgramRequest(event.channel, event.data1);
 }
 
 bool RealtimeProgramChangeRouter::callback(
