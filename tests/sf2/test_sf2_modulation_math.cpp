@@ -8,6 +8,7 @@ using gm_synth::sf2::attenuationCbToGainQ15;
 using gm_synth::sf2::channelEffectsSendSf2Units;
 using gm_synth::sf2::controllerToEffectsSendSf2Units;
 using gm_synth::sf2::noteOnGainQ15;
+using gm_synth::sf2::positiveLinearToAmount;
 using gm_synth::sf2::velocityToAttenuationCb;
 using gm_synth::voice::kQ15Unity;
 
@@ -35,6 +36,14 @@ void test_default_velocity_curve_matches_sf2_reference_points() {
     CHECK(velocityToAttenuationCb(32, 0) == 0);
     // Preset-additive modulation can make the effective route signed.
     CHECK(velocityToAttenuationCb(0, -120) == -120);
+}
+
+void test_positive_linear_controller_uses_128_step_domain() {
+    CHECK(positiveLinearToAmount(0, 50) == 0);
+    CHECK(positiveLinearToAmount(64, 50) == 25);
+    CHECK(positiveLinearToAmount(127, 50) == 50);
+    CHECK(positiveLinearToAmount(64, -50) == -25);
+    CHECK(positiveLinearToAmount(127, 200) == 198);
 }
 
 void test_centibel_gain_is_fixed_point_and_clamped() {
@@ -82,6 +91,7 @@ void test_effects_send_controller_is_positive_unipolar_and_clamped() {
 
 int main() {
     test_default_velocity_curve_matches_sf2_reference_points();
+    test_positive_linear_controller_uses_128_step_domain();
     test_centibel_gain_is_fixed_point_and_clamped();
     test_note_on_gain_sums_before_clamp_and_then_pans();
     test_effects_send_controller_is_positive_unipolar_and_clamped();
