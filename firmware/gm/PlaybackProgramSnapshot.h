@@ -50,21 +50,28 @@ struct PlaybackZone {
 };
 
 struct PlaybackProgramSnapshot {
-    // The storage is caller-owned, so a generous fixed cap does not bloat the
-    // exchange itself. NoteOn output remains capped by VoicePool::kHardVoiceCap.
-    static constexpr std::size_t kMaxZones = 128;
+    // This is a realtime scan bound, not an inline-storage size. The checked-in
+    // SF2 analysis manifests are validated against it in CI. GeneralUser's
+    // largest currently resolved program has 200 zones, so 256 leaves bounded
+    // headroom without inflating every per-channel snapshot object.
+    static constexpr std::size_t kMaxZones = 256;
 
     std::uint8_t channel = 0;
     std::uint16_t bank = 0;
     std::uint8_t program = 0;
     std::uint32_t token = 0;
     std::uint32_t bank_generation = 0;
+
+    // Caller-owned immutable storage. The pointed-to zone array must remain
+    // alive and unchanged from READY publication until the snapshot is retired
+    // and acknowledged by the control domain. This mirrors ProgramSnapshot's
+    // caller-owned lifetime while keeping the exchange itself pointer-sized.
+    const PlaybackZone* zones = nullptr;
     std::uint16_t zone_count = 0;
-    std::array<PlaybackZone, kMaxZones> zones{};
 
     bool valid() const {
         if (channel >= 16 || token == 0 || bank_generation == 0 ||
-            zone_count > zones.size()) {
+            zone_count > kMaxZones || (zone_count != 0 && zones == nullptr)) {
             return false;
         }
         for (std::size_t i = 0; i < zone_count; ++i) {
@@ -91,8 +98,8 @@ struct PlaybackProgramExchangeStats {
 };
 
 // Playback counterpart to sample::ProgramSnapshotExchange. It intentionally
-// contains pointers only; large zone arrays live in caller-owned immutable
-// snapshots and may be prepared outside the realtime domain.
+// contains pointers only; zone arrays and snapshots are caller-owned immutable
+// objects prepared outside the realtime domain.
 class PlaybackProgramSnapshotExchange {
 public:
     static constexpr std::size_t kMidiChannels = 16;
