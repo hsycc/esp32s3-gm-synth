@@ -24,6 +24,7 @@ enum ChannelControlAction : std::uint32_t {
     ChannelControlAllSoundOff = 1u << 7,
     ChannelControlResetControllers = 1u << 8,
     ChannelControlAllNotesOff = 1u << 9,
+    ChannelControlVibratoChanged = 1u << 10,
 };
 
 struct MidiChannelState {
@@ -33,6 +34,8 @@ struct MidiChannelState {
     std::uint8_t bank_lsb = 0;
     std::uint8_t program = 0;
 
+    std::uint8_t modulation_wheel = 0;
+    std::uint8_t channel_pressure = 0;
     std::uint8_t volume = 100;
     std::uint8_t pan = 64;
     std::uint8_t expression = 127;
@@ -70,6 +73,7 @@ struct MidiChannelState {
     // accepted as no-ops so a MIDI stream does not become invalid merely
     // because the current GM runtime has no destination for that controller.
     std::uint32_t applyControlChange(std::uint8_t controller, std::uint8_t value);
+    bool applyChannelPressure(std::uint8_t pressure);
     bool applyPitchBend(std::uint16_t value14);
     bool applyProgramChange(std::uint8_t new_program);
 };
@@ -87,6 +91,7 @@ public:
         std::uint8_t channel,
         std::uint8_t controller,
         std::uint8_t value);
+    bool applyChannelPressure(std::uint8_t channel, std::uint8_t pressure);
     bool applyPitchBend(std::uint8_t channel, std::uint16_t value14);
     bool applyProgramChange(std::uint8_t channel, std::uint8_t program);
 
