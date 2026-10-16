@@ -10,7 +10,7 @@ Connect raw realtime MIDI NoteOn/NoteOff events to prepared SF2 playback metadat
 - Add a separate immutable `gm::PlaybackProgramSnapshot` referencing caller-owned prepared playback zones.
 - Bound realtime scanning to 256 zones per prepared program and each NoteOn result to the existing 32-Voice hard cap.
 - Keep zone backing arrays outside the snapshot object; their lifetime extends from READY publication through retire acknowledgement.
-- Validate every checked-in `*.analysis.json` program against the realtime zone bound in CI so bank changes cannot silently exceed it.
+- Validate every checked-in `*.analysis.json` program against both the 256-zone realtime scan bound and `VoicePool::kHardVoiceCap` for maximum simultaneous key/velocity overlap.
 - Match key and velocity ranges in the audio domain using a fixed scan only.
 - Carry SF2 `exclusiveClass` into `VoiceStartParams`.
 - Assign one shared non-zero `note_instance_id` to every layer produced by one logical NoteOn.
@@ -19,7 +19,7 @@ Connect raw realtime MIDI NoteOn/NoteOff events to prepared SF2 playback metadat
 - Provide a compatibility coordinator so residency READY and playback READY must identify the same channel/bank/program/token/bank-generation before block-boundary commit.
 - Regression-test the complete `RealtimeEvent -> ZoneResolver -> VoicePool -> render` path on Host CI.
 
-The current checked-in GeneralUser subset already contains 200-zone piano programs, so the previous 128-zone assumption was invalid. The 256-zone bound is therefore a tested product constraint rather than an arbitrary inline-array size.
+The current checked-in GeneralUser subset already contains 200-zone piano programs, so the previous 128-zone assumption was invalid. The 256-zone bound is therefore a tested product constraint rather than an arbitrary inline-array size. The manifest gate also prevents a future bank from requiring more simultaneous layers than the 32-Voice runtime can represent for one NoteOn.
 
 ## Deliberately not in Phase F
 
