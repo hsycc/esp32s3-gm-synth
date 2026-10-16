@@ -17,6 +17,7 @@ enum class ProgramChangeServiceStatus : std::uint8_t {
     TransitionBusy,
     InvalidWorkspace,
     NoActiveResidencySnapshot,
+    PresetUnavailable,
     PlaybackPrepareFailed,
     ResidencyPrepareFailed,
     PlaybackPublishInvariantFailed,
@@ -70,6 +71,7 @@ struct ProgramChangeControlServiceStats {
     std::uint64_t service_attempts = 0;
     std::uint64_t service_successes = 0;
     std::uint64_t busy_deferrals = 0;
+    std::uint64_t preset_unavailable_drops = 0;
     std::uint64_t playback_prepare_failures = 0;
     std::uint64_t residency_prepare_failures = 0;
     std::uint64_t publish_invariant_failures = 0;
