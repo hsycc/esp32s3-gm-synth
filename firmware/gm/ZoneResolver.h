@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MidiChannelState.h"
 #include "PlaybackProgramSnapshot.h"
 #include "realtime/RealtimeEventQueue.h"
 
@@ -30,8 +31,21 @@ struct ResolvedVoiceBatch {
 // conversion. The scan is bounded by PlaybackProgramSnapshot::kMaxZones.
 class ZoneResolver {
 public:
+    // Compatibility path used by existing direct tests/callers. It applies only
+    // prepared zone state, exactly as before MIDI channel-state integration.
     ZoneResolveStatus resolveNoteOn(
         const PlaybackProgramSnapshot& program,
+        std::uint8_t channel,
+        std::uint8_t key,
+        std::uint8_t velocity,
+        std::uint32_t note_instance_id,
+        ResolvedVoiceBatch* batch) const;
+
+    // Production path: after raw zone selection, apply effective velocity plus
+    // current CC7/10/11 and Pitch Bend/RPN state before Voice::start().
+    ZoneResolveStatus resolveNoteOn(
+        const PlaybackProgramSnapshot& program,
+        const MidiChannelState& channel_state,
         std::uint8_t channel,
         std::uint8_t key,
         std::uint8_t velocity,
@@ -43,11 +57,22 @@ public:
     static std::uint64_t transposeSemitones(
         std::uint64_t root_phase_increment_q32,
         int semitone_delta);
+
+    // Fractional-cent companion used for channel Pitch Bend. The implementation
+    // uses a 100-entry Q20 cent-ratio table plus the semitone path above.
+    static std::uint64_t transposeCents(
+        std::uint64_t root_phase_increment_q32,
+        int cents_delta);
+
+    static int pitchBendCents(const MidiChannelState& state);
 };
 
 struct RealtimeProgramEventStats {
     std::uint64_t note_on_events = 0;
     std::uint64_t note_off_events = 0;
+    std::uint64_t control_change_events = 0;
+    std::uint64_t pitch_bend_events = 0;
+    std::uint64_t controller_state_changes = 0;
     std::uint64_t unsupported_events = 0;
     std::uint64_t invalid_events = 0;
     std::uint64_t missing_active_program = 0;
@@ -58,9 +83,9 @@ struct RealtimeProgramEventStats {
     std::uint64_t voice_start_failures = 0;
 };
 
-// Production-shaped M6 event adapter: raw NoteOn/NoteOff -> active immutable
-// playback snapshot -> resolved VoiceStartParams -> VoicePool. All layers from
-// one logical NoteOn receive the same non-zero note_instance_id.
+// Production-shaped event adapter. MIDI channel state is fixed-size and owned
+// by the audio-side applier, so sample-accurate CC/Pitch Bend events update the
+// exact state observed by subsequent NoteOn events without allocation or locks.
 class RealtimeProgramEventApplier {
 public:
     explicit RealtimeProgramEventApplier(PlaybackProgramSnapshotExchange& programs)
@@ -74,11 +99,16 @@ public:
         voice::VoicePool& voices);
 
     const RealtimeProgramEventStats& stats() const { return stats_; }
+    const MidiChannelState& channelState(std::uint8_t channel) const {
+        return channel_states_.channel(channel);
+    }
+    MidiChannelStateBank& channelStates() { return channel_states_; }
 
 private:
     std::uint32_t allocateNoteInstanceId();
 
     PlaybackProgramSnapshotExchange& programs_;
+    MidiChannelStateBank channel_states_{};
     ZoneResolver resolver_{};
     ResolvedVoiceBatch batch_{};
     std::uint32_t next_note_instance_id_ = 1;
