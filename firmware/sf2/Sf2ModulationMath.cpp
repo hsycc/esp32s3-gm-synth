@@ -79,6 +79,17 @@ std::int32_t negativeConcaveToAmount(
     return -static_cast<std::int32_t>((-scaled + 16383) / 32767);
 }
 
+std::int32_t positiveLinearToAmount(
+    std::uint8_t value,
+    std::int32_t amount) {
+    const std::int64_t scaled =
+        static_cast<std::int64_t>(std::min<unsigned>(value, 127u)) * amount;
+    if (scaled >= 0) {
+        return static_cast<std::int32_t>((scaled + 64) / 128);
+    }
+    return -static_cast<std::int32_t>((-scaled + 64) / 128);
+}
+
 std::int32_t velocityToAttenuationCb(
     std::uint8_t velocity,
     std::int32_t amount_cb) {
@@ -107,15 +118,7 @@ std::int32_t controllerToPanSf2Units(
 std::int32_t controllerToEffectsSendSf2Units(
     std::uint8_t value,
     std::int32_t amount) {
-    // Positive-unipolar linear SF2 source. The specification maps MIDI 127 to
-    // 127/128 of the route amount, matching the same 128-step controller model
-    // used by other linear unipolar modulators.
-    const std::int64_t scaled =
-        static_cast<std::int64_t>(std::min<unsigned>(value, 127u)) * amount;
-    if (scaled >= 0) {
-        return static_cast<std::int32_t>((scaled + 64) / 128);
-    }
-    return -static_cast<std::int32_t>((-scaled + 64) / 128);
+    return positiveLinearToAmount(value, amount);
 }
 
 std::int32_t channelEffectsSendSf2Units(
