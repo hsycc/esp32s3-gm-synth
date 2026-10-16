@@ -14,12 +14,10 @@ void TimedAudioBlockRenderer::saturatingIncrement(std::uint64_t& value) {
 TimedRenderMeasurement TimedAudioBlockRenderer::renderMeasured(
     std::uint64_t block_start_frame,
     std::int16_t* interleaved_stereo) {
-    TimedRenderMeasurement measurement{};
-
     if (now_us_ == nullptr) {
         renderer_.render(block_start_frame, interleaved_stereo);
         saturatingIncrement(stats_.clock_faults);
-        return measurement;
+        return TimedRenderMeasurement{};
     }
 
     const std::uint64_t start_us = now_us_(clock_context_);
@@ -28,7 +26,7 @@ TimedRenderMeasurement TimedAudioBlockRenderer::renderMeasured(
 
     if (end_us < start_us) {
         saturatingIncrement(stats_.clock_faults);
-        return measurement;
+        return TimedRenderMeasurement{};
     }
 
     std::uint64_t elapsed_us = end_us - start_us;
@@ -37,11 +35,10 @@ TimedRenderMeasurement TimedAudioBlockRenderer::renderMeasured(
         saturatingIncrement(stats_.duration_clamps);
     }
 
-    measurement.timing_valid = true;
-    measurement.render_time_us = static_cast<std::uint32_t>(elapsed_us);
-    stats_.last_render_us = measurement.render_time_us;
+    const std::uint32_t render_time_us = static_cast<std::uint32_t>(elapsed_us);
+    stats_.last_render_us = render_time_us;
     saturatingIncrement(stats_.blocks_timed);
-    return measurement;
+    return TimedRenderMeasurement{true, render_time_us};
 }
 
 std::size_t TimedAudioBlockRenderer::observeMeasurement(
