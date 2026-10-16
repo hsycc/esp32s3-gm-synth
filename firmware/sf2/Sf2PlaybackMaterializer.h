@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Sf2ResolvedZone.h"
+#include "Sf2ZoneModulatorResolver.h"
 #include "../gm/PlaybackProgramSnapshot.h"
 
 #include <cstdint>
@@ -17,9 +18,9 @@ enum class PlaybackMaterializationStatus : std::uint8_t {
 enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueNone = 0,
 
-    // The current engine has not implemented the mandatory SF2 default
-    // modulator set yet. A generator-only zone can therefore be previewed, but
-    // must not be advertised as fully SoundFont-qualified.
+    // Velocity->attenuation is now resolved explicitly. The remaining mandatory
+    // realtime SF2 defaults (CC7/10/11/91/93, pitch wheel/RPN and LFO-facing
+    // sources) still keep a zone in Preview until channel-state support lands.
     PlaybackIssueDefaultModulatorsPending = std::uint64_t{1} << 0,
     PlaybackIssueCustomModulatorsPending = std::uint64_t{1} << 1,
     PlaybackIssueUnknownGenerator = std::uint64_t{1} << 2,
@@ -45,6 +46,8 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueModEnvelopePending = std::uint64_t{1} << 16,
     PlaybackIssueLfoPending = std::uint64_t{1} << 17,
     PlaybackIssueEffectsSendPending = std::uint64_t{1} << 18,
+    // Retained as a diagnostics bit for callers using the conservative legacy
+    // materialize(native, output) overload without per-zone modulator state.
     PlaybackIssueFixedVelocityPending = std::uint64_t{1} << 19,
 
     // Static pan is materialized with the current lightweight linear balance
@@ -76,8 +79,15 @@ public:
     explicit Sf2PlaybackMaterializer(std::uint32_t output_sample_rate = 44100)
         : output_sample_rate_(output_sample_rate) {}
 
+    // Conservative compatibility overload. It assumes file-defined modulators
+    // are unsupported because no resolved route information was supplied.
     PlaybackMaterializationResult materialize(
         const NativeResolvedZone& native,
+        gm::PlaybackZone* output) const;
+
+    PlaybackMaterializationResult materialize(
+        const NativeResolvedZone& native,
+        const ResolvedZoneModulation& modulation,
         gm::PlaybackZone* output) const;
 
 private:
