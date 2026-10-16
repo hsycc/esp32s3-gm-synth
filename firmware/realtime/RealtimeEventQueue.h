@@ -5,6 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#if defined(ESP_PLATFORM)
+#include "xtensa/config/core-isa.h"
+#endif
+
 namespace gm_synth::realtime {
 
 enum class EventType : std::uint8_t {
@@ -26,9 +30,20 @@ struct RealtimeEvent {
 };
 
 static_assert(sizeof(RealtimeEvent) <= 16, "RealtimeEvent must remain compact");
+
+// libstdc++'s std::atomic<T>::is_always_lock_free is conservative on the
+// ESP-IDF Xtensa toolchain even though ESP-IDF provides 32-bit atomic builtins
+// and ESP32-S3 has the required hardware instructions. Gate the actual target
+// capability instead of rejecting a supported target because of that trait.
+// RealtimeEventQueue instances must remain in internal RAM, not PSRAM.
+#if defined(ESP_PLATFORM)
+static_assert(XCHAL_HAVE_S32C1I == 1, "M5 requires ESP32-S3 32-bit atomic CAS support");
+static_assert(XCHAL_HAVE_RELEASE_SYNC == 1, "M5 requires Xtensa acquire/release sync support");
+#else
 static_assert(
     std::atomic<std::uint32_t>::is_always_lock_free,
-    "M5 realtime queue requires lock-free 32-bit atomics");
+    "M5 host tests require lock-free 32-bit atomics");
+#endif
 
 struct RealtimeEventQueueStats {
     std::uint32_t submitted = 0;
@@ -41,6 +56,11 @@ struct RealtimeEventQueueStats {
 
 // Single-producer/single-consumer bounded ring. Producer timestamps must be
 // nondecreasing so the audio consumer never sorts or allocates.
+//
+// Placement contract: keep this object in internal RAM. ESP32-S3 S32C1I is a
+// correct realtime primitive for internal memory; PSRAM atomic access has a
+// different ESP-IDF workaround path and is intentionally outside this queue's
+// hot-path contract.
 class RealtimeEventQueue {
 public:
     static constexpr std::size_t kCapacity = 128;
