@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <type_traits>
 
 namespace {
 
@@ -19,10 +20,16 @@ using gm_synth::realtime::RealtimeEventQueue;
 using gm_synth::realtime::RenderDeadlineMonitor;
 using gm_synth::realtime::ScheduledAudioBlockRenderer;
 using gm_synth::realtime::TimedAudioBlockRenderer;
+using gm_synth::realtime::TimedRenderMeasurement;
 using gm_synth::sample::PublishedSampleDirectory;
 using gm_synth::voice::AdaptivePolyphonyConfig;
 using gm_synth::voice::AdaptivePolyphonyController;
 using gm_synth::voice::VoicePool;
+
+static_assert(!std::is_copy_constructible_v<TimedRenderMeasurement>);
+static_assert(!std::is_copy_assignable_v<TimedRenderMeasurement>);
+static_assert(!std::is_move_constructible_v<TimedRenderMeasurement>);
+static_assert(!std::is_move_assignable_v<TimedRenderMeasurement>);
 
 struct FakeClock {
     std::array<std::uint64_t, 4> values{};
