@@ -92,8 +92,8 @@ struct NativeResolvedZone {
 
     NativeGeneratorState generators{};
     std::uint64_t ignored_preset_generator_mask = 0;
-    std::uint16_t preset_modulator_records = 0;
-    std::uint16_t instrument_modulator_records = 0;
+    std::uint32_t preset_modulator_records = 0;
+    std::uint32_t instrument_modulator_records = 0;
     std::uint32_t flags = NativeZoneFlagNone;
 
     std::int32_t rootKey() const {
