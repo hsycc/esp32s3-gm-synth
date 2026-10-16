@@ -17,6 +17,10 @@ enum class EventType : std::uint8_t {
     ControlChange,
     ProgramChange,
     PitchBend,
+    // A MIDI decoder may translate the GM System On SysEx message into this
+    // compact system-level event before it enters the realtime queue. The audio
+    // side performs only bounded state reset + Program Change handoff work.
+    GmReset,
 };
 
 struct RealtimeEvent {
