@@ -10,6 +10,7 @@ using gm_synth::gm::ChannelControlBankChanged;
 using gm_synth::gm::ChannelControlGainChanged;
 using gm_synth::gm::ChannelControlPanChanged;
 using gm_synth::gm::ChannelControlPitchRangeChanged;
+using gm_synth::gm::ChannelControlResetControllers;
 using gm_synth::gm::ChannelControlRpnSelectionChanged;
 using gm_synth::gm::ChannelControlSustainChanged;
 using gm_synth::gm::MidiChannelState;
@@ -62,7 +63,6 @@ void testPitchBendSensitivityRpn() {
     MidiChannelState state{};
     state.resetAll();
 
-    // Data Entry is ignored until RPN 0,0 is selected.
     assert(state.applyControlChange(6, 12) == 0);
     assert(state.pitch_bend_range_semitones == 2);
 
@@ -75,7 +75,6 @@ void testPitchBendSensitivityRpn() {
     assert(state.pitch_bend_range_semitones == 12);
     assert(state.pitch_bend_range_cents == 50);
 
-    // Cents are bounded to the meaningful 0..99 range.
     assert((state.applyControlChange(38, 127) & ChannelControlPitchRangeChanged) != 0);
     assert(state.pitch_bend_range_cents == 99);
 
@@ -84,18 +83,52 @@ void testPitchBendSensitivityRpn() {
     assert((state.applyControlChange(97, 0) & ChannelControlPitchRangeChanged) != 0);
     assert(state.pitch_bend_range_semitones == 12);
 
-    // RPN null disables Data Entry until a new parameter is selected.
     state.applyControlChange(101, 127);
     state.applyControlChange(100, 127);
     assert(state.rpnNull());
     assert(state.applyControlChange(6, 3) == 0);
     assert(state.pitch_bend_range_semitones == 12);
 
-    // NRPN selection also prevents RPN data entry from mutating bend range.
     state.applyControlChange(99, 1);
     state.applyControlChange(98, 2);
     assert(state.applyControlChange(6, 7) == 0);
     assert(state.pitch_bend_range_semitones == 12);
+}
+
+void testResetAllControllersPreservesMixButResetsPerformanceState() {
+    MidiChannelState state{};
+    state.resetAll();
+    state.applyControlChange(0, 3);
+    state.applyControlChange(32, 4);
+    state.applyProgramChange(22);
+    state.applyControlChange(7, 77);
+    state.applyControlChange(10, 31);
+    state.applyControlChange(11, 45);
+    state.applyControlChange(64, 127);
+    state.applyControlChange(91, 55);
+    state.applyControlChange(93, 66);
+    state.applyControlChange(101, 0);
+    state.applyControlChange(100, 0);
+    state.applyControlChange(6, 12);
+    state.applyControlChange(38, 50);
+    assert(state.applyPitchBend(16383));
+
+    const std::uint32_t action = state.applyControlChange(121, 0);
+    assert((action & ChannelControlResetControllers) != 0);
+    assert((action & ChannelControlGainChanged) != 0);
+    assert((action & ChannelControlSustainChanged) != 0);
+    assert(state.selectedBank() == ((3u << 7u) | 4u));
+    assert(state.program == 22);
+    assert(state.volume == 77);
+    assert(state.pan == 31);
+    assert(state.reverb_send == 55);
+    assert(state.chorus_send == 66);
+    assert(state.expression == 127);
+    assert(!state.sustainDown());
+    assert(state.pitch_bend == MidiChannelState::kPitchBendCenter);
+    assert(state.pitch_bend_range_semitones == 12);
+    assert(state.pitch_bend_range_cents == 50);
+    assert(state.rpnNull());
 }
 
 void testPitchBendAndProgramValueValidation() {
@@ -134,6 +167,7 @@ int main() {
     testGmDefaults();
     testBankVolumePanExpressionAndSustain();
     testPitchBendSensitivityRpn();
+    testResetAllControllersPreservesMixButResetsPerformanceState();
     testPitchBendAndProgramValueValidation();
     testChannelBankIsIndependentAcross16Channels();
     std::cout << "GM MIDI channel-state host checks passed\n";
