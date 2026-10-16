@@ -125,6 +125,7 @@ jobs:
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
             firmware/sf2/Sf2PdtaReader.cpp \
             firmware/sf2/Sf2ResolvedZone.cpp \
+            firmware/sf2/Sf2ZoneModulatorResolver.cpp \
             firmware/voice/PitchMath.cpp \
             firmware/sf2/Sf2PlaybackMaterializer.cpp \
             firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
