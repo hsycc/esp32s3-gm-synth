@@ -84,6 +84,19 @@ ProgramChangeServiceResult ProgramChangeControlService::serviceChannel(
     result.playback_prepare = playback_preparer_.prepare(pdta_, playback_request);
     if (!result.playback_prepare.ok()) {
         util::saturatingIncrement(stats_.playback_prepare_failures);
+
+        // A missing preset is deterministic for the currently loaded SF2 bank.
+        // Keeping it pending would make the control task retry forever (notably
+        // GM Channel 10 when a bank has no SoundFont bank-128 drum preset).
+        // Consume this request; a later explicit Program Change or bank reload
+        // can submit a new token if the desired preset becomes available.
+        if (result.playback_prepare.resolve_status == sf2::ResolveProgramStatus::PresetNotFound) {
+            (void)mailbox_.clear(channel);
+            util::saturatingIncrement(stats_.preset_unavailable_drops);
+            result.status = ProgramChangeServiceStatus::PresetUnavailable;
+            return result;
+        }
+
         result.status = ProgramChangeServiceStatus::PlaybackPrepareFailed;
         return result;
     }
