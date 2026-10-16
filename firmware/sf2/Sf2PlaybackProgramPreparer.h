@@ -2,6 +2,7 @@
 
 #include "Sf2PlaybackMaterializer.h"
 #include "Sf2ResolvedZone.h"
+#include "Sf2ZoneModulatorResolver.h"
 #include "../sample/SampleResidencyManager.h"
 
 #include <cstddef>
@@ -12,7 +13,7 @@ namespace gm_synth::sf2 {
 enum class PlaybackPreparePolicy : std::uint8_t {
     // Require every zone to be exact for the current runtime. With the current
     // engine this intentionally rejects normal SF2 banks until mandatory
-    // default modulators and the remaining DSP semantics are implemented.
+    // channel-state/default modulators and the remaining DSP semantics land.
     StrictQualified = 0,
     // Produce a playable snapshot when every zone is structurally representable
     // while preserving the union of qualification issues for diagnostics.
@@ -23,6 +24,7 @@ enum class PlaybackPrepareStatus : std::uint8_t {
     Ok = 0,
     InvalidArgument,
     ResolveFailed,
+    ModulatorResolveFailed,
     ZoneCapacityExceeded,
     DependencyCapacityExceeded,
     UnrepresentableZone,
@@ -39,10 +41,12 @@ struct PlaybackPrepareRequest {
     std::uint32_t bank_generation = 0;
     PlaybackPreparePolicy policy = PlaybackPreparePolicy::StrictQualified;
 
-    // Temporary control-domain workspace. It can live in PSRAM and may be
-    // reused immediately after prepare() returns.
+    // Temporary control-domain workspace. These arrays may live in PSRAM and
+    // may be reused immediately after prepare() returns.
     NativeResolvedZone* native_scratch = nullptr;
     std::size_t native_capacity = 0;
+    ResolvedZoneModulation* modulation_scratch = nullptr;
+    std::size_t modulation_capacity = 0;
 
     // Caller-owned immutable storage after successful publication. This array
     // must outlive PlaybackProgramSnapshot while READY/Active/Retired.
@@ -63,19 +67,23 @@ struct PlaybackPrepareRequest {
 struct PlaybackPrepareResult {
     PlaybackPrepareStatus status = PlaybackPrepareStatus::InvalidArgument;
     ResolveProgramStatus resolve_status = ResolveProgramStatus::InvalidArgument;
+    ZoneModulatorResolveStatus modulator_resolve_status =
+        ZoneModulatorResolveStatus::InvalidArgument;
     std::size_t zone_count = 0;
     std::size_t required_zone_capacity = 0;
     std::size_t dependency_count = 0;
     std::size_t required_dependency_capacity = 0;
     std::size_t preview_zone_count = 0;
     std::size_t first_problem_zone = static_cast<std::size_t>(-1);
+    std::uint32_t supported_modulator_records = 0;
+    std::uint32_t unsupported_modulator_records = 0;
     std::uint64_t issue_union = PlaybackIssueNone;
 
     bool ok() const { return status == PlaybackPrepareStatus::Ok; }
 };
 
 // Control-domain bridge from a parsed SF2 bank to the immutable realtime
-// PlaybackProgramSnapshot. It performs a count pass, a native resolve pass and
+// PlaybackProgramSnapshot. It performs count/native/modulator resolve passes and
 // a materialization preflight before mutating long-lived playback storage.
 class Sf2PlaybackProgramPreparer {
 public:
