@@ -109,6 +109,31 @@ void testMissingClockDoesNotPoisonAdaptivePolicy() {
     assert(fixture.voices.admissionLimit() == 8);
 }
 
+void testMissingClockStillForwardsExplicitMiss() {
+    RenderFixture fixture;
+    TimedAudioBlockRenderer timed(
+        fixture.renderer,
+        fixture.monitor,
+        nullptr,
+        nullptr);
+
+    assert(timed.render(0, fixture.output.data(), true) == 6);
+    assert(timed.stats().blocks_timed == 0);
+    assert(timed.stats().clock_faults == 1);
+    assert(fixture.monitor.stats().blocks_observed == 1);
+    assert(fixture.monitor.stats().deadline_misses == 1);
+    assert(fixture.monitor.stats().untimed_deadline_misses == 1);
+    assert(fixture.monitor.stats().window_count == 0);
+    assert(fixture.controller.stats().deadline_misses == 1);
+    assert(fixture.voices.admissionLimit() == 6);
+
+    const auto snapshot = fixture.monitor.snapshot();
+    assert(snapshot.blocks_observed == 1);
+    assert(snapshot.deadline_misses == 1);
+    assert(snapshot.untimed_deadline_misses == 1);
+    assert(snapshot.sample_count == 0);
+}
+
 void testClockRegressionIsRejected() {
     RenderFixture fixture;
     FakeClock clock{};
@@ -145,6 +170,7 @@ void testExternalDeadlineMissIsForwarded() {
     assert(timed.render(0, fixture.output.data(), true) == 6);
     assert(timed.stats().last_render_us == 100);
     assert(fixture.monitor.stats().deadline_misses == 1);
+    assert(fixture.monitor.stats().untimed_deadline_misses == 0);
     assert(fixture.controller.stats().deadline_misses == 1);
     assert(fixture.voices.admissionLimit() == 6);
 }
@@ -175,6 +201,7 @@ void testUnrepresentableDurationClampsAndTripsDeadline() {
 int main() {
     testMeasuredRenderFeedsMonitor();
     testMissingClockDoesNotPoisonAdaptivePolicy();
+    testMissingClockStillForwardsExplicitMiss();
     testClockRegressionIsRejected();
     testExternalDeadlineMissIsForwarded();
     testUnrepresentableDurationClampsAndTripsDeadline();
