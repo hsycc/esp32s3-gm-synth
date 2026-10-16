@@ -111,6 +111,12 @@ jobs:
             -o build/host-tests/test_sf2_pdta_reader
 
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
+            firmware/sf2/Sf2PdtaReader.cpp \
+            firmware/sf2/Sf2ResolvedZone.cpp \
+            tests/sf2/test_sf2_resolved_zone.cpp \
+            -o build/host-tests/test_sf2_resolved_zone
+
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
             firmware/storage/VfsRandomAccessReader.cpp \
             firmware/sf2/Sf2SampleSource.cpp \
             tests/storage/test_vfs_random_access_reader.cpp \
@@ -161,6 +167,8 @@ jobs:
         run: ./build/host-tests/test_sf2_sample_source
       - name: Run native SF2 pdta-reader tests
         run: ./build/host-tests/test_sf2_pdta_reader
+      - name: Run native SF2 resolved-zone tests
+        run: ./build/host-tests/test_sf2_resolved_zone
       - name: Run VFS random-access reader integration tests
         run: ./build/host-tests/test_vfs_random_access_reader
       - name: Run storage read benchmark tests
