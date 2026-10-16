@@ -40,11 +40,16 @@ struct PlaybackZone {
     voice::EnvelopeConfig envelope{};
 
     bool valid() const {
+        const bool sample_region_valid = !sample_region.enabled ||
+            (sample_region.start_frame < sample_region.end_frame &&
+             (loop_mode == voice::LoopMode::None ||
+              (sample_region.start_frame <= sample_region.loop_start_frame &&
+               sample_region.loop_start_frame < sample_region.loop_end_frame &&
+               sample_region.loop_end_frame <= sample_region.end_frame)));
         return key_low <= key_high && key_high <= 127 &&
                velocity_low <= velocity_high && velocity_high <= 127 &&
                root_key <= 127 && root_phase_increment_q32 != 0 &&
-               (!sample_region.enabled ||
-                sample_region.start_frame < sample_region.end_frame);
+               sample_region_valid;
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
