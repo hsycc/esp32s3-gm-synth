@@ -11,6 +11,7 @@ namespace gm_synth::realtime {
 struct RenderDeadlineStats {
     std::uint64_t blocks_observed = 0;
     std::uint64_t deadline_misses = 0;
+    std::uint64_t untimed_deadline_misses = 0;
     std::uint32_t last_render_us = 0;
     std::uint32_t peak_render_us = 0;
     std::size_t window_count = 0;
@@ -19,6 +20,7 @@ struct RenderDeadlineStats {
 struct RenderTimingSnapshot {
     std::uint64_t blocks_observed = 0;
     std::uint64_t deadline_misses = 0;
+    std::uint64_t untimed_deadline_misses = 0;
     std::size_t sample_count = 0;
     std::uint32_t min_us = 0;
     std::uint32_t avg_us = 0;
@@ -47,6 +49,11 @@ public:
     std::size_t observeBlock(
         std::uint32_t render_time_us,
         bool deadline_missed = false);
+
+    // Use when a reliable external deadline/underrun signal exists but the
+    // timing clock itself is unavailable or invalid. It affects admission but
+    // intentionally does not add a fake duration to the percentile window.
+    std::size_t observeDeadlineMissWithoutTiming();
 
     std::size_t currentAdmissionLimit() const {
         return controller_.stats().current_limit;
