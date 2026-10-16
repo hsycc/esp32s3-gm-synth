@@ -130,9 +130,9 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         return result;
     }
 
-    // Velocity->attenuation is resolved below. Keep the remaining mandatory
-    // default realtime sources explicit until channel state/pitch/LFO support
-    // is wired into the runtime.
+    // Velocity/CC7/CC10/CC11/PitchWheel and CC91/CC93 controller state are
+    // represented by the runtime now. Keep this conservative bit until the
+    // remaining mandatory default filter/LFO-facing modulators are implemented.
     std::uint64_t issues = PlaybackIssueDefaultModulatorsPending;
     if ((native.flags & NativeZoneFlagUnknownGenerator) != 0) {
         issues |= PlaybackIssueUnknownGenerator;
@@ -210,7 +210,10 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     if (lfoNeedsDsp(native)) {
         issues |= PlaybackIssueLfoPending;
     }
-    if (differs(native, 15, 0) || differs(native, 16, 0)) {
+    // The send generators/controller routes are now fully preserved and
+    // updated at runtime, but no reverb/chorus processor consumes the sends yet.
+    if (differs(native, 15, 0) || differs(native, 16, 0) ||
+        modulation.reverb_send_amount != 0 || modulation.chorus_send_amount != 0) {
         issues |= PlaybackIssueEffectsSendPending;
     }
     if (native.panSf2Units() != 0) {
@@ -306,6 +309,14 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
             fixed_velocity >= 0 && fixed_velocity <= 127
         ? static_cast<std::int16_t>(fixed_velocity)
         : -1;
+
+    candidate.effects_send.enabled = true;
+    candidate.effects_send.reverb_sf2_units = static_cast<std::int16_t>(
+        std::clamp<std::int32_t>(native.generators.value(16, 0), 0, 1000));
+    candidate.effects_send.chorus_sf2_units = static_cast<std::int16_t>(
+        std::clamp<std::int32_t>(native.generators.value(15, 0), 0, 1000));
+    candidate.effects_send.reverb_cc_amount = modulation.reverb_send_amount;
+    candidate.effects_send.chorus_cc_amount = modulation.chorus_send_amount;
 
     candidate.envelope.attack_frames = timecentsToFrames(
         native.generators.value(34, -12000),
