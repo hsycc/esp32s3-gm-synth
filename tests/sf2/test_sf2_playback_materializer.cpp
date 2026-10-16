@@ -31,10 +31,8 @@ using gm_synth::sf2::PlaybackIssueRomSample;
 using gm_synth::sf2::PlaybackIssueScaleTuningPending;
 using gm_synth::sf2::PlaybackIssueStereoOrLinkedSample;
 using gm_synth::sf2::PlaybackIssueUnsupportedSampleMode;
-using gm_synth::sf2::PlaybackIssueVolumeEnvelopeDelayPending;
-using gm_synth::sf2::PlaybackIssueVolumeEnvelopeHoldPending;
-using gm_synth::sf2::PlaybackIssueVolumeEnvelopeKeyScalingPending;
 using gm_synth::sf2::PlaybackMaterializationStatus;
+using gm_synth::sf2::ResolvedZoneModulation;
 using gm_synth::sf2::Sf2PlaybackMaterializer;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::kPhaseOneQ32;
@@ -84,10 +82,17 @@ void testSimpleZoneBecomesExplicitPreview() {
     assert(!output.sample_region.enabled);
     assert(output.gain_left_q15 == kQ15Unity);
     assert(output.gain_right_q15 == kQ15Unity);
+    assert(output.envelope.delay_frames == 43);
     assert(output.envelope.attack_frames == 43);
+    assert(output.envelope.hold_frames == 43);
     assert(output.envelope.decay_frames == 43);
     assert(output.envelope.sustain_q15 == kQ15Unity);
     assert(output.envelope.release_frames == 43);
+    assert(output.note_on_filter.enabled);
+    assert(output.note_on_filter.initial_cutoff_cents == 13500);
+    assert(output.note_on_filter.velocity_to_cutoff_cents == -2400);
+    assert(output.note_on_filter.resonance_cb == 0);
+    assert(!result.hasIssue(PlaybackIssueFilterPending));
     assert(output.valid());
 }
 
@@ -159,21 +164,51 @@ void testFixedKeyAndScaleTuningQualification() {
 
 void testEnvelopeFieldsAreConvertedFromNativeSf2Units() {
     NativeResolvedZone native = baseZone();
-    native.generators.set(34, 0);      // 1 second
-    native.generators.set(36, -1200);  // 0.5 second
+    native.generators.set(33, -1200);  // 0.5 second delay
+    native.generators.set(34, 0);      // 1 second attack
+    native.generators.set(35, 1200);   // 2 second hold
+    native.generators.set(36, -1200);  // 0.5 second decay
     native.generators.set(37, 600);    // 60 dB sustain attenuation
-    native.generators.set(38, 1200);   // 2 seconds
+    native.generators.set(38, 1200);   // 2 seconds release
+    native.generators.set(39, 100);
+    native.generators.set(40, -50);
 
     PlaybackZone output{};
     const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
     assert(result.playablePreview());
+    assert(output.envelope.delay_frames == 22050);
     assert(output.envelope.attack_frames == 44100);
+    assert(output.envelope.hold_frames == 88200);
     assert(output.envelope.decay_frames == 22050);
     assert(output.envelope.release_frames == 88200);
     assert(output.envelope.sustain_q15 >= 32 && output.envelope.sustain_q15 <= 33);
+    assert(output.envelope_key_scaling.hold_timecents_per_key == 100);
+    assert(output.envelope_key_scaling.decay_timecents_per_key == -50);
 }
 
-void testUnsupportedEnvelopeFilterModulationAndEffectsAreReported() {
+void testStaticFilterAndVelocityRouteAreMaterialized() {
+    NativeResolvedZone native = baseZone();
+    native.generators.set(8, 9600);
+    ResolvedZoneModulation modulation{};
+    modulation.velocity_to_filter_fc_cents = -1200;
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
+    assert(result.playablePreview());
+    assert(!result.hasIssue(PlaybackIssueFilterPending));
+    assert(output.note_on_filter.enabled);
+    assert(output.note_on_filter.initial_cutoff_cents == 9600);
+    assert(output.note_on_filter.velocity_to_cutoff_cents == -1200);
+    assert(output.note_on_filter.resonance_cb == 0);
+
+    native.generators.set(9, 60);
+    const auto resonant = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
+    assert(resonant.playablePreview());
+    assert(resonant.hasIssue(PlaybackIssueFilterPending));
+    assert(output.note_on_filter.resonance_cb == 60);
+}
+
+void testUnsupportedDynamicFilterModulationAndEffectsAreReported() {
     NativeResolvedZone native = baseZone();
     native.generators.set(33, 0);
     native.generators.set(35, 0);
@@ -192,9 +227,9 @@ void testUnsupportedEnvelopeFilterModulationAndEffectsAreReported() {
     PlaybackZone output{};
     const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
     assert(result.playablePreview());
-    assert(result.hasIssue(PlaybackIssueVolumeEnvelopeDelayPending));
-    assert(result.hasIssue(PlaybackIssueVolumeEnvelopeHoldPending));
-    assert(result.hasIssue(PlaybackIssueVolumeEnvelopeKeyScalingPending));
+    assert(output.envelope.delay_frames == 44100);
+    assert(output.envelope.hold_frames == 44100);
+    assert(output.envelope_key_scaling.hold_timecents_per_key == 100);
     assert(result.hasIssue(PlaybackIssueFilterPending));
     assert(result.hasIssue(PlaybackIssueModEnvelopePending));
     assert(result.hasIssue(PlaybackIssueLfoPending));
@@ -299,7 +334,8 @@ int main() {
     testPitchMaterializationIncludesRateTuneAndCorrection();
     testFixedKeyAndScaleTuningQualification();
     testEnvelopeFieldsAreConvertedFromNativeSf2Units();
-    testUnsupportedEnvelopeFilterModulationAndEffectsAreReported();
+    testStaticFilterAndVelocityRouteAreMaterialized();
+    testUnsupportedDynamicFilterModulationAndEffectsAreReported();
     testStaticPanAndGainRemainExplicitApproximations();
     testHardAddressFailureDoesNotMutateOutput();
     testHardLoopSampleModeRomAndStereoFailuresAreExplicit();
