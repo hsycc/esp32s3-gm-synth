@@ -30,7 +30,9 @@ std::uint64_t multiplyRatioQ20(std::uint64_t value, std::uint32_t ratio_q20) {
     if (value == 0 || ratio_q20 == 0) {
         return 0;
     }
-    if (value > std::numeric_limits<std::uint64_t>::max() / ratio_q20) {
+    const std::uint64_t max_product =
+        std::numeric_limits<std::uint64_t>::max() - kRatioRounding;
+    if (value > max_product / ratio_q20) {
         return std::numeric_limits<std::uint64_t>::max();
     }
     return (value * ratio_q20 + kRatioRounding) >> kRatioFractionBits;
