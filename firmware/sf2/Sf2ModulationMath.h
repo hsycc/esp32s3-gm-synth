@@ -11,6 +11,10 @@ namespace gm_synth::sf2 {
 constexpr std::int32_t kSf2DefaultVelocityAttenuationCb = 960;
 constexpr std::int32_t kSf2DefaultControllerAttenuationCb = 960;
 constexpr std::int32_t kSf2DefaultPanAmount = 1000;
+// SF2 default CC91/CC93 modulators add up to 200 tenths of a percent to the
+// reverb/chorus generator summing node.
+constexpr std::int32_t kSf2DefaultEffectsSendAmount = 200;
+constexpr std::int32_t kSf2MaxEffectsSend = 1000;
 constexpr std::int32_t kSf2MaxAttenuationCb = 1440;
 
 // Generic negative-unipolar concave source transform for a 7-bit MIDI value.
@@ -35,6 +39,19 @@ std::int32_t controllerToPanSf2Units(
     std::uint8_t value,
     std::int32_t amount = kSf2DefaultPanAmount);
 
+// Positive-unipolar linear SoundFont controller source used by CC91/CC93.
+// SF2 maps MIDI 127 to 127/128 of the modulator amount rather than exact unity.
+std::int32_t controllerToEffectsSendSf2Units(
+    std::uint8_t value,
+    std::int32_t amount = kSf2DefaultEffectsSendAmount);
+
+// Applies one prepared static effects-send generator plus its current channel
+// controller route and clamps the final generator summing node to [0, 1000].
+std::int32_t channelEffectsSendSf2Units(
+    std::int32_t static_send_sf2_units,
+    std::uint8_t controller_value,
+    std::int32_t controller_amount = kSf2DefaultEffectsSendAmount);
+
 // Converts a final initialAttenuation value to Q15 amplitude. SoundFont clamps
 // the final attenuation summing node to [0, 1440] cB; negative preset offsets
 // can therefore cancel velocity/controller attenuation but can never amplify
@@ -54,7 +71,7 @@ void noteOnGainQ15(
 
 // Same gain path with the mandatory default GM/SF2 CC7, CC10 and CC11 routes
 // applied at the final summing nodes. Route amounts are parameters so the
-// PlaybackZone representation can later carry file-defined replacements.
+// PlaybackZone representation can carry file-defined replacements.
 void channelNoteOnGainQ15(
     std::int32_t initial_attenuation_cb,
     std::int32_t velocity_to_attenuation_cb,
