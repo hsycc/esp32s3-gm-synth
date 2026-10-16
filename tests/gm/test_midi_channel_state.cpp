@@ -13,6 +13,7 @@ using gm_synth::gm::ChannelControlPitchRangeChanged;
 using gm_synth::gm::ChannelControlResetControllers;
 using gm_synth::gm::ChannelControlRpnSelectionChanged;
 using gm_synth::gm::ChannelControlSustainChanged;
+using gm_synth::gm::ChannelControlVibratoChanged;
 using gm_synth::gm::MidiChannelState;
 using gm_synth::gm::MidiChannelStateBank;
 
@@ -21,6 +22,8 @@ void testGmDefaults() {
     state.resetAll();
     assert(state.selectedBank() == 0);
     assert(state.program == 0);
+    assert(state.modulation_wheel == 0);
+    assert(state.channel_pressure == 0);
     assert(state.volume == 100);
     assert(state.pan == 64);
     assert(state.expression == 127);
@@ -34,13 +37,20 @@ void testGmDefaults() {
     assert(state.rpnNull());
 }
 
-void testBankVolumePanExpressionAndSustain() {
+void testBankVolumePanExpressionSustainAndVibratoControllers() {
     MidiChannelState state{};
     state.resetAll();
 
     assert((state.applyControlChange(0, 3) & ChannelControlBankChanged) != 0);
     assert((state.applyControlChange(32, 5) & ChannelControlBankChanged) != 0);
     assert(state.selectedBank() == ((3u << 7u) | 5u));
+
+    assert((state.applyControlChange(1, 80) & ChannelControlVibratoChanged) != 0);
+    assert(state.modulation_wheel == 80);
+    assert(state.applyChannelPressure(90));
+    assert(state.channel_pressure == 90);
+    assert(!state.applyChannelPressure(128));
+    assert(state.channel_pressure == 90);
 
     assert((state.applyControlChange(7, 88) & ChannelControlGainChanged) != 0);
     assert((state.applyControlChange(10, 32) & ChannelControlPanChanged) != 0);
@@ -101,6 +111,8 @@ void testResetAllControllersPreservesMixButResetsPerformanceState() {
     state.applyControlChange(0, 3);
     state.applyControlChange(32, 4);
     state.applyProgramChange(22);
+    state.applyControlChange(1, 88);
+    assert(state.applyChannelPressure(77));
     state.applyControlChange(7, 77);
     state.applyControlChange(10, 31);
     state.applyControlChange(11, 45);
@@ -117,12 +129,15 @@ void testResetAllControllersPreservesMixButResetsPerformanceState() {
     assert((action & ChannelControlResetControllers) != 0);
     assert((action & ChannelControlGainChanged) != 0);
     assert((action & ChannelControlSustainChanged) != 0);
+    assert((action & ChannelControlVibratoChanged) != 0);
     assert(state.selectedBank() == ((3u << 7u) | 4u));
     assert(state.program == 22);
     assert(state.volume == 77);
     assert(state.pan == 31);
     assert(state.reverb_send == 55);
     assert(state.chorus_send == 66);
+    assert(state.modulation_wheel == 0);
+    assert(state.channel_pressure == 0);
     assert(state.expression == 127);
     assert(!state.sustainDown());
     assert(state.pitch_bend == MidiChannelState::kPitchBendCenter);
@@ -156,7 +171,11 @@ void testChannelBankIsIndependentAcross16Channels() {
     assert((bank.applyControlChange(2, 7, 40) & ChannelControlGainChanged) != 0);
     assert(bank.channel(2).volume == 40);
     assert(bank.channel(1).volume == 100);
+    assert(bank.applyChannelPressure(2, 91));
+    assert(bank.channel(2).channel_pressure == 91);
+    assert(bank.channel(1).channel_pressure == 0);
     assert(bank.applyControlChange(16, 7, 10) == 0);
+    assert(!bank.applyChannelPressure(16, 10));
     assert(!bank.applyPitchBend(16, 8192));
     assert(!bank.applyProgramChange(16, 1));
 }
@@ -165,7 +184,7 @@ void testChannelBankIsIndependentAcross16Channels() {
 
 int main() {
     testGmDefaults();
-    testBankVolumePanExpressionAndSustain();
+    testBankVolumePanExpressionSustainAndVibratoControllers();
     testPitchBendSensitivityRpn();
     testResetAllControllersPreservesMixButResetsPerformanceState();
     testPitchBendAndProgramValueValidation();
