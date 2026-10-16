@@ -1,0 +1,48 @@
+name: m6-counter-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/util/SaturatingCounter.h"
+      - "firmware/voice/AdaptivePolyphony.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "tests/util/test_saturating_counter.cpp"
+      - "tests/voice/test_adaptive_polyphony.cpp"
+      - ".github/workflows/m6-counter-tests.yml"
+  pull_request:
+    paths:
+      - "firmware/util/SaturatingCounter.h"
+      - "firmware/voice/AdaptivePolyphony.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "tests/util/test_saturating_counter.cpp"
+      - "tests/voice/test_adaptive_polyphony.cpp"
+      - ".github/workflows/m6-counter-tests.yml"
+
+jobs:
+  counter-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build saturating counter tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+            tests/util/test_saturating_counter.cpp \
+            -o build/host-tests/test_saturating_counter
+      - name: Run saturating counter tests
+        run: ./build/host-tests/test_saturating_counter
+      - name: Rebuild M6 adaptive/steal tests with saturated telemetry
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/AdaptivePolyphony.cpp \
+            tests/voice/test_adaptive_polyphony.cpp \
+            -o build/host-tests/test_adaptive_polyphony
+      - name: Run M6 adaptive/steal regression
+        run: ./build/host-tests/test_adaptive_polyphony
