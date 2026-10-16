@@ -1,24 +1,11 @@
-# M4 — Adaptive Polyphony
+# Retired task name — Adaptive Polyphony is M6
 
-## Goal
-Make overload behavior graceful and measurable instead of allowing repeated deadline misses or hard-cut clicks.
+This file is retained only as a compatibility pointer for older links.
 
-## Work
-- measure per-block render duration
-- derive rolling CPU/deadline pressure
-- separate compile-time hard voice cap from runtime admission limit
-- reduce admission after true deadline misses or sustained pressure
-- recover gradually after sustained stability
-- add hysteresis to avoid oscillation
-- add fast-release/fade victim handling for voice stealing
-- define duplicate-note and exclusive-class behavior
+The durable milestone order is:
 
-## Validation
-- overload lowers new-voice admission before repeated failure
-- stable conditions restore capacity gradually
-- no silent counter overflow
-- stealing is audibly cleaner than hard discontinuity
-- metrics record steals, pressure events and current admission limit
+- M4: Voice DSP baseline — see `tasks/M4_VOICE_DSP.md`
+- M5: timestamped realtime event scheduler
+- M6: adaptive polyphony and safe Voice stealing — see `tasks/M6_ADAPTIVE_POLYPHONY.md`
 
-## Exit criteria
-The synth has a tested overload policy and does not equate `MAX_VOICES` with always-safe realtime capacity.
+Do not add new M4 work to this file.
