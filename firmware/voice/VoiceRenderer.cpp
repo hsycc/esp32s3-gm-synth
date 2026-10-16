@@ -47,14 +47,46 @@ std::int32_t Voice::multiplyQ15(std::int32_t a, std::int32_t b) {
     return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
 }
 
+std::uint32_t Voice::playbackStartFrame() const {
+    return params_.sample_region.enabled ? params_.sample_region.start_frame : 0u;
+}
+
+std::uint32_t Voice::playbackEndFrame() const {
+    if (ref_.record == nullptr) {
+        return 0;
+    }
+    return params_.sample_region.enabled
+        ? params_.sample_region.end_frame
+        : ref_.record->descriptor.frames;
+}
+
+std::uint32_t Voice::playbackLoopStartFrame() const {
+    if (ref_.record == nullptr) {
+        return 0;
+    }
+    return params_.sample_region.enabled
+        ? params_.sample_region.loop_start_frame
+        : ref_.record->descriptor.loop_start;
+}
+
+std::uint32_t Voice::playbackLoopEndFrame() const {
+    if (ref_.record == nullptr) {
+        return 0;
+    }
+    return params_.sample_region.enabled
+        ? params_.sample_region.loop_end_frame
+        : ref_.record->descriptor.loop_end;
+}
+
 bool Voice::validLoop() const {
     if (!ref_.valid() || ref_.record == nullptr) {
         return false;
     }
-    const auto& descriptor = ref_.record->descriptor;
-    return descriptor.loop_start < descriptor.loop_end &&
-           descriptor.loop_end <= descriptor.frames &&
-           descriptor.loop_start < descriptor.frames;
+    const std::uint32_t start = playbackStartFrame();
+    const std::uint32_t end = playbackEndFrame();
+    const std::uint32_t loop_start = playbackLoopStartFrame();
+    const std::uint32_t loop_end = playbackLoopEndFrame();
+    return start <= loop_start && loop_start < loop_end && loop_end <= end;
 }
 
 bool Voice::loopActive() const {
@@ -97,11 +129,26 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     const bool descriptor_valid = descriptor.frames != 0 &&
         descriptor.pcm_bytes >= static_cast<std::size_t>(descriptor.frames) * sizeof(std::int16_t) &&
         acquired.record->pcm != nullptr;
+
+    const std::uint32_t region_start = params.sample_region.enabled
+        ? params.sample_region.start_frame
+        : 0u;
+    const std::uint32_t region_end = params.sample_region.enabled
+        ? params.sample_region.end_frame
+        : descriptor.frames;
+    const std::uint32_t region_loop_start = params.sample_region.enabled
+        ? params.sample_region.loop_start_frame
+        : descriptor.loop_start;
+    const std::uint32_t region_loop_end = params.sample_region.enabled
+        ? params.sample_region.loop_end_frame
+        : descriptor.loop_end;
+
+    const bool region_valid = region_start < region_end && region_end <= descriptor.frames;
     const bool loop_valid = params.loop_mode == LoopMode::None ||
-        (descriptor.loop_start < descriptor.loop_end &&
-         descriptor.loop_end <= descriptor.frames &&
-         descriptor.loop_start < descriptor.frames);
-    if (!descriptor_valid || !loop_valid || params.phase_increment_q32 == 0) {
+        (region_start <= region_loop_start &&
+         region_loop_start < region_loop_end &&
+         region_loop_end <= region_end);
+    if (!descriptor_valid || !region_valid || !loop_valid || params.phase_increment_q32 == 0) {
         directory.release(acquired);
         return false;
     }
@@ -115,7 +162,7 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
 
     channel_ = params.channel;
     key_ = params.key;
-    phase_q32_ = 0;
+    phase_q32_ = static_cast<std::uint64_t>(region_start) << 32;
     key_released_ = false;
     fast_release_kind_ = FastReleaseKind::None;
     envelope_stage_frame_ = 0;
@@ -264,17 +311,19 @@ std::int32_t Voice::interpolatedSample() const {
         return 0;
     }
 
-    const auto& descriptor = ref_.record->descriptor;
+    const std::uint32_t end_frame = playbackEndFrame();
     const std::uint32_t index = static_cast<std::uint32_t>(phase_q32_ >> 32);
-    if (index >= descriptor.frames) {
+    if (index >= end_frame) {
         return 0;
     }
 
     std::uint32_t next_index = index + 1u;
-    if (loopActive() && index >= descriptor.loop_start && next_index >= descriptor.loop_end) {
-        next_index = descriptor.loop_start;
-    } else if (next_index >= descriptor.frames) {
-        next_index = descriptor.frames - 1u;
+    const std::uint32_t loop_start = playbackLoopStartFrame();
+    const std::uint32_t loop_end = playbackLoopEndFrame();
+    if (loopActive() && index >= loop_start && next_index >= loop_end) {
+        next_index = loop_start;
+    } else if (next_index >= end_frame) {
+        next_index = end_frame - 1u;
     }
 
     const std::int32_t a = ref_.record->pcm[index];
@@ -292,11 +341,10 @@ void Voice::advancePhase() {
     }
 
     phase_q32_ += params_.phase_increment_q32;
-    const auto& descriptor = ref_.record->descriptor;
 
     if (loopActive()) {
-        const std::uint64_t start = static_cast<std::uint64_t>(descriptor.loop_start) << 32;
-        const std::uint64_t end = static_cast<std::uint64_t>(descriptor.loop_end) << 32;
+        const std::uint64_t start = static_cast<std::uint64_t>(playbackLoopStartFrame()) << 32;
+        const std::uint64_t end = static_cast<std::uint64_t>(playbackLoopEndFrame()) << 32;
         const std::uint64_t length = end - start;
         if (phase_q32_ >= end && length != 0) {
             phase_q32_ = start + ((phase_q32_ - start) % length);
@@ -304,7 +352,7 @@ void Voice::advancePhase() {
         return;
     }
 
-    if ((phase_q32_ >> 32) >= descriptor.frames) {
+    if ((phase_q32_ >> 32) >= playbackEndFrame()) {
         finish();
     }
 }
@@ -336,7 +384,7 @@ VoiceRenderResult Voice::renderAdd(
 
     for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
         if (!ref_.valid() || ref_.record == nullptr ||
-            (phase_q32_ >> 32) >= ref_.record->descriptor.frames) {
+            (phase_q32_ >> 32) >= playbackEndFrame()) {
             finish();
             break;
         }
@@ -543,14 +591,7 @@ bool VoicePool::start(const VoiceStartParams& params) {
 
         if (exclusive_victims != 0) {
             const std::size_t released = releaseExclusiveVictims(params, target);
-            if (released != exclusive_victims) {
-                // Voice mutation is single-threaded in the audio domain, so a
-                // mismatch is not expected. Keep the new Voice rather than
-                // attempting a partial rollback of already-fading victims.
-                util::saturatingAdd(stats_.exclusive_voices_released, released);
-            } else {
-                util::saturatingAdd(stats_.exclusive_voices_released, released);
-            }
+            util::saturatingAdd(stats_.exclusive_voices_released, released);
             util::saturatingIncrement(stats_.exclusive_choke_successes);
             stats_.last_exclusive_class = params.exclusive_class;
         }
