@@ -105,7 +105,7 @@ void testDeferredObservationCombinesPostRenderMissOnce() {
         fakeNowUs,
         &clock);
 
-    const auto measurement = timed.renderMeasured(0, fixture.output.data());
+    auto measurement = timed.renderMeasured(0, fixture.output.data());
     assert(measurement.timing_valid);
     assert(measurement.render_time_us == 125);
     assert(fixture.renderer.stats().blocks_rendered == 1);
@@ -126,6 +126,16 @@ void testDeferredObservationCombinesPostRenderMissOnce() {
     assert(snapshot.sample_count == 1);
     assert(snapshot.min_us == 125);
     assert(snapshot.max_us == 125);
+
+    // The same measurement is single-use. A caller bug must not feed the same
+    // block into adaptive policy twice or double-count its deadline miss.
+    assert(timed.observeMeasurement(measurement, true) == 6);
+    assert(timed.stats().duplicate_observations == 1);
+    assert(fixture.monitor.stats().blocks_observed == 1);
+    assert(fixture.monitor.stats().deadline_misses == 1);
+    assert(fixture.controller.stats().blocks_observed == 1);
+    assert(fixture.controller.stats().deadline_misses == 1);
+    assert(fixture.monitor.snapshot().sample_count == 1);
 }
 
 void testMissingClockDoesNotPoisonAdaptivePolicy() {
