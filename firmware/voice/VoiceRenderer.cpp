@@ -318,7 +318,15 @@ void Voice::reset() {
 bool VoicePool::start(const VoiceStartParams& params) {
     ++stats_.start_attempts;
     const std::size_t active = activeVoiceCount();
-    if (admission_limit_ < kHardVoiceCap && active >= admission_limit_) {
+
+    // Preserve the original M4 hard-cap meaning: a 33rd active voice is a
+    // physical pool-capacity failure, independent of any lower M6 policy cap.
+    if (active >= kHardVoiceCap) {
+        ++stats_.start_failures_full;
+        return false;
+    }
+
+    if (active >= admission_limit_) {
         ++stats_.start_failures_admission;
         return false;
     }
@@ -337,6 +345,9 @@ bool VoicePool::start(const VoiceStartParams& params) {
         return true;
     }
 
+    // Defensive invariant fallback. activeVoiceCount() should make this path
+    // unreachable when active < kHardVoiceCap, but keep telemetry safe if the
+    // slot/accounting implementation changes later.
     ++stats_.start_failures_full;
     return false;
 }
