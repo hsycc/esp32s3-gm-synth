@@ -33,6 +33,28 @@ struct NoteOnGainConfig {
     }
 };
 
+// Current filter subset: static initialFilterFc plus the SF2 2.04 default or
+// file-replaced velocity->filter route. Non-zero resonance is preserved here
+// but remains a materializer qualification issue until the embedded biquad Q
+// behavior/gain compensation is validated separately.
+struct NoteOnFilterConfig {
+    bool enabled = false;
+    std::int32_t initial_cutoff_cents = 13500;
+    std::int32_t velocity_to_cutoff_cents = -2400;
+    std::int16_t resonance_cb = 0;
+
+    bool valid() const {
+        return !enabled ||
+            (initial_cutoff_cents >= 1500 && initial_cutoff_cents <= 13500 &&
+             resonance_cb >= 0 && resonance_cb <= 960);
+    }
+};
+
+struct EnvelopeKeyScalingConfig {
+    std::int16_t hold_timecents_per_key = 0;
+    std::int16_t decay_timecents_per_key = 0;
+};
+
 // Prepared SF2 reverb/chorus generator summing state. The runtime computes the
 // current send from the static generator plus CC91/CC93. These values are
 // carried all the way into Voice even before the actual FX processors exist so
@@ -78,7 +100,9 @@ struct PlaybackZone {
     std::int32_t gain_left_q15 = voice::kQ15Unity;
     std::int32_t gain_right_q15 = voice::kQ15Unity;
     voice::EnvelopeConfig envelope{};
+    EnvelopeKeyScalingConfig envelope_key_scaling{};
     NoteOnGainConfig note_on_gain{};
+    NoteOnFilterConfig note_on_filter{};
     EffectsSendConfig effects_send{};
 
     bool valid() const {
@@ -91,7 +115,8 @@ struct PlaybackZone {
         return key_low <= key_high && key_high <= 127 &&
                velocity_low <= velocity_high && velocity_high <= 127 &&
                root_key <= 127 && root_phase_increment_q32 != 0 &&
-               sample_region_valid && note_on_gain.valid() && effects_send.valid();
+               sample_region_valid && note_on_gain.valid() &&
+               note_on_filter.valid() && effects_send.valid();
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
