@@ -3,11 +3,127 @@
 #include "util/SaturatingCounter.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <utility>
 
 namespace gm_synth::voice {
 namespace {
+
+constexpr std::uint8_t kVibratoControlFrames = 16;
+constexpr std::array<std::uint32_t, 12> kSemitoneRatioQ20{
+    1048576u, 1110928u, 1176987u, 1246974u,
+    1321123u, 1399681u, 1482910u, 1571089u,
+    1664511u, 1763488u, 1868350u, 1979448u,
+};
+constexpr std::array<std::uint32_t, 100> kCentRatioQ20{
+    1048576u, 1049182u, 1049788u, 1050395u, 1051002u, 1051609u, 1052216u, 1052824u, 1053433u, 1054041u,
+    1054650u, 1055260u, 1055869u, 1056479u, 1057090u, 1057701u, 1058312u, 1058923u, 1059535u, 1060147u,
+    1060760u, 1061373u, 1061986u, 1062600u, 1063214u, 1063828u, 1064443u, 1065058u, 1065673u, 1066289u,
+    1066905u, 1067521u, 1068138u, 1068755u, 1069373u, 1069991u, 1070609u, 1071227u, 1071846u, 1072466u,
+    1073085u, 1073705u, 1074326u, 1074946u, 1075568u, 1076189u, 1076811u, 1077433u, 1078055u, 1078678u,
+    1079302u, 1079925u, 1080549u, 1081174u, 1081798u, 1082423u, 1083049u, 1083674u, 1084301u, 1084927u,
+    1085554u, 1086181u, 1086809u, 1087437u, 1088065u, 1088694u, 1089323u, 1089952u, 1090582u, 1091212u,
+    1091843u, 1092473u, 1093105u, 1093736u, 1094368u, 1095000u, 1095633u, 1096266u, 1096900u, 1097533u,
+    1098167u, 1098802u, 1099437u, 1100072u, 1100708u, 1101344u, 1101980u, 1102617u, 1103254u, 1103891u,
+    1104529u, 1105167u, 1105806u, 1106445u, 1107084u, 1107724u, 1108364u, 1109004u, 1109645u, 1110286u,
+};
+constexpr std::uint32_t kRatioFractionBits = 20;
+constexpr std::uint64_t kRatioRounding = std::uint64_t{1} << (kRatioFractionBits - 1u);
+
+std::uint64_t multiplyRatioQ20(std::uint64_t value, std::uint32_t ratio_q20) {
+    if (value == 0 || ratio_q20 == 0) {
+        return 0;
+    }
+    const std::uint64_t max_product =
+        std::numeric_limits<std::uint64_t>::max() - kRatioRounding;
+    if (value > max_product / ratio_q20) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    return (value * ratio_q20 + kRatioRounding) >> kRatioFractionBits;
+}
+
+std::uint64_t transposeSemitonesFixed(
+    std::uint64_t root_phase_increment_q32,
+    int semitone_delta) {
+    if (root_phase_increment_q32 == 0) {
+        return 0;
+    }
+
+    int octaves = semitone_delta / 12;
+    int remainder = semitone_delta % 12;
+    if (remainder < 0) {
+        remainder += 12;
+        --octaves;
+    }
+
+    std::uint64_t value = multiplyRatioQ20(
+        root_phase_increment_q32,
+        kSemitoneRatioQ20[static_cast<std::size_t>(remainder)]);
+    if (octaves > 0) {
+        if (octaves >= 64 ||
+            value > (std::numeric_limits<std::uint64_t>::max() >> octaves)) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        value <<= octaves;
+    } else if (octaves < 0) {
+        const int shift = -octaves;
+        if (shift >= 64) {
+            return 1;
+        }
+        value >>= shift;
+    }
+    return std::max<std::uint64_t>(value, 1u);
+}
+
+std::uint64_t transposeCentsFixed(
+    std::uint64_t root_phase_increment_q32,
+    int cents_delta) {
+    if (root_phase_increment_q32 == 0) {
+        return 0;
+    }
+    int semitones = cents_delta / 100;
+    int cents = cents_delta % 100;
+    if (cents < 0) {
+        cents += 100;
+        --semitones;
+    }
+    const std::uint64_t semitone_value = transposeSemitonesFixed(
+        root_phase_increment_q32,
+        semitones);
+    return std::max<std::uint64_t>(
+        multiplyRatioQ20(
+            semitone_value,
+            kCentRatioQ20[static_cast<std::size_t>(cents)]),
+        1u);
+}
+
+std::int32_t triangleLevelQ15(std::uint32_t phase_q32) {
+    constexpr std::uint32_t kQuarterMask = (std::uint32_t{1} << 30u) - 1u;
+    const std::uint32_t quadrant = phase_q32 >> 30u;
+    const std::uint32_t fraction = phase_q32 & kQuarterMask;
+    const std::int32_t ramp = static_cast<std::int32_t>(
+        (static_cast<std::uint64_t>(fraction) * kQ15Unity +
+         (std::uint64_t{1} << 29u)) >> 30u);
+    switch (quadrant) {
+        case 0:
+            return ramp;
+        case 1:
+            return kQ15Unity - ramp;
+        case 2:
+            return -ramp;
+        default:
+            return -kQ15Unity + ramp;
+    }
+}
+
+std::int32_t scaleSignedQ15(std::int32_t value, std::int32_t q15) {
+    const std::int64_t scaled = static_cast<std::int64_t>(value) * q15;
+    if (scaled >= 0) {
+        return static_cast<std::int32_t>((scaled + 16383) / 32767);
+    }
+    return -static_cast<std::int32_t>((-scaled + 16383) / 32767);
+}
 
 std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
     if (gain_q15 >= kQ15Unity) {
@@ -163,7 +279,8 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
          region_loop_start < region_loop_end &&
          region_loop_end <= region_end);
     if (!descriptor_valid || !region_valid || !loop_valid ||
-        params.phase_increment_q32 == 0 || !params.lowpass.valid()) {
+        params.phase_increment_q32 == 0 || !params.lowpass.valid() ||
+        !params.vibrato_lfo.valid()) {
         directory.release(acquired);
         return false;
     }
@@ -178,6 +295,10 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     channel_ = params.channel;
     key_ = params.key;
     phase_q32_ = static_cast<std::uint64_t>(region_start) << 32;
+    current_phase_increment_q32_ = params_.phase_increment_q32;
+    vibrato_phase_q32_ = 0;
+    vibrato_delay_remaining_ = params_.vibrato_lfo.delay_frames;
+    vibrato_control_frames_remaining_ = 0;
     lowpass_z1_q24_ = 0;
     lowpass_z2_q24_ = 0;
     key_released_ = false;
@@ -411,12 +532,45 @@ std::int32_t Voice::applyLowpass(std::int32_t sample) {
     return output;
 }
 
+void Voice::refreshVibratoPitch() {
+    current_phase_increment_q32_ = params_.phase_increment_q32;
+    if (!params_.vibrato_lfo.enabled || params_.vibrato_lfo.pitch_depth_cents == 0 ||
+        vibrato_delay_remaining_ != 0) {
+        return;
+    }
+
+    const std::int32_t level_q15 = triangleLevelQ15(vibrato_phase_q32_);
+    const std::int32_t cents = scaleSignedQ15(
+        params_.vibrato_lfo.pitch_depth_cents,
+        level_q15);
+    if (cents != 0) {
+        current_phase_increment_q32_ = transposeCentsFixed(
+            params_.phase_increment_q32,
+            cents);
+    }
+}
+
+void Voice::advanceVibrato() {
+    if (!active_ || !params_.vibrato_lfo.enabled) {
+        return;
+    }
+    if (vibrato_delay_remaining_ != 0) {
+        --vibrato_delay_remaining_;
+        vibrato_control_frames_remaining_ = 0;
+        return;
+    }
+    vibrato_phase_q32_ += params_.vibrato_lfo.phase_step_q32;
+    if (vibrato_control_frames_remaining_ != 0) {
+        --vibrato_control_frames_remaining_;
+    }
+}
+
 void Voice::advancePhase() {
     if (!active_ || !ref_.valid() || ref_.record == nullptr) {
         return;
     }
 
-    phase_q32_ += params_.phase_increment_q32;
+    phase_q32_ += current_phase_increment_q32_;
 
     if (loopActive()) {
         const std::uint64_t start = static_cast<std::uint64_t>(playbackLoopStartFrame()) << 32;
@@ -441,6 +595,10 @@ void Voice::finish() {
     key_released_ = false;
     fast_release_kind_ = FastReleaseKind::None;
     phase_q32_ = 0;
+    current_phase_increment_q32_ = kPhaseOneQ32;
+    vibrato_phase_q32_ = 0;
+    vibrato_delay_remaining_ = 0;
+    vibrato_control_frames_remaining_ = 0;
     lowpass_z1_q24_ = 0;
     lowpass_z2_q24_ = 0;
     envelope_stage_ = EnvelopeStage::Done;
@@ -467,6 +625,11 @@ VoiceRenderResult Voice::renderAdd(
             break;
         }
 
+        if (params_.vibrato_lfo.enabled && vibrato_control_frames_remaining_ == 0) {
+            refreshVibratoPitch();
+            vibrato_control_frames_remaining_ = kVibratoControlFrames;
+        }
+
         const std::int32_t envelope = nextEnvelopeLevel();
         if (envelope_stage_ == EnvelopeStage::Done && envelope <= 0) {
             finish();
@@ -482,6 +645,7 @@ VoiceRenderResult Voice::renderAdd(
 
         const bool release_finishes_after_frame = envelope_stage_ == EnvelopeStage::Done;
         advancePhase();
+        advanceVibrato();
         if (release_finishes_after_frame && active_) {
             finish();
         }
