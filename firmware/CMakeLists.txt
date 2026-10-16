@@ -13,6 +13,7 @@ idf_component_register(
         "voice/PitchMath.cpp"
         "voice/VoiceRenderer.cpp"
         "voice/AudioBlockRenderer.cpp"
+        "voice/AdaptivePolyphony.cpp"
         "realtime/RealtimeEventQueue.cpp"
         "realtime/BlockEventScheduler.cpp"
         "realtime/ScheduledAudioBlockRenderer.cpp"

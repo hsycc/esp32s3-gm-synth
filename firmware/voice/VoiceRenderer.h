@@ -24,19 +24,12 @@ struct EnvelopeConfig {
     std::uint32_t release_frames = 64;
 };
 
-// Parameters are resolved before Voice start. The audio hot path therefore
-// needs only immutable PCM + bounded arithmetic; it never knows about SF2,
-// VFS, Flash/SD, residency allocation, or Program Prepare.
 struct VoiceStartParams {
     sample::SampleId sample_id = 0;
     std::uint8_t channel = 0;
     std::uint8_t key = 60;
     std::uint8_t velocity = 100;
-
-    // Source-frame advance for one 44.1-kHz output frame in unsigned Q32.32.
-    // 1<<32 means one source frame per output frame.
     std::uint64_t phase_increment_q32 = kPhaseOneQ32;
-
     LoopMode loop_mode = LoopMode::None;
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
@@ -53,11 +46,13 @@ struct VoicePoolStats {
     std::uint64_t start_successes = 0;
     std::uint64_t start_failures_rejected = 0;
     std::uint64_t start_failures_full = 0;
+    std::uint64_t start_failures_admission = 0;
     std::uint64_t note_off_matches = 0;
     std::uint64_t voices_finished = 0;
     std::uint64_t rendered_voice_frames = 0;
     std::size_t active_voices = 0;
     std::size_t peak_active_voices = 0;
+    std::size_t admission_limit = 0;
 };
 
 class Voice {
@@ -68,12 +63,7 @@ public:
 
     bool start(sample::PublishedSampleDirectory& directory, const VoiceStartParams& params);
     void noteOff();
-
-    // Adds signed stereo samples to an interleaved int32 accumulator. The
-    // caller owns final clipping/dither/16-bit conversion at the output
-    // boundary. frames_rendered is exact even when a Voice ends mid-block.
     VoiceRenderResult renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
-
     void reset();
 
     bool active() const { return active_; }
@@ -110,9 +100,7 @@ private:
     bool key_released_ = false;
     std::uint8_t channel_ = 0;
     std::uint8_t key_ = 0;
-
     std::uint64_t phase_q32_ = 0;
-
     EnvelopeStage envelope_stage_ = EnvelopeStage::Done;
     std::uint32_t envelope_stage_frame_ = 0;
     std::int32_t envelope_level_q15_ = 0;
@@ -121,24 +109,27 @@ private:
 
 class VoicePool {
 public:
-    // M4 hard safety ceiling. M6 will add a lower adaptive admission limit;
-    // qualification still targets 16 simultaneously active sample voices.
     static constexpr std::size_t kHardVoiceCap = 32;
 
     explicit VoicePool(sample::PublishedSampleDirectory& directory)
-        : directory_(directory) {}
+        : directory_(directory) {
+        stats_.admission_limit = admission_limit_;
+    }
 
     bool start(const VoiceStartParams& params);
     std::size_t noteOff(std::uint8_t channel, std::uint8_t key);
     void renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
     void allSoundOff();
 
+    void setAdmissionLimit(std::size_t limit);
+    std::size_t admissionLimit() const { return admission_limit_; }
     std::size_t activeVoiceCount() const;
     const VoicePoolStats& stats() const { return stats_; }
 
 private:
     sample::PublishedSampleDirectory& directory_;
     std::array<Voice, kHardVoiceCap> voices_{};
+    std::size_t admission_limit_ = kHardVoiceCap;
     VoicePoolStats stats_{};
 };
 

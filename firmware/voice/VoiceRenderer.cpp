@@ -317,6 +317,20 @@ void Voice::reset() {
 
 bool VoicePool::start(const VoiceStartParams& params) {
     ++stats_.start_attempts;
+    const std::size_t active = activeVoiceCount();
+
+    // Preserve the original M4 hard-cap meaning: a 33rd active voice is a
+    // physical pool-capacity failure, independent of any lower M6 policy cap.
+    if (active >= kHardVoiceCap) {
+        ++stats_.start_failures_full;
+        return false;
+    }
+
+    if (active >= admission_limit_) {
+        ++stats_.start_failures_admission;
+        return false;
+    }
+
     for (Voice& voice : voices_) {
         if (voice.active()) {
             continue;
@@ -326,11 +340,14 @@ bool VoicePool::start(const VoiceStartParams& params) {
             return false;
         }
         ++stats_.start_successes;
-        stats_.active_voices = activeVoiceCount();
+        stats_.active_voices = active + 1u;
         stats_.peak_active_voices = std::max(stats_.peak_active_voices, stats_.active_voices);
         return true;
     }
 
+    // Defensive invariant fallback. activeVoiceCount() should make this path
+    // unreachable when active < kHardVoiceCap, but keep telemetry safe if the
+    // slot/accounting implementation changes later.
     ++stats_.start_failures_full;
     return false;
 }
@@ -374,6 +391,11 @@ void VoicePool::allSoundOff() {
         }
     }
     stats_.active_voices = 0;
+}
+
+void VoicePool::setAdmissionLimit(std::size_t limit) {
+    admission_limit_ = std::clamp<std::size_t>(limit, 1u, kHardVoiceCap);
+    stats_.admission_limit = admission_limit_;
 }
 
 std::size_t VoicePool::activeVoiceCount() const {
