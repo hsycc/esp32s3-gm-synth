@@ -4,7 +4,7 @@ set -Eeuo pipefail
 : "${IDF_PATH:?IDF_PATH must point to the pinned ESP-IDF checkout}"
 
 REPORT_PATH="${1:-reports/qemu-sf2-flash.log}"
-TIMEOUT_SECONDS="${QEMU_SF2_TIMEOUT_SECONDS:-60}"
+TIMEOUT_SECONDS="${QEMU_SF2_TIMEOUT_SECONDS:-90}"
 TOOLS_ROOT="${IDF_TOOLS_PATH:-$HOME/.espressif}"
 ROOT_DIR="$(pwd)"
 BUILD_DIR="$ROOT_DIR/build-qemu-sf2"
@@ -107,6 +107,7 @@ grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
 grep -q "^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=${QEMU_BENCHMARK_BYTES}$" "$SDKCONFIG_PATH"
@@ -179,7 +180,7 @@ require_log() {
     if ! grep -Fq "$pattern" "$REPORT_PATH"; then
         echo "Missing expected QEMU SF2 integration log: $pattern" >&2
         echo "---- QEMU SF2 log tail ----" >&2
-        tail -n 160 "$REPORT_PATH" >&2 || true
+        tail -n 200 "$REPORT_PATH" >&2 || true
         echo "---------------------------" >&2
         exit 1
     fi
@@ -209,14 +210,22 @@ require_log "prepare_bench: case=eviction_program_change ok=1"
 require_log "prepare_bench: case=eviction_commit_retire commit_ok=1 ack_ok=1"
 require_log "release_tail_survived=1 release_ok=1"
 require_log "prepare_bench: PASS"
-require_log "M3 core linked successfully"
 
-if grep -Eq "QEMU FATFS mount failed|VFS path cannot be opened|SF2 parse failed|fixture sample-count mismatch|One or more storage benchmark chunk-size passes failed|Program Prepare hardware benchmark FAILED|prepare_bench: .*ok=0|Guru Meditation|assert failed|abort\(\)|panic'ed" "$REPORT_PATH"; then
-    echo "QEMU SF2 integration log contains a failure/panic signature" >&2
-    tail -n 160 "$REPORT_PATH" >&2 || true
+# M6 deterministic render-path gate. The exact emulator timings are not
+# asserted, but every fixed-Voice workload and final lifetime marker must exist.
+require_log "render_bench: START frames_per_block=64 sample_rate=44100"
+for voices in 4 8 12 16 20 24; do
+    require_log "render_bench: case voices=${voices} blocks=128"
+done
+require_log "render_bench: PASS cases=6 final_refs=0"
+require_log "M6 bring-up core linked successfully"
+
+if grep -Eq "QEMU FATFS mount failed|VFS path cannot be opened|SF2 parse failed|fixture sample-count mismatch|One or more storage benchmark chunk-size passes failed|Program Prepare hardware benchmark FAILED|prepare_bench: .*ok=0|Render timing benchmark FAILED|render_bench: .*failed|render_bench: stale refs|render_bench: active/ref mismatch|render_bench: invalid telemetry|render_bench: leaked voice refs|Guru Meditation|assert failed|abort\(\)|panic'ed" "$REPORT_PATH"; then
+    echo "QEMU SF2/render integration log contains a failure/panic signature" >&2
+    tail -n 200 "$REPORT_PATH" >&2 || true
     exit 1
 fi
 
 stage "complete"
-echo "ESP32-S3 QEMU real-SF2 storage + Program Prepare integration test passed"
-echo "NOTE: emulator throughput/latency values are functional telemetry only, not N16R8 hardware performance data."
+echo "ESP32-S3 QEMU real-SF2 + Program Prepare + deterministic render integration test passed"
+echo "NOTE: emulator storage/render throughput and latency values are regression telemetry only, not N16R8 hardware performance data."
