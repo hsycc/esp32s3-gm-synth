@@ -81,13 +81,14 @@ private:
 };
 
 struct WorkspaceStorage {
-    std::vector<NativeResolvedZone> native{256};
-    std::vector<ResolvedZoneModulation> modulation{256};
-    std::vector<gm_synth::gm::PlaybackZone> playback{256};
-    std::vector<gm_synth::sample::SampleId> dependencies{512};
+    std::vector<NativeResolvedZone> native;
+    std::vector<ResolvedZoneModulation> modulation;
+    std::vector<gm_synth::gm::PlaybackZone> playback;
+    std::vector<gm_synth::sample::SampleId> dependencies;
     ProgramChangePrepareWorkspace workspace{};
 
-    WorkspaceStorage() {
+    WorkspaceStorage()
+        : native(256), modulation(256), playback(256), dependencies(512) {
         workspace.native_scratch = native.data();
         workspace.native_capacity = native.size();
         workspace.modulation_scratch = modulation.data();
