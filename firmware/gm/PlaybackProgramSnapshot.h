@@ -55,6 +55,22 @@ struct EnvelopeKeyScalingConfig {
     std::int16_t decay_timecents_per_key = 0;
 };
 
+// Prepared SF2 vibrato-LFO state. delay/frequency are converted in the control
+// domain; the realtime side only advances a fixed-point triangle oscillator.
+// Static gen6 depth is summed with the live Channel Pressure and CC1 routes.
+struct VibratoLfoConfig {
+    bool enabled = false;
+    std::uint32_t delay_frames = 0;
+    std::uint32_t phase_step_q32 = 0;
+    std::int32_t static_pitch_depth_cents = 0;
+    std::int32_t channel_pressure_to_pitch_cents = 50;
+    std::int32_t modulation_wheel_to_pitch_cents = 50;
+
+    bool valid() const {
+        return !enabled || phase_step_q32 != 0;
+    }
+};
+
 // Prepared SF2 reverb/chorus generator summing state. The runtime computes the
 // current send from the static generator plus CC91/CC93. These values are
 // carried all the way into Voice even before the actual FX processors exist so
@@ -103,6 +119,7 @@ struct PlaybackZone {
     EnvelopeKeyScalingConfig envelope_key_scaling{};
     NoteOnGainConfig note_on_gain{};
     NoteOnFilterConfig note_on_filter{};
+    VibratoLfoConfig vibrato_lfo{};
     EffectsSendConfig effects_send{};
 
     bool valid() const {
@@ -116,7 +133,7 @@ struct PlaybackZone {
                velocity_low <= velocity_high && velocity_high <= 127 &&
                root_key <= 127 && root_phase_increment_q32 != 0 &&
                sample_region_valid && note_on_gain.valid() &&
-               note_on_filter.valid() && effects_send.valid();
+               note_on_filter.valid() && vibrato_lfo.valid() && effects_send.valid();
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
