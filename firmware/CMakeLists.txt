@@ -11,6 +11,8 @@ idf_component_register(
         "sf2/Sf2SampleSource.cpp"
         "sf2/Sf2PdtaReader.cpp"
         "sf2/Sf2ResolvedZone.cpp"
+        "sf2/Sf2ModulationMath.cpp"
+        "sf2/Sf2ZoneModulatorResolver.cpp"
         "sf2/Sf2PlaybackMaterializer.cpp"
         "sf2/Sf2PlaybackProgramPreparer.cpp"
         "gm/ProgramChangeMailbox.cpp"
