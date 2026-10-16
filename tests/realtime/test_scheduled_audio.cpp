@@ -1,6 +1,7 @@
 #include "../../firmware/realtime/ScheduledAudioBlockRenderer.h"
 #include "../../firmware/sample/PublishedSampleDirectory.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -45,6 +46,7 @@ struct PublishedFixture {
 
 struct DispatchContext {
     VoiceStartParams params{};
+    std::int32_t channel_gain_q15 = kQ15Unity;
 
     DispatchContext() {
         params.sample_id = 0;
@@ -70,11 +72,18 @@ bool applyEvent(void* opaque, const RealtimeEvent& event, VoicePool& voices) {
             params.channel = event.channel;
             params.key = event.data1;
             params.velocity = event.data2;
+            params.gain_left_q15 = context.channel_gain_q15;
+            params.gain_right_q15 = context.channel_gain_q15;
             return voices.start(params);
         }
         case EventType::NoteOff:
             return voices.noteOff(event.channel, event.data1) != 0;
         case EventType::ControlChange:
+            if (event.data1 != 7) {
+                return false;
+            }
+            context.channel_gain_q15 = std::min<std::int32_t>(event.value, kQ15Unity);
+            return true;
         case EventType::ProgramChange:
         default:
             return false;
@@ -91,6 +100,19 @@ RealtimeEvent note(
     event.channel = 0;
     event.data1 = key;
     event.data2 = 100;
+    return event;
+}
+
+RealtimeEvent cc(
+    std::uint64_t frame,
+    std::uint8_t controller,
+    std::uint16_t value) {
+    RealtimeEvent event{};
+    event.timestamp_frame = frame;
+    event.type = EventType::ControlChange;
+    event.channel = 0;
+    event.data1 = controller;
+    event.value = value;
     return event;
 }
 
@@ -129,6 +151,29 @@ void testNoteOnAndOffAreSampleAccurate() {
     assert(voices.activeVoiceCount() == 0);
     assert(renderer.stats().events_applied == 2);
     assert(renderer.stats().render_segments == 3);
+}
+
+void testCcExecutesAtDistinctOffsetBeforeNoteOn() {
+    PublishedFixture fixture;
+    VoicePool voices(fixture.directory);
+    RealtimeEventQueue queue;
+    BlockEventScheduler scheduler(queue);
+    DispatchContext dispatch;
+    ScheduledAudioBlockRenderer renderer(voices, scheduler, applyEvent, &dispatch);
+
+    assert(queue.tryPush(cc(1005, 7, 16384)));
+    assert(queue.tryPush(note(1010, 64)));
+
+    std::array<std::int16_t, 128> output{};
+    renderer.render(1000, output.data());
+    for (std::size_t frame = 0; frame < 10; ++frame) {
+        assertStereoFrame(output, frame, 0);
+    }
+    assertStereoFrame(output, 10, 500);
+    assert(dispatch.channel_gain_q15 == 16384);
+    assert(renderer.stats().events_applied == 2);
+    assert(renderer.stats().render_segments == 3);
+    voices.allSoundOff();
 }
 
 void testBlockEndEventMovesToNextBlockOffsetZero() {
@@ -208,6 +253,7 @@ void testQueueOrderingAndCapacityAreExplicit() {
 
 int main() {
     testNoteOnAndOffAreSampleAccurate();
+    testCcExecutesAtDistinctOffsetBeforeNoteOn();
     testBlockEndEventMovesToNextBlockOffsetZero();
     testEqualTimestampPreservesFifo();
     testLateEventClampsToFrameZero();
