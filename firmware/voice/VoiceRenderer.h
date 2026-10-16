@@ -27,6 +27,20 @@ struct BiquadLowpassConfig {
     }
 };
 
+// Fixed-point triangle LFO prepared entirely outside the per-frame hot path.
+// phase_step_q32 is cycles-per-output-frame in Q0.32. pitch_depth_cents is the
+// current peak pitch depth; channel controllers may update it while sounding.
+struct PitchLfoConfig {
+    bool enabled = false;
+    std::uint32_t delay_frames = 0;
+    std::uint32_t phase_step_q32 = 0;
+    std::int32_t pitch_depth_cents = 0;
+
+    bool valid() const {
+        return !enabled || phase_step_q32 != 0;
+    }
+};
+
 enum class LoopMode : std::uint8_t {
     None = 0,
     Continuous,
@@ -63,6 +77,7 @@ struct VoiceRealtimeControlConfig {
     bool enabled = false;
     bool gain_enabled = false;
     bool effects_send_enabled = false;
+    bool vibrato_enabled = false;
     std::uint64_t unbent_phase_increment_q32 = kPhaseOneQ32;
     std::int32_t initial_attenuation_cb = 0;
     std::int32_t velocity_to_attenuation_cb = 0;
@@ -74,6 +89,9 @@ struct VoiceRealtimeControlConfig {
     std::int16_t chorus_send_base_units = 0;
     std::int32_t reverb_send_cc_amount = 0;
     std::int32_t chorus_send_cc_amount = 0;
+    std::int32_t static_vibrato_pitch_depth_cents = 0;
+    std::int32_t channel_pressure_to_vibrato_pitch_cents = 0;
+    std::int32_t modulation_wheel_to_vibrato_pitch_cents = 0;
 };
 
 struct VoiceRuntimeControlUpdate {
@@ -82,6 +100,7 @@ struct VoiceRuntimeControlUpdate {
     std::int32_t gain_right_q15 = kQ15Unity;
     std::int16_t reverb_send_units = 0;
     std::int16_t chorus_send_units = 0;
+    std::int32_t vibrato_pitch_depth_cents = 0;
 
     bool valid() const {
         return phase_increment_q32 != 0 &&
@@ -105,6 +124,7 @@ struct VoiceStartParams {
     LoopMode loop_mode = LoopMode::None;
     SampleRegion sample_region{};
     BiquadLowpassConfig lowpass{};
+    PitchLfoConfig vibrato_lfo{};
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
     // Prepared send state in SoundFont tenths-of-a-percent units. The dry Voice
@@ -195,6 +215,7 @@ public:
     sample::SampleId sampleId() const { return ref_.sample_id; }
     std::uint64_t phaseQ32() const { return phase_q32_; }
     std::uint64_t phaseIncrementQ32() const { return params_.phase_increment_q32; }
+    std::uint64_t currentPhaseIncrementQ32() const { return current_phase_increment_q32_; }
     std::int32_t gainLeftQ15() const { return params_.gain_left_q15; }
     std::int32_t gainRightQ15() const { return params_.gain_right_q15; }
     std::int16_t reverbSendUnits() const { return params_.reverb_send_units; }
@@ -202,6 +223,7 @@ public:
     std::int32_t envelopeLevelQ15() const { return envelope_level_q15_; }
     bool lowpassEnabled() const { return params_.lowpass.enabled; }
     const BiquadLowpassConfig& lowpassConfig() const { return params_.lowpass; }
+    const PitchLfoConfig& vibratoLfoConfig() const { return params_.vibrato_lfo; }
     const VoiceRealtimeControlConfig& realtimeControl() const {
         return params_.realtime_control;
     }
@@ -235,6 +257,8 @@ private:
     std::int32_t nextEnvelopeLevel();
     std::int32_t interpolatedSample() const;
     std::int32_t applyLowpass(std::int32_t sample);
+    void refreshVibratoPitch();
+    void advanceVibrato();
     void advancePhase();
     void beginRelease(std::uint32_t release_frames, FastReleaseKind fast_release_kind);
     void finish();
@@ -249,6 +273,10 @@ private:
     std::uint8_t channel_ = 0;
     std::uint8_t key_ = 0;
     std::uint64_t phase_q32_ = 0;
+    std::uint64_t current_phase_increment_q32_ = kPhaseOneQ32;
+    std::uint32_t vibrato_phase_q32_ = 0;
+    std::uint32_t vibrato_delay_remaining_ = 0;
+    std::uint8_t vibrato_control_frames_remaining_ = 0;
     std::int64_t lowpass_z1_q24_ = 0;
     std::int64_t lowpass_z2_q24_ = 0;
     EnvelopeStage envelope_stage_ = EnvelopeStage::Done;
