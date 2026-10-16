@@ -28,7 +28,7 @@ ProgramChangeServiceResult ProgramChangeControlService::serviceChannel(
     ProgramChangeServiceResult result{};
     util::saturatingIncrement(stats_.service_attempts);
 
-    if (channel >= 16 || !workspaceIsFree(channel, workspace)) {
+    if (channel >= 16 || !workspace.structurallyValid()) {
         result.status = ProgramChangeServiceStatus::InvalidWorkspace;
         return result;
     }
@@ -40,10 +40,18 @@ ProgramChangeServiceResult ProgramChangeControlService::serviceChannel(
     }
     result.request = request;
 
+    // Busy takes precedence over workspace reuse diagnostics: while a READY or
+    // committed-but-unacknowledged generation exists, no caller storage may be
+    // mutated regardless of which of the two per-channel workspaces is passed.
     if (residency_exchange_.transitionInFlight(channel) ||
         playback_exchange_.transitionInFlight(channel)) {
         util::saturatingIncrement(stats_.busy_deferrals);
         result.status = ProgramChangeServiceStatus::TransitionBusy;
+        return result;
+    }
+
+    if (!workspaceIsFree(channel, workspace)) {
+        result.status = ProgramChangeServiceStatus::InvalidWorkspace;
         return result;
     }
 
