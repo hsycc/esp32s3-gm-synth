@@ -114,6 +114,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                   static_cast<int>(key) - static_cast<int>(zone.root_key))
             : zone.root_phase_increment_q32;
         params.loop_mode = zone.loop_mode;
+        params.sample_region = zone.sample_region;
         params.gain_left_q15 = zone.gain_left_q15;
         params.gain_right_q15 = zone.gain_right_q15;
         params.envelope = zone.envelope;
