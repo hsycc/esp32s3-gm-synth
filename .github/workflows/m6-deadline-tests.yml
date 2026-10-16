@@ -1,0 +1,38 @@
+name: m6-deadline-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/realtime/RenderDeadlineMonitor.*"
+      - "firmware/voice/AdaptivePolyphony.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "tests/realtime/test_render_deadline_monitor.cpp"
+      - ".github/workflows/m6-deadline-tests.yml"
+  pull_request:
+    paths:
+      - "firmware/realtime/RenderDeadlineMonitor.*"
+      - "firmware/voice/AdaptivePolyphony.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "tests/realtime/test_render_deadline_monitor.cpp"
+      - ".github/workflows/m6-deadline-tests.yml"
+
+jobs:
+  deadline-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build render deadline monitor tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/AdaptivePolyphony.cpp \
+            firmware/realtime/RenderDeadlineMonitor.cpp \
+            tests/realtime/test_render_deadline_monitor.cpp \
+            -o build/host-tests/test_render_deadline_monitor
+      - name: Run render deadline monitor tests
+        run: ./build/host-tests/test_render_deadline_monitor
