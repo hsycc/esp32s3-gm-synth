@@ -1,5 +1,6 @@
 #include "ZoneResolver.h"
 
+#include "sf2/Sf2FilterMath.h"
 #include "sf2/Sf2ModulationMath.h"
 #include "util/SaturatingCounter.h"
 
@@ -63,6 +64,65 @@ std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) 
     return zone.note_on_gain.enabled && zone.note_on_gain.fixed_velocity >= 0
         ? static_cast<std::uint8_t>(zone.note_on_gain.fixed_velocity)
         : velocity;
+}
+
+std::uint32_t scaleEnvelopeFramesByTimecents(
+    std::uint32_t frames,
+    int delta_timecents) {
+    if (frames == 0 || delta_timecents == 0) {
+        return frames;
+    }
+    const std::uint64_t base_q32 = static_cast<std::uint64_t>(frames) << 32u;
+    const std::uint64_t scaled_q32 = ZoneResolver::transposeCents(
+        base_q32,
+        delta_timecents);
+    const std::uint64_t whole_frames = scaled_q32 >> 32u;
+    return whole_frames > std::numeric_limits<std::uint32_t>::max()
+        ? std::numeric_limits<std::uint32_t>::max()
+        : static_cast<std::uint32_t>(whole_frames);
+}
+
+void applyEnvelopeKeyScaling(
+    const PlaybackZone& zone,
+    std::uint8_t key,
+    voice::EnvelopeConfig* envelope) {
+    if (envelope == nullptr) {
+        return;
+    }
+    const int key_delta = 60 - static_cast<int>(key);
+    envelope->hold_frames = scaleEnvelopeFramesByTimecents(
+        envelope->hold_frames,
+        static_cast<int>(zone.envelope_key_scaling.hold_timecents_per_key) * key_delta);
+    envelope->decay_frames = scaleEnvelopeFramesByTimecents(
+        envelope->decay_frames,
+        static_cast<int>(zone.envelope_key_scaling.decay_timecents_per_key) * key_delta);
+}
+
+void prepareNoteOnFilter(
+    const PlaybackZone& zone,
+    std::uint8_t effective_velocity,
+    voice::BiquadLowpassConfig* output) {
+    if (output == nullptr || !zone.note_on_filter.enabled) {
+        return;
+    }
+    const std::int64_t summed_cutoff =
+        static_cast<std::int64_t>(zone.note_on_filter.initial_cutoff_cents) +
+        sf2::velocityToFilterCutoffCents(
+            effective_velocity,
+            zone.note_on_filter.velocity_to_cutoff_cents);
+    const std::int32_t cutoff = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        summed_cutoff,
+        sf2::kSf2MinFilterCutoffCents,
+        sf2::kSf2MaxFilterCutoffCents));
+
+    // Preview zones with non-zero Q are already explicitly marked
+    // PlaybackIssueFilterPending. Apply the correct cutoff with the qualified
+    // Q=0 response rather than dropping filtering altogether.
+    (void)sf2::prepareLowpassQ24(
+        cutoff,
+        0,
+        sf2::kSf2FilterOutputSampleRate,
+        output);
 }
 
 struct ActiveVoiceRefreshContext {
@@ -249,6 +309,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.chorus_send_units = zone.effects_send.chorus_sf2_units;
         }
         params.envelope = zone.envelope;
+        applyEnvelopeKeyScaling(zone, key, &params.envelope);
+        prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
         batch->voices[batch->count++] = params;
     }
 
@@ -331,6 +393,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                     zone.effects_send.chorus_cc_amount));
         }
         params.envelope = zone.envelope;
+        applyEnvelopeKeyScaling(zone, key, &params.envelope);
+        prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
