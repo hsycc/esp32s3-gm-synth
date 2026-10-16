@@ -33,6 +33,24 @@ struct NoteOnGainConfig {
     }
 };
 
+// Prepared SF2 reverb/chorus generator summing state. The runtime computes the
+// current send from the static generator plus CC91/CC93. These values are
+// carried all the way into Voice even before the actual FX processors exist so
+// controller semantics and future routing do not need another metadata change.
+struct EffectsSendConfig {
+    bool enabled = false;
+    std::int16_t reverb_sf2_units = 0;
+    std::int16_t chorus_sf2_units = 0;
+    std::int32_t reverb_cc_amount = 200;
+    std::int32_t chorus_cc_amount = 200;
+
+    bool valid() const {
+        return !enabled ||
+            (reverb_sf2_units >= 0 && reverb_sf2_units <= 1000 &&
+             chorus_sf2_units >= 0 && chorus_sf2_units <= 1000);
+    }
+};
+
 // Immutable, control-domain-prepared playback metadata for one SF2 zone.
 // Expensive SF2 generator/modulator merging belongs before publication. The
 // audio domain only performs bounded key/velocity matching and copies these
@@ -61,6 +79,7 @@ struct PlaybackZone {
     std::int32_t gain_right_q15 = voice::kQ15Unity;
     voice::EnvelopeConfig envelope{};
     NoteOnGainConfig note_on_gain{};
+    EffectsSendConfig effects_send{};
 
     bool valid() const {
         const bool sample_region_valid = !sample_region.enabled ||
@@ -72,7 +91,7 @@ struct PlaybackZone {
         return key_low <= key_high && key_high <= 127 &&
                velocity_low <= velocity_high && velocity_high <= 127 &&
                root_key <= 127 && root_phase_increment_q32 != 0 &&
-               sample_region_valid && note_on_gain.valid();
+               sample_region_valid && note_on_gain.valid() && effects_send.valid();
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
