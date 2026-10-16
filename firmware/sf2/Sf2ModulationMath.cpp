@@ -104,6 +104,30 @@ std::int32_t controllerToPanSf2Units(
     return -static_cast<std::int32_t>((-scaled + 64) / 128);
 }
 
+std::int32_t controllerToEffectsSendSf2Units(
+    std::uint8_t value,
+    std::int32_t amount) {
+    // Positive-unipolar linear SF2 source. The specification maps MIDI 127 to
+    // 127/128 of the route amount, matching the same 128-step controller model
+    // used by other linear unipolar modulators.
+    const std::int64_t scaled =
+        static_cast<std::int64_t>(std::min<unsigned>(value, 127u)) * amount;
+    if (scaled >= 0) {
+        return static_cast<std::int32_t>((scaled + 64) / 128);
+    }
+    return -static_cast<std::int32_t>((-scaled + 64) / 128);
+}
+
+std::int32_t channelEffectsSendSf2Units(
+    std::int32_t static_send_sf2_units,
+    std::uint8_t controller_value,
+    std::int32_t controller_amount) {
+    const std::int64_t summed = static_cast<std::int64_t>(static_send_sf2_units) +
+        controllerToEffectsSendSf2Units(controller_value, controller_amount);
+    return static_cast<std::int32_t>(
+        std::max<std::int64_t>(0, std::min<std::int64_t>(kSf2MaxEffectsSend, summed)));
+}
+
 std::int32_t attenuationCbToGainQ15(std::int32_t attenuation_cb) {
     if (attenuation_cb <= 0) {
         return voice::kQ15Unity;
