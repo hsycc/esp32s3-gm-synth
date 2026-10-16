@@ -317,6 +317,11 @@ void Voice::reset() {
 
 bool VoicePool::start(const VoiceStartParams& params) {
     ++stats_.start_attempts;
+    if (activeVoiceCount() >= admission_limit_) {
+        ++stats_.start_failures_admission;
+        return false;
+    }
+
     for (Voice& voice : voices_) {
         if (voice.active()) {
             continue;
@@ -374,6 +379,11 @@ void VoicePool::allSoundOff() {
         }
     }
     stats_.active_voices = 0;
+}
+
+void VoicePool::setAdmissionLimit(std::size_t limit) {
+    admission_limit_ = std::clamp<std::size_t>(limit, 1u, kHardVoiceCap);
+    stats_.admission_limit = admission_limit_;
 }
 
 std::size_t VoicePool::activeVoiceCount() const {
