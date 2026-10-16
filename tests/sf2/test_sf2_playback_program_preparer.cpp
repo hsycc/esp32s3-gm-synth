@@ -19,9 +19,11 @@ using gm_synth::sf2::PlaybackIssueDefaultModulatorsPending;
 using gm_synth::sf2::PlaybackPreparePolicy;
 using gm_synth::sf2::PlaybackPrepareRequest;
 using gm_synth::sf2::PlaybackPrepareStatus;
+using gm_synth::sf2::ResolvedZoneModulation;
 using gm_synth::sf2::ResolveProgramStatus;
 using gm_synth::sf2::Sf2PdtaReader;
 using gm_synth::sf2::Sf2PlaybackProgramPreparer;
+using gm_synth::sf2::ZoneModulatorResolveStatus;
 using gm_synth::storage::RandomAccessReader;
 
 class FileReader final : public RandomAccessReader {
@@ -62,6 +64,8 @@ private:
 PlaybackPrepareRequest requestFor(
     NativeResolvedZone* native,
     std::size_t native_capacity,
+    ResolvedZoneModulation* modulation,
+    std::size_t modulation_capacity,
     PlaybackZone* playback,
     std::size_t playback_capacity,
     SampleId* dependencies,
@@ -76,6 +80,8 @@ PlaybackPrepareRequest requestFor(
     request.policy = PlaybackPreparePolicy::AllowPreview;
     request.native_scratch = native;
     request.native_capacity = native_capacity;
+    request.modulation_scratch = modulation;
+    request.modulation_capacity = modulation_capacity;
     request.playback_zones = playback;
     request.playback_capacity = playback_capacity;
     request.dependencies = dependencies;
@@ -84,13 +90,14 @@ PlaybackPrepareRequest requestFor(
     return request;
 }
 
-void testFmProgramPreparesSnapshotAndDependencyList() {
+void testFmProgramPreparesSnapshotAndResolvedDefaultVelocityRoute() {
     FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
     assert(reader.valid());
     Sf2PdtaReader pdta;
     assert(pdta.begin(reader));
 
     std::array<NativeResolvedZone, 8> native{};
+    std::array<ResolvedZoneModulation, 8> modulation{};
     std::array<PlaybackZone, 8> playback{};
     std::array<SampleId, 8> dependencies{};
     PlaybackProgramSnapshot snapshot{};
@@ -100,16 +107,20 @@ void testFmProgramPreparesSnapshotAndDependencyList() {
         pdta,
         requestFor(
             native.data(), native.size(),
+            modulation.data(), modulation.size(),
             playback.data(), playback.size(),
             dependencies.data(), dependencies.size(),
             &snapshot));
 
     assert(result.status == PlaybackPrepareStatus::Ok);
     assert(result.resolve_status == ResolveProgramStatus::Ok);
+    assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
     assert(result.zone_count == 1);
     assert(result.required_zone_capacity == 1);
     assert(result.dependency_count == 1);
     assert(result.required_dependency_capacity == 1);
+    assert(result.supported_modulator_records == 0);
+    assert(result.unsupported_modulator_records == 0);
     assert(result.preview_zone_count == 1);
     assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) != 0);
     assert(snapshot.valid());
@@ -122,6 +133,9 @@ void testFmProgramPreparesSnapshotAndDependencyList() {
     assert(snapshot.zone_count == 1);
     assert(dependencies[0] == 0);
     assert(playback[0].sample_id == 0);
+    assert(playback[0].note_on_gain.enabled);
+    assert(playback[0].note_on_gain.velocity_to_attenuation_cb == 960);
+    assert(playback[0].note_on_gain.fixed_velocity == -1);
     assert(playback[0].valid());
 }
 
@@ -132,6 +146,7 @@ void testStrictQualificationRejectsBeforeMutatingPlaybackStorage() {
     assert(pdta.begin(reader));
 
     std::array<NativeResolvedZone, 8> native{};
+    std::array<ResolvedZoneModulation, 8> modulation{};
     std::array<PlaybackZone, 8> playback{};
     std::array<SampleId, 8> dependencies{};
     playback[0].sample_id = 999;
@@ -141,6 +156,7 @@ void testStrictQualificationRejectsBeforeMutatingPlaybackStorage() {
 
     PlaybackPrepareRequest request = requestFor(
         native.data(), native.size(),
+        modulation.data(), modulation.size(),
         playback.data(), playback.size(),
         dependencies.data(), dependencies.size(),
         &snapshot);
@@ -148,6 +164,7 @@ void testStrictQualificationRejectsBeforeMutatingPlaybackStorage() {
 
     const auto result = Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
     assert(result.status == PlaybackPrepareStatus::UnqualifiedZone);
+    assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
     assert(result.first_problem_zone == 0);
     assert(result.preview_zone_count == 1);
     assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) != 0);
@@ -163,6 +180,7 @@ void testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch() {
     assert(pdta.begin(reader));
 
     std::array<NativeResolvedZone, 128> native{};
+    std::array<ResolvedZoneModulation, 128> modulation{};
     std::array<PlaybackZone, 128> playback{};
     std::array<SampleId, 128> dependencies{};
     PlaybackProgramSnapshot snapshot{};
@@ -172,6 +190,7 @@ void testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch() {
         pdta,
         requestFor(
             native.data(), native.size(),
+            modulation.data(), modulation.size(),
             playback.data(), playback.size(),
             dependencies.data(), dependencies.size(),
             &snapshot));
@@ -181,13 +200,14 @@ void testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch() {
     assert(snapshot.token == 88);
 }
 
-void testDependencyCapacityIsExplicitAndSnapshotRemainsUnchanged() {
+void testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones() {
     FileReader reader("assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2");
     assert(reader.valid());
     Sf2PdtaReader pdta;
     assert(pdta.begin(reader));
 
     std::array<NativeResolvedZone, 256> native{};
+    std::array<ResolvedZoneModulation, 256> modulation{};
     std::array<PlaybackZone, 256> playback{};
     std::array<SampleId, 1> dependencies{};
     PlaybackProgramSnapshot snapshot{};
@@ -197,16 +217,21 @@ void testDependencyCapacityIsExplicitAndSnapshotRemainsUnchanged() {
         pdta,
         requestFor(
             native.data(), native.size(),
+            modulation.data(), modulation.size(),
             playback.data(), playback.size(),
             dependencies.data(), dependencies.size(),
             &snapshot));
     assert(result.status == PlaybackPrepareStatus::DependencyCapacityExceeded);
+    assert(result.resolve_status == ResolveProgramStatus::Ok);
+    assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
     assert(result.zone_count == 200);
+    assert(result.supported_modulator_records > 0);
+    assert(result.unsupported_modulator_records > 0);
     assert(result.required_dependency_capacity > dependencies.size());
     assert(snapshot.token == 55);
 }
 
-void testMissingPresetSurfacesResolverStatus() {
+void testModulationCapacityParticipatesInZonePreflight() {
     FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
     assert(reader.valid());
     Sf2PdtaReader pdta;
@@ -216,8 +241,35 @@ void testMissingPresetSurfacesResolverStatus() {
     std::array<PlaybackZone, 8> playback{};
     std::array<SampleId, 8> dependencies{};
     PlaybackProgramSnapshot snapshot{};
+    snapshot.token = 66;
+
     PlaybackPrepareRequest request = requestFor(
         native.data(), native.size(),
+        nullptr, 0,
+        playback.data(), playback.size(),
+        dependencies.data(), dependencies.size(),
+        &snapshot);
+
+    const auto result = Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
+    assert(result.status == PlaybackPrepareStatus::ZoneCapacityExceeded);
+    assert(result.required_zone_capacity == 1);
+    assert(snapshot.token == 66);
+}
+
+void testMissingPresetSurfacesResolverStatus() {
+    FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
+    assert(reader.valid());
+    Sf2PdtaReader pdta;
+    assert(pdta.begin(reader));
+
+    std::array<NativeResolvedZone, 8> native{};
+    std::array<ResolvedZoneModulation, 8> modulation{};
+    std::array<PlaybackZone, 8> playback{};
+    std::array<SampleId, 8> dependencies{};
+    PlaybackProgramSnapshot snapshot{};
+    PlaybackPrepareRequest request = requestFor(
+        native.data(), native.size(),
+        modulation.data(), modulation.size(),
         playback.data(), playback.size(),
         dependencies.data(), dependencies.size(),
         &snapshot);
@@ -231,6 +283,7 @@ void testMissingPresetSurfacesResolverStatus() {
 
 void testInvalidIdentityDoesNotTouchOutputs() {
     NativeResolvedZone native{};
+    ResolvedZoneModulation modulation{};
     PlaybackZone playback{};
     SampleId dependency = 0;
     PlaybackProgramSnapshot snapshot{};
@@ -239,7 +292,11 @@ void testInvalidIdentityDoesNotTouchOutputs() {
     // pdta is intentionally unopened: request validation must fail first.
     Sf2PdtaReader pdta;
     PlaybackPrepareRequest request = requestFor(
-        &native, 1, &playback, 1, &dependency, 1, &snapshot);
+        &native, 1,
+        &modulation, 1,
+        &playback, 1,
+        &dependency, 1,
+        &snapshot);
     request.token = 0;
 
     const auto result = Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
@@ -250,10 +307,11 @@ void testInvalidIdentityDoesNotTouchOutputs() {
 }  // namespace
 
 int main() {
-    testFmProgramPreparesSnapshotAndDependencyList();
+    testFmProgramPreparesSnapshotAndResolvedDefaultVelocityRoute();
     testStrictQualificationRejectsBeforeMutatingPlaybackStorage();
     testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch();
-    testDependencyCapacityIsExplicitAndSnapshotRemainsUnchanged();
+    testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones();
+    testModulationCapacityParticipatesInZonePreflight();
     testMissingPresetSurfacesResolverStatus();
     testInvalidIdentityDoesNotTouchOutputs();
     std::cout << "SF2 playback program preparer host checks passed\n";
