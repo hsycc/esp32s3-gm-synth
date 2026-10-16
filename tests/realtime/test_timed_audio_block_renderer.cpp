@@ -92,6 +92,42 @@ void testMeasuredRenderFeedsMonitor() {
     assert(snapshot.max_us == 234);
 }
 
+void testDeferredObservationCombinesPostRenderMissOnce() {
+    RenderFixture fixture;
+    FakeClock clock{};
+    clock.values[0] = 3000;
+    clock.values[1] = 3125;
+    clock.count = 2;
+
+    TimedAudioBlockRenderer timed(
+        fixture.renderer,
+        fixture.monitor,
+        fakeNowUs,
+        &clock);
+
+    const auto measurement = timed.renderMeasured(0, fixture.output.data());
+    assert(measurement.timing_valid);
+    assert(measurement.render_time_us == 125);
+    assert(fixture.renderer.stats().blocks_rendered == 1);
+    assert(fixture.monitor.stats().blocks_observed == 0);
+    assert(fixture.controller.stats().blocks_observed == 0);
+
+    // This models a short I2S write discovered after render completed. The
+    // measured render time and the output deadline miss become one observation.
+    assert(timed.observeMeasurement(measurement, true) == 6);
+    assert(fixture.monitor.stats().blocks_observed == 1);
+    assert(fixture.monitor.stats().deadline_misses == 1);
+    assert(fixture.monitor.stats().window_count == 1);
+    assert(fixture.controller.stats().blocks_observed == 1);
+    assert(fixture.controller.stats().deadline_misses == 1);
+    assert(fixture.voices.admissionLimit() == 6);
+
+    const auto snapshot = fixture.monitor.snapshot();
+    assert(snapshot.sample_count == 1);
+    assert(snapshot.min_us == 125);
+    assert(snapshot.max_us == 125);
+}
+
 void testMissingClockDoesNotPoisonAdaptivePolicy() {
     RenderFixture fixture;
     TimedAudioBlockRenderer timed(
@@ -200,6 +236,7 @@ void testUnrepresentableDurationClampsAndTripsDeadline() {
 
 int main() {
     testMeasuredRenderFeedsMonitor();
+    testDeferredObservationCombinesPostRenderMissOnce();
     testMissingClockDoesNotPoisonAdaptivePolicy();
     testMissingClockStillForwardsExplicitMiss();
     testClockRegressionIsRejected();
