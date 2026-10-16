@@ -1,26 +1,13 @@
 #include "EspI2sAudioSink.h"
 
 #include "esp_err.h"
+#include "util/SaturatingCounter.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 
 namespace gm_synth::platform {
-namespace {
-
-void saturatingIncrement(std::uint64_t& value) {
-    if (value != std::numeric_limits<std::uint64_t>::max()) {
-        ++value;
-    }
-}
-
-void saturatingAdd(std::uint64_t& value, std::uint64_t increment) {
-    const std::uint64_t remaining = std::numeric_limits<std::uint64_t>::max() - value;
-    value += increment > remaining ? remaining : increment;
-}
-
-}  // namespace
 
 EspI2sAudioSink::~EspI2sAudioSink() {
     shutdown();
@@ -39,7 +26,7 @@ bool EspI2sAudioSink::validConfig(const EspI2sAudioSinkConfig& config) {
 
 bool EspI2sAudioSink::begin(const EspI2sAudioSinkConfig& config) {
     if (tx_handle_ != nullptr || !validConfig(config)) {
-        saturatingIncrement(stats_.failures);
+        util::saturatingIncrement(stats_.failures);
         return false;
     }
 
@@ -50,7 +37,7 @@ bool EspI2sAudioSink::begin(const EspI2sAudioSinkConfig& config) {
 
     if (i2s_new_channel(&channel_config, &tx_handle_, nullptr) != ESP_OK) {
         tx_handle_ = nullptr;
-        saturatingIncrement(stats_.failures);
+        util::saturatingIncrement(stats_.failures);
         return false;
     }
 
@@ -80,14 +67,14 @@ bool EspI2sAudioSink::begin(const EspI2sAudioSinkConfig& config) {
     if (i2s_channel_init_std_mode(tx_handle_, &standard_config) != ESP_OK) {
         (void)i2s_del_channel(tx_handle_);
         tx_handle_ = nullptr;
-        saturatingIncrement(stats_.failures);
+        util::saturatingIncrement(stats_.failures);
         return false;
     }
 
     if (i2s_channel_enable(tx_handle_) != ESP_OK) {
         (void)i2s_del_channel(tx_handle_);
         tx_handle_ = nullptr;
-        saturatingIncrement(stats_.failures);
+        util::saturatingIncrement(stats_.failures);
         return false;
     }
 
@@ -106,7 +93,7 @@ bool EspI2sAudioSink::writeFrames(
     if (!ready() || interleaved_stereo == nullptr || frame_count == 0 ||
         frame_count > std::numeric_limits<std::size_t>::max() /
             (2u * sizeof(std::int16_t))) {
-        saturatingIncrement(stats_.failures);
+        util::saturatingIncrement(stats_.failures);
         return false;
     }
 
@@ -114,8 +101,10 @@ bool EspI2sAudioSink::writeFrames(
         frame_count * 2u * sizeof(std::int16_t);
     std::size_t actual_bytes = 0;
 
-    saturatingIncrement(stats_.write_calls);
-    saturatingAdd(stats_.frames_submitted, static_cast<std::uint64_t>(frame_count));
+    util::saturatingIncrement(stats_.write_calls);
+    util::saturatingAdd(
+        stats_.frames_submitted,
+        static_cast<std::uint64_t>(frame_count));
     const esp_err_t result = i2s_channel_write(
         tx_handle_,
         interleaved_stereo,
@@ -123,18 +112,20 @@ bool EspI2sAudioSink::writeFrames(
         &actual_bytes,
         timeout_ms);
 
-    saturatingAdd(stats_.bytes_written, static_cast<std::uint64_t>(actual_bytes));
+    util::saturatingAdd(
+        stats_.bytes_written,
+        static_cast<std::uint64_t>(actual_bytes));
     if (bytes_written != nullptr) {
         *bytes_written = actual_bytes;
     }
     if (actual_bytes != requested_bytes) {
-        saturatingIncrement(stats_.short_writes);
+        util::saturatingIncrement(stats_.short_writes);
     }
     if (result == ESP_ERR_TIMEOUT) {
-        saturatingIncrement(stats_.timeouts);
+        util::saturatingIncrement(stats_.timeouts);
     }
     if (result != ESP_OK) {
-        saturatingIncrement(stats_.failures);
+        util::saturatingIncrement(stats_.failures);
         return false;
     }
     return actual_bytes == requested_bytes;
