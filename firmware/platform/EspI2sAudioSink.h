@@ -40,7 +40,7 @@ public:
     bool writeFrames(
         const std::int16_t* interleaved_stereo,
         std::size_t frame_count,
-        std::uint32_t ticks_to_wait,
+        std::uint32_t timeout_ms,
         std::size_t* bytes_written = nullptr);
     void shutdown();
 
