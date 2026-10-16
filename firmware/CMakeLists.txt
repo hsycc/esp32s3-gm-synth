@@ -15,8 +15,9 @@ idf_component_register(
         "voice/AudioBlockRenderer.cpp"
         "platform/EspPsramArena.cpp"
         "platform/EspStorageBenchmark.cpp"
+        "platform/EspI2sAudioSink.cpp"
     INCLUDE_DIRS "."
-    REQUIRES esp_psram esp_timer log
+    REQUIRES esp_psram esp_timer log esp_driver_i2s
     PRIV_REQUIRES heap
 )
 
