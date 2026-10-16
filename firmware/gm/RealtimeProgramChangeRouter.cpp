@@ -3,6 +3,12 @@
 #include "util/SaturatingCounter.h"
 
 namespace gm_synth::gm {
+namespace {
+
+constexpr std::uint8_t kMidiChannelCount =
+    static_cast<std::uint8_t>(MidiChannelStateBank::kMidiChannels);
+
+}  // namespace
 
 std::uint32_t RealtimeProgramChangeRouter::allocateProgramToken() {
     const std::uint32_t token = next_program_token_;
@@ -16,7 +22,7 @@ std::uint32_t RealtimeProgramChangeRouter::allocateProgramToken() {
 bool RealtimeProgramChangeRouter::publishProgramRequest(
     std::uint8_t channel,
     std::uint8_t program) {
-    if (channel >= MidiChannelStateBank::kMidiChannels || program > 127) {
+    if (channel >= kMidiChannelCount || program > 127) {
         util::saturatingIncrement(stats_.requests_rejected);
         return false;
     }
@@ -44,9 +50,7 @@ bool RealtimeProgramChangeRouter::applyGmReset(voice::VoicePool& voices) {
     events_.channelStates().resetGm();
 
     bool success = true;
-    for (std::uint8_t channel = 0;
-         channel < MidiChannelStateBank::kMidiChannels;
-         ++channel) {
+    for (std::uint8_t channel = 0; channel < kMidiChannelCount; ++channel) {
         if (publishProgramRequest(channel, 0)) {
             util::saturatingIncrement(stats_.gm_reset_program_requests);
         } else {
