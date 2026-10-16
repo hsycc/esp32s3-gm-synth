@@ -4,9 +4,11 @@ on:
   push:
     branches: [main]
     paths:
+      - "firmware/gm/MidiChannelState.*"
       - "firmware/gm/PlaybackProgramSnapshot.*"
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/sf2/Sf2ModulationMath.*"
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
@@ -16,9 +18,11 @@ on:
       - ".github/workflows/m6-playback-zone-tests.yml"
   pull_request:
     paths:
+      - "firmware/gm/MidiChannelState.*"
       - "firmware/gm/PlaybackProgramSnapshot.*"
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/sf2/Sf2ModulationMath.*"
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
@@ -118,6 +122,8 @@ jobs:
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/sample/ProgramSnapshot.cpp \
             firmware/voice/VoiceRenderer.cpp \
+            firmware/sf2/Sf2ModulationMath.cpp \
+            firmware/gm/MidiChannelState.cpp \
             firmware/gm/PlaybackProgramSnapshot.cpp \
             firmware/gm/ZoneResolver.cpp \
             firmware/realtime/RealtimeEventQueue.cpp \
