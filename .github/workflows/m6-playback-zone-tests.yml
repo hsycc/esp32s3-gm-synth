@@ -9,6 +9,7 @@ on:
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
       - "firmware/sf2/Sf2ModulationMath.*"
+      - "firmware/sf2/Sf2FilterMath.*"
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/voice/VoiceRuntimeControl.*"
       - "firmware/realtime/RealtimeEventQueue.*"
@@ -24,6 +25,7 @@ on:
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
       - "firmware/sf2/Sf2ModulationMath.*"
+      - "firmware/sf2/Sf2FilterMath.*"
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/voice/VoiceRuntimeControl.*"
       - "firmware/realtime/RealtimeEventQueue.*"
@@ -126,6 +128,7 @@ jobs:
             firmware/voice/VoiceRenderer.cpp \
             firmware/voice/VoiceRuntimeControl.cpp \
             firmware/sf2/Sf2ModulationMath.cpp \
+            firmware/sf2/Sf2FilterMath.cpp \
             firmware/gm/MidiChannelState.cpp \
             firmware/gm/PlaybackProgramSnapshot.cpp \
             firmware/gm/ZoneResolver.cpp \
