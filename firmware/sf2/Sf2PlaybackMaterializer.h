@@ -18,9 +18,9 @@ enum class PlaybackMaterializationStatus : std::uint8_t {
 enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueNone = 0,
 
-    // Velocity, CC7/10/11/91/93 and Pitch Wheel/RPN are represented by the
-    // runtime now. Remaining mandatory SF2 defaults that target filter/LFO DSP
-    // still keep a zone in Preview until those processors/sources land.
+    // Velocity attenuation/filter, CC7/10/11/91/93 and Pitch Wheel/RPN are
+    // represented now. Remaining mandatory SF2 defaults are chiefly the
+    // mod-wheel/channel-pressure vibrato-LFO routes.
     PlaybackIssueDefaultModulatorsPending = std::uint64_t{1} << 0,
     PlaybackIssueCustomModulatorsPending = std::uint64_t{1} << 1,
     PlaybackIssueUnknownGenerator = std::uint64_t{1} << 2,
@@ -36,17 +36,21 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueInvalidRootKey = std::uint64_t{1} << 9,
     PlaybackIssueInvalidPhaseIncrement = std::uint64_t{1} << 10,
 
-    // These are preserved in NativeResolvedZone but the current Voice DSP does
-    // not yet implement their exact semantics.
+    // Preserved native semantics which are not fully implemented yet.
     PlaybackIssueScaleTuningPending = std::uint64_t{1} << 11,
+    // Reserved historical diagnostic bits. Volume-envelope delay/hold and their
+    // key scaling are implemented now; these bits are intentionally no longer
+    // emitted so old telemetry decoders keep stable bit positions.
     PlaybackIssueVolumeEnvelopeDelayPending = std::uint64_t{1} << 12,
     PlaybackIssueVolumeEnvelopeHoldPending = std::uint64_t{1} << 13,
     PlaybackIssueVolumeEnvelopeKeyScalingPending = std::uint64_t{1} << 14,
+    // Static cutoff + NoteOn velocity modulation are implemented. This bit now
+    // means non-zero resonance or dynamic mod-env/LFO filter motion is pending.
     PlaybackIssueFilterPending = std::uint64_t{1} << 15,
     PlaybackIssueModEnvelopePending = std::uint64_t{1} << 16,
     PlaybackIssueLfoPending = std::uint64_t{1} << 17,
     // Reverb/chorus generator + CC91/93 send values are preserved and updated
-    // sample-accurately in Voice state; this bit now means the actual FX bus/DSP
+    // sample-accurately in Voice state; this bit means the actual FX bus/DSP
     // processor that consumes those sends is still pending.
     PlaybackIssueEffectsSendPending = std::uint64_t{1} << 18,
     // Retained as a diagnostics bit for callers using the conservative legacy
