@@ -1,6 +1,5 @@
 #include "TimedAudioBlockRenderer.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
 
@@ -19,7 +18,7 @@ std::size_t TimedAudioBlockRenderer::render(
     if (now_us_ == nullptr) {
         renderer_.render(block_start_frame, interleaved_stereo);
         saturatingIncrement(stats_.clock_faults);
-        return monitor_.snapshot().admission_limit;
+        return monitor_.currentAdmissionLimit();
     }
 
     const std::uint64_t start_us = now_us_(clock_context_);
@@ -28,7 +27,7 @@ std::size_t TimedAudioBlockRenderer::render(
 
     if (end_us < start_us) {
         saturatingIncrement(stats_.clock_faults);
-        return monitor_.snapshot().admission_limit;
+        return monitor_.currentAdmissionLimit();
     }
 
     std::uint64_t elapsed_us = end_us - start_us;
