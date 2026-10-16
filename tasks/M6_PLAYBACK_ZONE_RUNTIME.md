@@ -1,0 +1,30 @@
+# M6 Playback Zone Runtime
+
+## Goal
+
+Connect raw realtime MIDI NoteOn/NoteOff events to prepared SF2 playback metadata and the existing VoicePool without parsing SF2 or allocating memory in the audio domain.
+
+## Phase F scope
+
+- Keep sample residency/dependency ownership in `sample::ProgramSnapshot`.
+- Add a separate immutable `gm::PlaybackProgramSnapshot` containing prepared playback zones.
+- Bound each snapshot to 128 zones and each NoteOn result to the existing 32-Voice hard cap.
+- Match key and velocity ranges in the audio domain using a fixed scan only.
+- Carry SF2 `exclusiveClass` into `VoiceStartParams`.
+- Assign one shared non-zero `note_instance_id` to every layer produced by one logical NoteOn.
+- Support fixed-pitch zones and integer equal-temperament key tracking without `pow()`, allocation or storage I/O.
+- Feed resolved zones through the existing VoicePool duplicate-note/exclusive-class policy.
+- Provide a compatibility coordinator so residency READY and playback READY must identify the same channel/bank/program/token/bank-generation before block-boundary commit.
+- Regression-test the complete `RealtimeEvent -> ZoneResolver -> VoicePool -> render` path on Host CI.
+
+## Deliberately not in Phase F
+
+- Runtime parsing of SF2 `phdr/pbag/pgen/inst/ibag/igen`.
+- Full SF2 `scaleTuning` values other than the prepared fixed-pitch/equal-temperament representation.
+- Modulator evaluation in the audio callback.
+- Storage I/O or heap allocation in NoteOn/NoteOff handling.
+- Physical-board polyphony guarantees; QEMU remains the regression environment and N16R8 remains required for final realtime performance evidence.
+
+## Next phase
+
+Build the control-domain SF2 preset/instrument/generator parser that materializes `PlaybackProgramSnapshot` from a real bank and publishes it alongside the already-prepared residency snapshot. The parser must merge global/local preset and instrument generators, preserve key/velocity ranges, sample identity, loop/tuning/gain/pan/envelope/filter state, and generator 57 (`exclusiveClass`).
