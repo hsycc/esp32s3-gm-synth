@@ -52,6 +52,7 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     // channel-controller composition are implemented together.
     PlaybackIssuePanLawApproximation = std::uint64_t{1} << 20,
     PlaybackIssueGainAboveUnityClamped = std::uint64_t{1} << 21,
+    PlaybackIssueIgnoredInvalidPresetGenerator = std::uint64_t{1} << 22,
 };
 
 struct PlaybackMaterializationResult {
