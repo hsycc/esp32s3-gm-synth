@@ -10,6 +10,27 @@
 
 namespace gm_synth::gm {
 
+// Compact parameters whose final value depends on the incoming NoteOn. Keeping
+// the raw SoundFont attenuation summing node here is important: a negative
+// preset initialAttenuation may cancel part of velocity/controller attenuation
+// before the final [0, 1440] cB clamp, so it cannot be safely baked into a
+// pre-clamped static Q15 gain during Program Prepare.
+struct NoteOnGainConfig {
+    bool enabled = false;
+    std::int32_t initial_attenuation_cb = 0;
+    std::int32_t velocity_to_attenuation_cb = 0;
+    std::int16_t pan_sf2_units = 0;
+    // -1 means use the incoming NoteOn velocity. SF2 generator 47 may replace
+    // the velocity used by note-on modulators without changing zone selection.
+    std::int16_t fixed_velocity = -1;
+
+    bool valid() const {
+        return !enabled ||
+            (pan_sf2_units >= -500 && pan_sf2_units <= 500 &&
+             fixed_velocity >= -1 && fixed_velocity <= 127);
+    }
+};
+
 // Immutable, control-domain-prepared playback metadata for one SF2 zone.
 // Expensive SF2 generator/modulator merging belongs before publication. The
 // audio domain only performs bounded key/velocity matching and copies these
@@ -38,6 +59,7 @@ struct PlaybackZone {
     std::int32_t gain_left_q15 = voice::kQ15Unity;
     std::int32_t gain_right_q15 = voice::kQ15Unity;
     voice::EnvelopeConfig envelope{};
+    NoteOnGainConfig note_on_gain{};
 
     bool valid() const {
         const bool sample_region_valid = !sample_region.enabled ||
@@ -49,7 +71,7 @@ struct PlaybackZone {
         return key_low <= key_high && key_high <= 127 &&
                velocity_low <= velocity_high && velocity_high <= 127 &&
                root_key <= 127 && root_phase_increment_q32 != 0 &&
-               sample_region_valid;
+               sample_region_valid && note_on_gain.valid();
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
