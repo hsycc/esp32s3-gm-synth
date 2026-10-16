@@ -9,6 +9,8 @@ void MidiChannelState::resetControllers() {
     // Channel Volume, Pan, Bank, Program and effect sends. Reset performance
     // controllers, Pitch Bend and parameter selection instead. A full GM System
     // On reset is a separate operation and restores mix/program defaults too.
+    modulation_wheel = 0;
+    channel_pressure = 0;
     expression = 127;
     sustain = 0;
     pitch_bend = kPitchBendCenter;
@@ -43,6 +45,9 @@ std::uint32_t MidiChannelState::applyControlChange(
         case 0:
             bank_msb = value;
             return ChannelControlBankChanged;
+        case 1:
+            modulation_wheel = value;
+            return ChannelControlVibratoChanged;
         case 32:
             bank_lsb = value;
             return ChannelControlBankChanged;
@@ -113,12 +118,21 @@ std::uint32_t MidiChannelState::applyControlChange(
             return ChannelControlResetControllers |
                 ChannelControlGainChanged |
                 ChannelControlSustainChanged |
-                ChannelControlRpnSelectionChanged;
+                ChannelControlRpnSelectionChanged |
+                ChannelControlVibratoChanged;
         case 123:
             return ChannelControlAllNotesOff;
         default:
             return ChannelControlNone;
     }
+}
+
+bool MidiChannelState::applyChannelPressure(std::uint8_t pressure) {
+    if (pressure > 127) {
+        return false;
+    }
+    channel_pressure = pressure;
+    return true;
 }
 
 bool MidiChannelState::applyPitchBend(std::uint16_t value14) {
@@ -149,6 +163,13 @@ std::uint32_t MidiChannelStateBank::applyControlChange(
         return ChannelControlNone;
     }
     return channels_[channel_index].applyControlChange(controller, value);
+}
+
+bool MidiChannelStateBank::applyChannelPressure(
+    std::uint8_t channel_index,
+    std::uint8_t pressure) {
+    return channel_index < channels_.size() &&
+        channels_[channel_index].applyChannelPressure(pressure);
 }
 
 bool MidiChannelStateBank::applyPitchBend(
