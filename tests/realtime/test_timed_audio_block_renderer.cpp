@@ -113,8 +113,8 @@ void testDeferredObservationCombinesPostRenderMissOnce() {
         &clock);
 
     auto measurement = timed.renderMeasured(0, fixture.output.data());
-    assert(measurement.timing_valid);
-    assert(measurement.render_time_us == 125);
+    assert(measurement.timingValid());
+    assert(measurement.renderTimeUs() == 125);
     assert(fixture.renderer.stats().blocks_rendered == 1);
     assert(fixture.monitor.stats().blocks_observed == 0);
     assert(fixture.controller.stats().blocks_observed == 0);
