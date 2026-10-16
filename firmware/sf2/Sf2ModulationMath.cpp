@@ -46,13 +46,14 @@ std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
 std::int32_t velocityToAttenuationCb(
     std::uint8_t velocity,
     std::int32_t amount_cb) {
-    const std::size_t curve_index = 127u - std::min<std::uint8_t>(velocity, 127u);
+    const unsigned clamped_velocity = std::min<unsigned>(velocity, 127u);
+    const std::size_t curve_index = 127u - clamped_velocity;
     const std::int64_t scaled =
         static_cast<std::int64_t>(amount_cb) * kConcaveQ15[curve_index];
     if (scaled >= 0) {
         return static_cast<std::int32_t>((scaled + 16383) / 32767);
     }
-    return static_cast<std::int32_t>((scaled - 16383) / 32767);
+    return -static_cast<std::int32_t>((-scaled + 16383) / 32767);
 }
 
 std::int32_t attenuationCbToGainQ15(std::int32_t attenuation_cb) {
