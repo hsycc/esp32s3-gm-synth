@@ -18,12 +18,17 @@ struct ResolvedZoneModulation {
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t pan_amount = kSf2DefaultPanAmount;
     std::int32_t expression_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
+    std::int32_t channel_pressure_to_vib_lfo_pitch_cents =
+        kSf2DefaultVibratoControllerAmountCents;
+    std::int32_t modulation_wheel_to_vib_lfo_pitch_cents =
+        kSf2DefaultVibratoControllerAmountCents;
     std::int32_t reverb_send_amount = kSf2DefaultEffectsSendAmount;
     std::int32_t chorus_send_amount = kSf2DefaultEffectsSendAmount;
     std::int32_t pitch_wheel_to_pitch_cents = 12700;
 
     std::uint16_t supported_velocity_attenuation_records = 0;
     std::uint16_t supported_velocity_filter_records = 0;
+    std::uint16_t supported_vibrato_records = 0;
     std::uint16_t supported_effects_send_records = 0;
     std::uint16_t unsupported_modulator_records = 0;
 
