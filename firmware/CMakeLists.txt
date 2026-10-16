@@ -13,6 +13,7 @@ idf_component_register(
         "voice/PitchMath.cpp"
         "voice/VoiceRenderer.cpp"
         "voice/AudioBlockRenderer.cpp"
+        "voice/AdaptivePolyphony.cpp"
         "platform/EspPsramArena.cpp"
         "platform/EspStorageBenchmark.cpp"
     INCLUDE_DIRS "."
