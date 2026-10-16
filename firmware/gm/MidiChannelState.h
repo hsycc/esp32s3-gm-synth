@@ -6,6 +6,12 @@
 
 namespace gm_synth::gm {
 
+// MIDI channels are zero-based internally; GM Channel 10 is therefore index 9.
+// SoundFont reserves preset bank 128 for percussion even though ordinary MIDI
+// Bank Select is a 14-bit controller pair.
+constexpr std::uint8_t kGmPercussionChannel = 9;
+constexpr std::uint16_t kSf2PercussionBank = 128;
+
 enum ChannelControlAction : std::uint32_t {
     ChannelControlNone = 0,
     ChannelControlBankChanged = 1u << 0,
@@ -84,7 +90,16 @@ public:
     bool applyPitchBend(std::uint8_t channel, std::uint16_t value14);
     bool applyProgramChange(std::uint8_t channel, std::uint8_t program);
 
+    // Generic zero-bank reset retained for non-GM callers/tests.
     void resetAll();
+    // GM System On state: melodic channels -> bank/program 0, Channel 10 ->
+    // SoundFont percussion bank 128/program 0, with standard controller defaults.
+    void resetGm();
+
+    // Bank identity to use for a GM Program Change. In GM1 Channel 10 remains
+    // key-based percussion even if Bank Select CCs arrive, so the SF2 lookup is
+    // forced to the reserved percussion bank.
+    std::uint16_t programBank(std::uint8_t channel_index) const;
 
 private:
     std::array<MidiChannelState, kMidiChannels> channels_{};
