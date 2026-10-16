@@ -29,7 +29,7 @@ printf 'Phase G host validation\n'
 printf '  compiler: %s\n' "${CXX}"
 printf '  output:   %s\n' "${BUILD_DIR}"
 
-printf '\n[1/12] Validate analyzed realtime zone bounds\n'
+printf '\n[1/14] Validate analyzed realtime zone bounds\n'
 python3 - <<'PY'
 import glob
 import json
@@ -101,7 +101,7 @@ print(
 )
 PY
 
-printf '\n[2/12] Build and run playback-zone runtime tests\n'
+printf '\n[2/14] Build and run playback-zone runtime tests\n'
 build_and_run test_playback_zone_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -116,35 +116,35 @@ build_and_run test_playback_zone_runtime -pthread \
   firmware/realtime/ScheduledAudioBlockRenderer.cpp \
   tests/gm/test_playback_zone_runtime.cpp
 
-printf '\n[3/12] Build and run random-access PDTA reader tests\n'
+printf '\n[3/14] Build and run random-access PDTA reader tests\n'
 build_and_run test_sf2_pdta_reader \
   firmware/sf2/Sf2PdtaReader.cpp \
   tests/sf2/test_sf2_pdta_reader.cpp
 
-printf '\n[4/12] Build and run native resolved-zone tests\n'
+printf '\n[4/14] Build and run native resolved-zone tests\n'
 build_and_run test_sf2_resolved_zone \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
   tests/sf2/test_sf2_resolved_zone.cpp
 
-printf '\n[5/12] Build and run fixed-point modulation-math tests\n'
+printf '\n[5/14] Build and run fixed-point modulation-math tests\n'
 build_and_run test_sf2_modulation_math \
   firmware/sf2/Sf2ModulationMath.cpp \
   tests/sf2/test_sf2_modulation_math.cpp
 
-printf '\n[6/12] Build and run per-zone modulator resolver tests\n'
+printf '\n[6/14] Build and run per-zone modulator resolver tests\n'
 build_and_run test_sf2_zone_modulator_resolver \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ZoneModulatorResolver.cpp \
   tests/sf2/test_sf2_zone_modulator_resolver.cpp
 
-printf '\n[7/12] Build and run playback materializer tests\n'
+printf '\n[7/14] Build and run playback materializer tests\n'
 build_and_run test_sf2_playback_materializer \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
   tests/sf2/test_sf2_playback_materializer.cpp
 
-printf '\n[8/12] Build and run SF2 note-on modulation runtime tests\n'
+printf '\n[8/14] Build and run SF2 note-on modulation runtime tests\n'
 build_and_run test_sf2_note_on_modulation_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -158,7 +158,7 @@ build_and_run test_sf2_note_on_modulation_runtime -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/sf2/test_sf2_note_on_modulation_runtime.cpp
 
-printf '\n[9/12] Build and run playback program prepare tests\n'
+printf '\n[9/14] Build and run playback program prepare tests\n'
 build_and_run test_sf2_playback_program_preparer \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -168,12 +168,12 @@ build_and_run test_sf2_playback_program_preparer \
   firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
   tests/sf2/test_sf2_playback_program_preparer.cpp
 
-printf '\n[10/12] Build and run GM MIDI channel-state tests\n'
+printf '\n[10/14] Build and run GM MIDI channel-state tests\n'
 build_and_run test_midi_channel_state \
   firmware/gm/MidiChannelState.cpp \
   tests/gm/test_midi_channel_state.cpp
 
-printf '\n[11/12] Build and run channel-state NoteOn runtime tests\n'
+printf '\n[11/14] Build and run channel-state NoteOn runtime tests\n'
 build_and_run test_midi_channel_note_on -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -186,7 +186,7 @@ build_and_run test_midi_channel_note_on -pthread \
   firmware/realtime/RealtimeEventQueue.cpp \
   tests/gm/test_midi_channel_note_on.cpp
 
-printf '\n[12/12] Build and run active-voice controller/sustain tests\n'
+printf '\n[12/14] Build and run active-voice controller/sustain tests\n'
 build_and_run test_midi_channel_active_voice -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -197,5 +197,48 @@ build_and_run test_midi_channel_active_voice -pthread \
   firmware/gm/PlaybackProgramSnapshot.cpp \
   firmware/gm/ZoneResolver.cpp \
   tests/gm/test_midi_channel_active_voice.cpp
+
+printf '\n[13/14] Build and run realtime Program Change handoff tests\n'
+build_and_run test_realtime_program_change_handoff -pthread \
+  firmware/sample/PublishedSampleDirectory.cpp \
+  firmware/sample/ProgramSnapshot.cpp \
+  firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  firmware/gm/ProgramChangeMailbox.cpp \
+  firmware/gm/RealtimeProgramChangeHandoff.cpp \
+  firmware/gm/RealtimeProgramChangeRouter.cpp \
+  firmware/gm/MidiChannelState.cpp \
+  firmware/gm/PlaybackProgramSnapshot.cpp \
+  firmware/gm/ZoneResolver.cpp \
+  tests/gm/test_realtime_program_change_handoff.cpp
+
+printf '\n[14/14] Build and run real-bank Program Change control-service tests\n'
+build_and_run test_program_change_control_service -pthread \
+  firmware/sample/SampleResidencyManager.cpp \
+  firmware/sample/SampleResidencySourceLoad.cpp \
+  firmware/sample/SampleResidencyView.cpp \
+  firmware/sample/PublishedSampleDirectory.cpp \
+  firmware/sample/ProgramSnapshot.cpp \
+  firmware/sample/ProgramPrepareController.cpp \
+  firmware/voice/PitchMath.cpp \
+  firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
+  firmware/sf2/Sf2SampleSource.cpp \
+  firmware/sf2/Sf2PdtaReader.cpp \
+  firmware/sf2/Sf2ResolvedZone.cpp \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  firmware/sf2/Sf2ZoneModulatorResolver.cpp \
+  firmware/sf2/Sf2PlaybackMaterializer.cpp \
+  firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
+  firmware/gm/ProgramChangeMailbox.cpp \
+  firmware/gm/RealtimeProgramChangeHandoff.cpp \
+  firmware/gm/RealtimeProgramChangeRouter.cpp \
+  firmware/gm/ProgramChangeControlService.cpp \
+  firmware/gm/ProgramRuntimeAudioBlock.cpp \
+  firmware/gm/MidiChannelState.cpp \
+  firmware/gm/PlaybackProgramSnapshot.cpp \
+  firmware/gm/ZoneResolver.cpp \
+  tests/gm/test_program_change_control_service.cpp
 
 printf '\nPhase G host validation passed.\n'
