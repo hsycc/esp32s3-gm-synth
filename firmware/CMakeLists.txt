@@ -9,6 +9,7 @@ idf_component_register(
         "storage/VfsRandomAccessReader.cpp"
         "storage/StorageReadBenchmark.cpp"
         "sf2/Sf2SampleSource.cpp"
+        "sf2/Sf2PdtaReader.cpp"
         "gm/ProgramChangeMailbox.cpp"
         "gm/PlaybackProgramSnapshot.cpp"
         "gm/ZoneResolver.cpp"
