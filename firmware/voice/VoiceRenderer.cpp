@@ -1,6 +1,7 @@
 #include "VoiceRenderer.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace gm_synth::voice {
@@ -64,6 +65,10 @@ bool Voice::loopActive() const {
     return params_.loop_mode == LoopMode::UntilRelease && !key_released_;
 }
 
+bool Voice::releasing() const {
+    return active_ && envelope_stage_ == EnvelopeStage::Release;
+}
+
 bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartParams& params) {
     if (active_) {
         return false;
@@ -98,7 +103,9 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     key_ = params.key;
     phase_q32_ = 0;
     key_released_ = false;
+    steal_tail_ = false;
     envelope_stage_frame_ = 0;
+    active_release_frames_ = 0;
     release_start_level_q15_ = 0;
 
     if (params_.envelope.attack_frames != 0) {
@@ -116,20 +123,37 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     return true;
 }
 
-void Voice::noteOff() {
-    if (!active_ || key_released_) {
+void Voice::beginRelease(std::uint32_t release_frames, bool steal_tail) {
+    if (!active_) {
         return;
     }
 
     key_released_ = true;
-    if (params_.envelope.release_frames == 0 || envelope_level_q15_ <= 0) {
+    steal_tail_ = steal_tail;
+    if (release_frames == 0 || envelope_level_q15_ <= 0) {
         finish();
         return;
     }
 
+    active_release_frames_ = release_frames;
     release_start_level_q15_ = envelope_level_q15_;
     envelope_stage_ = EnvelopeStage::Release;
     envelope_stage_frame_ = 0;
+}
+
+void Voice::noteOff() {
+    if (!active_ || key_released_) {
+        return;
+    }
+    beginRelease(params_.envelope.release_frames, false);
+}
+
+bool Voice::beginFastRelease(std::uint32_t fade_frames) {
+    if (!active_) {
+        return false;
+    }
+    beginRelease(std::max<std::uint32_t>(fade_frames, 1u), true);
+    return true;
 }
 
 std::int32_t Voice::nextEnvelopeLevel() {
@@ -184,7 +208,7 @@ std::int32_t Voice::nextEnvelopeLevel() {
             return envelope_level_q15_;
 
         case EnvelopeStage::Release: {
-            const std::uint32_t total = params_.envelope.release_frames;
+            const std::uint32_t total = active_release_frames_;
             if (total == 0 || envelope_stage_frame_ >= total) {
                 envelope_stage_ = EnvelopeStage::Done;
                 envelope_level_q15_ = 0;
@@ -263,9 +287,11 @@ void Voice::finish() {
     }
     active_ = false;
     key_released_ = false;
+    steal_tail_ = false;
     phase_q32_ = 0;
     envelope_stage_ = EnvelopeStage::Done;
     envelope_stage_frame_ = 0;
+    active_release_frames_ = 0;
     envelope_level_q15_ = 0;
     release_start_level_q15_ = 0;
     directory_ = nullptr;
@@ -315,41 +341,139 @@ void Voice::reset() {
     finish();
 }
 
+std::size_t VoicePool::findInactiveSlot() const {
+    for (std::size_t index = 0; index < voices_.size(); ++index) {
+        if (!voices_[index].active()) {
+            return index;
+        }
+    }
+    return kHardVoiceCap;
+}
+
+std::size_t VoicePool::chooseStealVictim() const {
+    std::size_t best = kHardVoiceCap;
+    for (std::size_t index = 0; index < voices_.size(); ++index) {
+        const Voice& candidate = voices_[index];
+        if (!candidate.active() || candidate.stealTail()) {
+            continue;
+        }
+        if (best == kHardVoiceCap) {
+            best = index;
+            continue;
+        }
+
+        const Voice& incumbent = voices_[best];
+        if (candidate.releasing() != incumbent.releasing()) {
+            if (candidate.releasing()) {
+                best = index;
+            }
+            continue;
+        }
+        if (candidate.envelopeLevelQ15() != incumbent.envelopeLevelQ15()) {
+            if (candidate.envelopeLevelQ15() < incumbent.envelopeLevelQ15()) {
+                best = index;
+            }
+            continue;
+        }
+        if (start_serials_[index] != start_serials_[best]) {
+            if (start_serials_[index] < start_serials_[best]) {
+                best = index;
+            }
+            continue;
+        }
+        if (index < best) {
+            best = index;
+        }
+    }
+    return best;
+}
+
+void VoicePool::recordStartedVoice(std::size_t slot, std::size_t active_before) {
+    start_serials_[slot] = next_start_serial_;
+    if (next_start_serial_ != std::numeric_limits<std::uint64_t>::max()) {
+        ++next_start_serial_;
+    }
+    ++stats_.start_successes;
+    stats_.active_voices = active_before + 1u;
+    stats_.peak_active_voices = std::max(stats_.peak_active_voices, stats_.active_voices);
+}
+
 bool VoicePool::start(const VoiceStartParams& params) {
     ++stats_.start_attempts;
     const std::size_t active = activeVoiceCount();
 
-    // Preserve the original M4 hard-cap meaning: a 33rd active voice is a
-    // physical pool-capacity failure, independent of any lower M6 policy cap.
+    // Preserve the M4 hard-cap meaning: a 33rd active voice is a physical
+    // pool-capacity failure even if the M6 policy would otherwise steal.
     if (active >= kHardVoiceCap) {
         ++stats_.start_failures_full;
         return false;
     }
 
-    if (active >= admission_limit_) {
+    const std::size_t target = findInactiveSlot();
+    if (target >= kHardVoiceCap) {
+        ++stats_.start_failures_full;
+        return false;
+    }
+
+    if (active < admission_limit_) {
+        if (!voices_[target].start(directory_, params)) {
+            ++stats_.start_failures_rejected;
+            return false;
+        }
+        recordStartedVoice(target, active);
+        stats_.active_steal_tails = activeStealTailCount();
+        return true;
+    }
+
+    if (!steal_config_.enabled) {
         ++stats_.start_failures_admission;
         return false;
     }
 
-    for (Voice& voice : voices_) {
-        if (voice.active()) {
-            continue;
-        }
-        if (!voice.start(directory_, params)) {
-            ++stats_.start_failures_rejected;
-            return false;
-        }
-        ++stats_.start_successes;
-        stats_.active_voices = active + 1u;
-        stats_.peak_active_voices = std::max(stats_.peak_active_voices, stats_.active_voices);
-        return true;
+    ++stats_.steal_attempts;
+    const std::size_t steal_tails = activeStealTailCount();
+    if (steal_config_.max_tail_voices == 0 ||
+        steal_tails >= steal_config_.max_tail_voices) {
+        ++stats_.steal_failures_tail_budget;
+        ++stats_.start_failures_admission;
+        return false;
     }
 
-    // Defensive invariant fallback. activeVoiceCount() should make this path
-    // unreachable when active < kHardVoiceCap, but keep telemetry safe if the
-    // slot/accounting implementation changes later.
-    ++stats_.start_failures_full;
-    return false;
+    const std::size_t victim = chooseStealVictim();
+    if (victim >= kHardVoiceCap) {
+        ++stats_.steal_failures_no_victim;
+        ++stats_.start_failures_admission;
+        return false;
+    }
+
+    // Acquire and validate the incoming SampleRef before changing the victim.
+    // A rejected/missing sample must never sacrifice a currently sounding voice.
+    if (!voices_[target].start(directory_, params)) {
+        ++stats_.start_failures_rejected;
+        return false;
+    }
+
+    const bool victim_was_releasing = voices_[victim].releasing();
+    const std::uint8_t victim_channel = voices_[victim].channel();
+    const std::uint8_t victim_key = voices_[victim].key();
+    if (!voices_[victim].beginFastRelease(steal_config_.fade_frames)) {
+        voices_[target].reset();
+        ++stats_.steal_failures_no_victim;
+        ++stats_.start_failures_admission;
+        return false;
+    }
+
+    recordStartedVoice(target, active);
+    ++stats_.steal_successes;
+    if (victim_was_releasing) {
+        ++stats_.steals_from_release;
+    } else {
+        ++stats_.steals_from_active;
+    }
+    stats_.last_stolen_channel = victim_channel;
+    stats_.last_stolen_key = victim_key;
+    stats_.active_steal_tails = activeStealTailCount();
+    return true;
 }
 
 std::size_t VoicePool::noteOff(std::uint8_t channel, std::uint8_t key) {
@@ -362,6 +486,7 @@ std::size_t VoicePool::noteOff(std::uint8_t channel, std::uint8_t key) {
     }
     stats_.note_off_matches += matches;
     stats_.active_voices = activeVoiceCount();
+    stats_.active_steal_tails = activeStealTailCount();
     return matches;
 }
 
@@ -381,6 +506,7 @@ void VoicePool::renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_co
         }
     }
     stats_.active_voices = activeVoiceCount();
+    stats_.active_steal_tails = activeStealTailCount();
 }
 
 void VoicePool::allSoundOff() {
@@ -391,6 +517,7 @@ void VoicePool::allSoundOff() {
         }
     }
     stats_.active_voices = 0;
+    stats_.active_steal_tails = 0;
 }
 
 void VoicePool::setAdmissionLimit(std::size_t limit) {
@@ -398,10 +525,28 @@ void VoicePool::setAdmissionLimit(std::size_t limit) {
     stats_.admission_limit = admission_limit_;
 }
 
+void VoicePool::setVoiceStealConfig(const VoiceStealConfig& config) {
+    steal_config_ = config;
+    steal_config_.fade_frames = std::max<std::uint32_t>(config.fade_frames, 1u);
+    steal_config_.max_tail_voices = std::min<std::size_t>(
+        config.max_tail_voices,
+        kHardVoiceCap);
+}
+
 std::size_t VoicePool::activeVoiceCount() const {
     std::size_t count = 0;
     for (const Voice& voice : voices_) {
         if (voice.active()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t VoicePool::activeStealTailCount() const {
+    std::size_t count = 0;
+    for (const Voice& voice : voices_) {
+        if (voice.stealTail()) {
             ++count;
         }
     }
