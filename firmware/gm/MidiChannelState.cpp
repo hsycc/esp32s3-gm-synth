@@ -8,7 +8,7 @@ void MidiChannelState::resetControllers() {
     // MIDI CC121 / RP-015 style reset: preserve mix/program state such as
     // Channel Volume, Pan, Bank, Program and effect sends. Reset performance
     // controllers, Pitch Bend and parameter selection instead. A full GM System
-    // On reset is a separate operation and will restore mix defaults too.
+    // On reset is a separate operation and restores mix/program defaults too.
     expression = 127;
     sustain = 0;
     pitch_bend = kPitchBendCenter;
@@ -138,7 +138,7 @@ bool MidiChannelState::applyProgramChange(std::uint8_t new_program) {
 }
 
 MidiChannelStateBank::MidiChannelStateBank() {
-    resetAll();
+    resetGm();
 }
 
 std::uint32_t MidiChannelStateBank::applyControlChange(
@@ -169,6 +169,24 @@ void MidiChannelStateBank::resetAll() {
     for (MidiChannelState& state : channels_) {
         state.resetAll();
     }
+}
+
+void MidiChannelStateBank::resetGm() {
+    resetAll();
+    MidiChannelState& percussion = channels_[kGmPercussionChannel];
+    percussion.bank_msb = 1;
+    percussion.bank_lsb = 0;
+    percussion.program = 0;
+}
+
+std::uint16_t MidiChannelStateBank::programBank(std::uint8_t channel_index) const {
+    if (channel_index >= channels_.size()) {
+        return 0;
+    }
+    if (channel_index == kGmPercussionChannel) {
+        return kSf2PercussionBank;
+    }
+    return channels_[channel_index].selectedBank();
 }
 
 }  // namespace gm_synth::gm
