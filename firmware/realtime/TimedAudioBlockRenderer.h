@@ -10,23 +10,25 @@ namespace gm_synth::realtime {
 
 using RealtimeNowUsFn = std::uint64_t (*)(void* context);
 
-struct TimedRenderMeasurement {
-    explicit TimedRenderMeasurement(
-        bool timing_valid_in = false,
-        std::uint32_t render_time_us_in = 0)
-        : timing_valid(timing_valid_in),
-          render_time_us(render_time_us_in) {}
-
+class TimedRenderMeasurement {
+public:
     TimedRenderMeasurement(const TimedRenderMeasurement&) = delete;
     TimedRenderMeasurement& operator=(const TimedRenderMeasurement&) = delete;
     TimedRenderMeasurement(TimedRenderMeasurement&&) = delete;
     TimedRenderMeasurement& operator=(TimedRenderMeasurement&&) = delete;
 
-    bool timing_valid = false;
-    std::uint32_t render_time_us = 0;
+    bool timingValid() const { return timing_valid_; }
+    std::uint32_t renderTimeUs() const { return render_time_us_; }
 
 private:
     friend class TimedAudioBlockRenderer;
+
+    TimedRenderMeasurement(bool timing_valid, std::uint32_t render_time_us)
+        : timing_valid_(timing_valid),
+          render_time_us_(render_time_us) {}
+
+    bool timing_valid_ = false;
+    std::uint32_t render_time_us_ = 0;
     bool observed_ = false;
 };
 
@@ -44,11 +46,11 @@ struct TimedAudioBlockStats {
 //
 // renderMeasured() deliberately separates measurement from policy observation.
 // That lets a later I2S write contribute its short-write/timeout result to the
-// SAME block observation instead of double-counting the block. Measurements are
-// non-copyable/non-movable and observeMeasurement() consumes each at most once.
-// C++17 guaranteed copy elision allows renderMeasured() to return this token
-// directly without making transferable aliases. render() keeps the convenient
-// one-shot behavior for benchmarks and render-only paths.
+// SAME block observation instead of double-counting the block. Measurement
+// tokens are renderer-created, caller-immutable and non-copyable/non-movable;
+// observeMeasurement() consumes each token at most once. C++17 guaranteed copy
+// elision lets renderMeasured() return the token without transferable aliases.
+// render() keeps the one-shot behavior for benchmarks and render-only paths.
 class TimedAudioBlockRenderer {
 public:
     TimedAudioBlockRenderer(
