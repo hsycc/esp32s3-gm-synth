@@ -18,9 +18,9 @@ enum class PlaybackMaterializationStatus : std::uint8_t {
 enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueNone = 0,
 
-    // Velocity->attenuation is now resolved explicitly. The remaining mandatory
-    // realtime SF2 defaults (CC7/10/11/91/93, pitch wheel/RPN and LFO-facing
-    // sources) still keep a zone in Preview until channel-state support lands.
+    // Velocity, CC7/10/11/91/93 and Pitch Wheel/RPN are represented by the
+    // runtime now. Remaining mandatory SF2 defaults that target filter/LFO DSP
+    // still keep a zone in Preview until those processors/sources land.
     PlaybackIssueDefaultModulatorsPending = std::uint64_t{1} << 0,
     PlaybackIssueCustomModulatorsPending = std::uint64_t{1} << 1,
     PlaybackIssueUnknownGenerator = std::uint64_t{1} << 2,
@@ -45,14 +45,16 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueFilterPending = std::uint64_t{1} << 15,
     PlaybackIssueModEnvelopePending = std::uint64_t{1} << 16,
     PlaybackIssueLfoPending = std::uint64_t{1} << 17,
+    // Reverb/chorus generator + CC91/93 send values are preserved and updated
+    // sample-accurately in Voice state; this bit now means the actual FX bus/DSP
+    // processor that consumes those sends is still pending.
     PlaybackIssueEffectsSendPending = std::uint64_t{1} << 18,
     // Retained as a diagnostics bit for callers using the conservative legacy
     // materialize(native, output) overload without per-zone modulator state.
     PlaybackIssueFixedVelocityPending = std::uint64_t{1} << 19,
 
     // Static pan is materialized with the current lightweight linear balance
-    // law. Keep the approximation explicit until the final SF2 pan law and
-    // channel-controller composition are implemented together.
+    // law. Keep the approximation explicit until the final SF2 pan law is used.
     PlaybackIssuePanLawApproximation = std::uint64_t{1} << 20,
     PlaybackIssueGainAboveUnityClamped = std::uint64_t{1} << 21,
     PlaybackIssueIgnoredInvalidPresetGenerator = std::uint64_t{1} << 22,
