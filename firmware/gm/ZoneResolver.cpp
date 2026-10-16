@@ -11,19 +11,26 @@ namespace gm_synth::gm {
 namespace {
 
 constexpr std::array<std::uint32_t, 12> kSemitoneRatioQ20{
-    1048576u,
-    1110928u,
-    1176987u,
-    1246974u,
-    1321123u,
-    1399681u,
-    1482910u,
-    1571089u,
-    1664511u,
-    1763488u,
-    1868350u,
-    1979448u,
+    1048576u, 1110928u, 1176987u, 1246974u,
+    1321123u, 1399681u, 1482910u, 1571089u,
+    1664511u, 1763488u, 1868350u, 1979448u,
 };
+
+// 2^(cents/1200) in Q20 for cents=0..99. This keeps fractional Pitch Bend
+// resolution out of floating point while retaining the existing semitone path.
+constexpr std::array<std::uint32_t, 100> kCentRatioQ20{
+    1048576u, 1049182u, 1049788u, 1050395u, 1051002u, 1051609u, 1052216u, 1052824u, 1053433u, 1054041u,
+    1054650u, 1055260u, 1055869u, 1056479u, 1057090u, 1057701u, 1058312u, 1058923u, 1059535u, 1060147u,
+    1060760u, 1061373u, 1061986u, 1062600u, 1063214u, 1063828u, 1064443u, 1065058u, 1065673u, 1066289u,
+    1066905u, 1067521u, 1068138u, 1068755u, 1069373u, 1069991u, 1070609u, 1071227u, 1071846u, 1072466u,
+    1073085u, 1073705u, 1074326u, 1074946u, 1075568u, 1076189u, 1076811u, 1077433u, 1078055u, 1078678u,
+    1079302u, 1079925u, 1080549u, 1081174u, 1081798u, 1082423u, 1083049u, 1083674u, 1084301u, 1084927u,
+    1085554u, 1086181u, 1086809u, 1087437u, 1088065u, 1088694u, 1089323u, 1089952u, 1090582u, 1091212u,
+    1091843u, 1092473u, 1093105u, 1093736u, 1094368u, 1095000u, 1095633u, 1096266u, 1096900u, 1097533u,
+    1098167u, 1098802u, 1099437u, 1100072u, 1100708u, 1101344u, 1101980u, 1102617u, 1103254u, 1103891u,
+    1104529u, 1105167u, 1105806u, 1106445u, 1107084u, 1107724u, 1108364u, 1109004u, 1109645u, 1110286u,
+};
+
 constexpr std::uint32_t kRatioFractionBits = 20;
 constexpr std::uint64_t kRatioRounding = std::uint64_t{1} << (kRatioFractionBits - 1u);
 
@@ -37,6 +44,25 @@ std::uint64_t multiplyRatioQ20(std::uint64_t value, std::uint32_t ratio_q20) {
         return std::numeric_limits<std::uint64_t>::max();
     }
     return (value * ratio_q20 + kRatioRounding) >> kRatioFractionBits;
+}
+
+bool validResolveArguments(
+    const PlaybackProgramSnapshot& program,
+    std::uint8_t channel,
+    std::uint8_t key,
+    std::uint8_t velocity,
+    std::uint32_t note_instance_id,
+    const ResolvedVoiceBatch* batch) {
+    return batch != nullptr && channel < 16 && key <= 127 && velocity <= 127 &&
+        note_instance_id != 0 && program.channel == channel &&
+        program.zone_count <= PlaybackProgramSnapshot::kMaxZones &&
+        (program.zone_count == 0 || program.zones != nullptr);
+}
+
+std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) {
+    return zone.note_on_gain.enabled && zone.note_on_gain.fixed_velocity >= 0
+        ? static_cast<std::uint8_t>(zone.note_on_gain.fixed_velocity)
+        : velocity;
 }
 
 }  // namespace
@@ -76,6 +102,43 @@ std::uint64_t ZoneResolver::transposeSemitones(
     return std::max<std::uint64_t>(value, 1u);
 }
 
+std::uint64_t ZoneResolver::transposeCents(
+    std::uint64_t root_phase_increment_q32,
+    int cents_delta) {
+    if (root_phase_increment_q32 == 0) {
+        return 0;
+    }
+
+    int semitones = cents_delta / 100;
+    int cents = cents_delta % 100;
+    if (cents < 0) {
+        cents += 100;
+        --semitones;
+    }
+
+    const std::uint64_t semitone_value = transposeSemitones(
+        root_phase_increment_q32,
+        semitones);
+    return std::max<std::uint64_t>(
+        multiplyRatioQ20(
+            semitone_value,
+            kCentRatioQ20[static_cast<std::size_t>(cents)]),
+        1u);
+}
+
+int ZoneResolver::pitchBendCents(const MidiChannelState& state) {
+    const int delta = static_cast<int>(state.pitch_bend) -
+        static_cast<int>(MidiChannelState::kPitchBendCenter);
+    const int range_cents =
+        static_cast<int>(state.pitch_bend_range_semitones) * 100 +
+        static_cast<int>(state.pitch_bend_range_cents);
+    const std::int64_t numerator = static_cast<std::int64_t>(delta) * range_cents;
+    if (numerator >= 0) {
+        return static_cast<int>((numerator + 4096) / 8192);
+    }
+    return -static_cast<int>((-numerator + 4096) / 8192);
+}
+
 ZoneResolveStatus ZoneResolver::resolveNoteOn(
     const PlaybackProgramSnapshot& program,
     std::uint8_t channel,
@@ -83,32 +146,22 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
     std::uint8_t velocity,
     std::uint32_t note_instance_id,
     ResolvedVoiceBatch* batch) const {
-    if (batch == nullptr || channel >= 16 || key > 127 || velocity > 127 ||
-        note_instance_id == 0 || program.channel != channel ||
-        program.zone_count > PlaybackProgramSnapshot::kMaxZones ||
-        (program.zone_count != 0 && program.zones == nullptr)) {
+    if (!validResolveArguments(program, channel, key, velocity, note_instance_id, batch)) {
         return ZoneResolveStatus::InvalidArgument;
     }
 
     batch->clear();
     for (std::size_t i = 0; i < program.zone_count; ++i) {
         const PlaybackZone& zone = program.zones[i];
-        // SF2 key/velocity ranges are selected using the incoming NoteOn values;
-        // generator 46/47 overrides are applied only after a zone has matched.
         if (!zone.matches(key, velocity)) {
             continue;
         }
-
         if (batch->count >= batch->voices.size()) {
             batch->clear();
             return ZoneResolveStatus::TooManyMatches;
         }
 
-        const std::uint8_t effective_velocity = zone.note_on_gain.enabled &&
-                zone.note_on_gain.fixed_velocity >= 0
-            ? static_cast<std::uint8_t>(zone.note_on_gain.fixed_velocity)
-            : velocity;
-
+        const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
         voice::VoiceStartParams params{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
@@ -131,6 +184,76 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 zone.note_on_gain.velocity_to_attenuation_cb,
                 effective_velocity,
                 zone.note_on_gain.pan_sf2_units,
+                &params.gain_left_q15,
+                &params.gain_right_q15);
+        }
+        params.envelope = zone.envelope;
+        batch->voices[batch->count++] = params;
+    }
+
+    return batch->count == 0 ? ZoneResolveStatus::NoMatch : ZoneResolveStatus::Ok;
+}
+
+ZoneResolveStatus ZoneResolver::resolveNoteOn(
+    const PlaybackProgramSnapshot& program,
+    const MidiChannelState& channel_state,
+    std::uint8_t channel,
+    std::uint8_t key,
+    std::uint8_t velocity,
+    std::uint32_t note_instance_id,
+    ResolvedVoiceBatch* batch) const {
+    if (!validResolveArguments(program, channel, key, velocity, note_instance_id, batch)) {
+        return ZoneResolveStatus::InvalidArgument;
+    }
+
+    const int bend_cents = pitchBendCents(channel_state);
+    batch->clear();
+    for (std::size_t i = 0; i < program.zone_count; ++i) {
+        const PlaybackZone& zone = program.zones[i];
+        // Key/velocity ranges use the raw incoming NoteOn. Generator 46/47 and
+        // controller modulators are applied only after the zone has matched.
+        if (!zone.matches(key, velocity)) {
+            continue;
+        }
+        if (batch->count >= batch->voices.size()) {
+            batch->clear();
+            return ZoneResolveStatus::TooManyMatches;
+        }
+
+        const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
+        voice::VoiceStartParams params{};
+        params.sample_id = zone.sample_id;
+        params.channel = channel;
+        params.key = key;
+        params.velocity = effective_velocity;
+        params.exclusive_class = zone.exclusive_class;
+        params.note_instance_id = note_instance_id;
+
+        const std::uint64_t key_increment = zone.key_tracking
+            ? transposeSemitones(
+                  zone.root_phase_increment_q32,
+                  static_cast<int>(key) - static_cast<int>(zone.root_key))
+            : zone.root_phase_increment_q32;
+        params.phase_increment_q32 = bend_cents == 0
+            ? key_increment
+            : transposeCents(key_increment, bend_cents);
+
+        params.loop_mode = zone.loop_mode;
+        params.sample_region = zone.sample_region;
+        params.gain_left_q15 = zone.gain_left_q15;
+        params.gain_right_q15 = zone.gain_right_q15;
+        if (zone.note_on_gain.enabled) {
+            sf2::channelNoteOnGainQ15(
+                zone.note_on_gain.initial_attenuation_cb,
+                zone.note_on_gain.velocity_to_attenuation_cb,
+                effective_velocity,
+                zone.note_on_gain.pan_sf2_units,
+                channel_state.volume,
+                zone.note_on_gain.volume_to_attenuation_cb,
+                channel_state.pan,
+                zone.note_on_gain.pan_amount,
+                channel_state.expression,
+                zone.note_on_gain.expression_to_attenuation_cb,
                 &params.gain_left_q15,
                 &params.gain_right_q15);
         }
@@ -165,6 +288,31 @@ bool RealtimeProgramEventApplier::apply(
         return true;
     }
 
+    if (event.type == realtime::EventType::ControlChange) {
+        util::saturatingIncrement(stats_.control_change_events);
+        const std::uint32_t action = channel_states_.applyControlChange(
+            event.channel,
+            event.data1,
+            event.data2);
+        if (action != ChannelControlNone) {
+            util::saturatingIncrement(stats_.controller_state_changes);
+        }
+        // Sustain, live gain/pan updates and channel-mode actions are consumed
+        // in the next runtime layer. The state transition itself is already
+        // sample-accurate for subsequent NoteOn events.
+        return true;
+    }
+
+    if (event.type == realtime::EventType::PitchBend) {
+        util::saturatingIncrement(stats_.pitch_bend_events);
+        if (!channel_states_.applyPitchBend(event.channel, event.value)) {
+            util::saturatingIncrement(stats_.invalid_events);
+            return false;
+        }
+        util::saturatingIncrement(stats_.controller_state_changes);
+        return true;
+    }
+
     if (event.type != realtime::EventType::NoteOn) {
         util::saturatingIncrement(stats_.unsupported_events);
         return false;
@@ -179,6 +327,7 @@ bool RealtimeProgramEventApplier::apply(
 
     const ZoneResolveStatus status = resolver_.resolveNoteOn(
         *program,
+        channel_states_.channel(event.channel),
         event.channel,
         event.data1,
         event.data2,
