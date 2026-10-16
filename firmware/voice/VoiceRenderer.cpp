@@ -432,6 +432,17 @@ bool VoicePool::start(const VoiceStartParams& params) {
 
     ++stats_.steal_attempts;
     const std::size_t steal_tails = activeStealTailCount();
+    const std::size_t non_tail_active = active - steal_tails;
+
+    // A newly lowered adaptive limit may sit below the still-sounding Voice
+    // count. Do not use stealing to admit even more work until natural/normal
+    // releases have brought the non-tail population back to the new target.
+    if (non_tail_active > admission_limit_) {
+        ++stats_.steal_failures_over_target;
+        ++stats_.start_failures_admission;
+        return false;
+    }
+
     if (steal_config_.max_tail_voices == 0 ||
         steal_tails >= steal_config_.max_tail_voices) {
         ++stats_.steal_failures_tail_budget;
