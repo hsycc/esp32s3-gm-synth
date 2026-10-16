@@ -32,6 +32,7 @@ using gm_synth::sample::ResidentRecord;
 using gm_synth::sample::SampleDescriptor;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::VoicePool;
+using gm_synth::voice::VoiceStartParams;
 using gm_synth::voice::VoiceStealConfig;
 using gm_synth::voice::kPhaseOneQ32;
 using gm_synth::voice::kQ15Unity;
@@ -80,6 +81,22 @@ PlaybackZone loopingZone(std::uint32_t sample_id) {
     zone.envelope.sustain_q15 = kQ15Unity;
     zone.envelope.release_frames = 4;
     return zone;
+}
+
+VoiceStartParams directVoiceParams() {
+    VoiceStartParams params{};
+    params.sample_id = 0;
+    params.channel = 2;
+    params.key = 60;
+    params.velocity = 100;
+    params.phase_increment_q32 = kPhaseOneQ32;
+    params.gain_left_q15 = kQ15Unity;
+    params.gain_right_q15 = kQ15Unity;
+    params.envelope.attack_frames = 0;
+    params.envelope.decay_frames = 0;
+    params.envelope.sustain_q15 = kQ15Unity;
+    params.envelope.release_frames = 8;
+    return params;
 }
 
 PlaybackProgramSnapshot playbackProgram(
@@ -159,6 +176,28 @@ void testFixedPitchZoneDoesNotTrackKey() {
     assert(batch.voices[0].phase_increment_q32 == kPhaseOneQ32 / 2u);
 }
 
+void testResolverPropagatesPerZoneSampleRegion() {
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].sample_region.enabled = true;
+    zones[0].sample_region.start_frame = 2;
+    zones[0].sample_region.end_frame = 9;
+    zones[0].sample_region.loop_start_frame = 3;
+    zones[0].sample_region.loop_end_frame = 8;
+    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1, zones.data(), zones.size());
+    assert(program.valid());
+
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, 2, 60, 64, 11, &batch) == ZoneResolveStatus::Ok);
+    assert(batch.count == 1);
+    const auto& region = batch.voices[0].sample_region;
+    assert(region.enabled);
+    assert(region.start_frame == 2);
+    assert(region.end_frame == 9);
+    assert(region.loop_start_frame == 3);
+    assert(region.loop_end_frame == 8);
+}
+
 void testResolverRejectsMoreThanHardVoiceCapWithoutPartialBatch() {
     std::array<PlaybackZone, VoicePool::kHardVoiceCap + 1u> zones{};
     for (std::size_t i = 0; i < zones.size(); ++i) {
@@ -187,6 +226,231 @@ void testSnapshotRejectsMissingZoneStorage() {
     ResolvedVoiceBatch batch{};
     assert(resolver.resolveNoteOn(program, 0, 60, 64, 1, &batch) ==
            ZoneResolveStatus::InvalidArgument);
+}
+
+void testSnapshotRejectsInvalidEnabledSampleRegion() {
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].sample_region.enabled = true;
+    zones[0].sample_region.start_frame = 4;
+    zones[0].sample_region.end_frame = 4;
+    zones[0].sample_region.loop_start_frame = 4;
+    zones[0].sample_region.loop_end_frame = 4;
+    assert(!playbackProgram(0, 0, 1, zones.data(), zones.size()).valid());
+
+    zones[0].sample_region.start_frame = 2;
+    zones[0].sample_region.end_frame = 8;
+    zones[0].sample_region.loop_start_frame = 1;
+    zones[0].sample_region.loop_end_frame = 6;
+    assert(!playbackProgram(0, 0, 1, zones.data(), zones.size()).valid());
+
+    zones[0].sample_region.loop_start_frame = 3;
+    zones[0].sample_region.loop_end_frame = 9;
+    assert(!playbackProgram(0, 0, 1, zones.data(), zones.size()).valid());
+
+    zones[0].sample_region.loop_start_frame = 3;
+    zones[0].sample_region.loop_end_frame = 7;
+    assert(playbackProgram(0, 0, 1, zones.data(), zones.size()).valid());
+
+    zones[0].loop_mode = LoopMode::None;
+    zones[0].sample_region.loop_start_frame = 100;
+    zones[0].sample_region.loop_end_frame = 1;
+    assert(playbackProgram(0, 0, 1, zones.data(), zones.size()).valid());
+}
+
+void testEnabledSampleRegionBoundsVoicePlayback() {
+    constexpr std::array<std::int16_t, 6> pcm{10, 100, 200, 300, 400, 500};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, 0));
+
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].key_high = 60;
+    zones[0].loop_mode = LoopMode::None;
+    zones[0].sample_region.enabled = true;
+    zones[0].sample_region.start_frame = 1;
+    zones[0].sample_region.end_frame = 4;
+    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1, zones.data(), zones.size());
+    assert(program.valid());
+
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, 2, 60, 64, 1, &batch) == ZoneResolveStatus::Ok);
+    VoicePool voices(fixture.directory);
+    assert(voices.start(batch.voices[0]));
+
+    std::array<std::int32_t, 10> out{};
+    voices.renderAdd(out.data(), 5);
+    const std::array<std::int32_t, 5> expected{100, 200, 300, 0, 0};
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        assert(out[i * 2u] == expected[i]);
+        assert(out[i * 2u + 1u] == expected[i]);
+    }
+    assert(voices.activeVoiceCount() == 0);
+    assert(fixture.directory.stats().live_voice_refs == 0);
+}
+
+void testSampleRegionInterpolationNeverReadsPastEnd() {
+    constexpr std::array<std::int16_t, 4> pcm{0, 1000, 2000, 30000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, 0));
+
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].key_high = 60;
+    zones[0].loop_mode = LoopMode::None;
+    zones[0].root_phase_increment_q32 = kPhaseOneQ32 / 2u;
+    zones[0].sample_region.enabled = true;
+    zones[0].sample_region.start_frame = 1;
+    zones[0].sample_region.end_frame = 3;
+    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1, zones.data(), zones.size());
+    assert(program.valid());
+
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, 2, 60, 64, 1, &batch) == ZoneResolveStatus::Ok);
+    VoicePool voices(fixture.directory);
+    assert(voices.start(batch.voices[0]));
+
+    std::array<std::int32_t, 8> out{};
+    voices.renderAdd(out.data(), 4);
+    const std::array<std::int32_t, 4> expected{1000, 1500, 2000, 2000};
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        assert(out[i * 2u] == expected[i]);
+        assert(out[i * 2u + 1u] == expected[i]);
+    }
+    assert(voices.activeVoiceCount() == 0);
+}
+
+void testEnabledSampleRegionUsesPerZoneLoop() {
+    constexpr std::array<std::int16_t, 6> pcm{0, 100, 200, 300, 400, 500};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, 0));
+
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].key_high = 60;
+    zones[0].sample_region.enabled = true;
+    zones[0].sample_region.start_frame = 1;
+    zones[0].sample_region.end_frame = 5;
+    zones[0].sample_region.loop_start_frame = 2;
+    zones[0].sample_region.loop_end_frame = 4;
+    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1, zones.data(), zones.size());
+    assert(program.valid());
+
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, 2, 60, 64, 1, &batch) == ZoneResolveStatus::Ok);
+    VoicePool voices(fixture.directory);
+    assert(voices.start(batch.voices[0]));
+
+    std::array<std::int32_t, 12> out{};
+    voices.renderAdd(out.data(), 6);
+    const std::array<std::int32_t, 6> expected{100, 200, 300, 200, 300, 200};
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        assert(out[i * 2u] == expected[i]);
+        assert(out[i * 2u + 1u] == expected[i]);
+    }
+    assert(voices.activeVoiceCount() == 1);
+    voices.allSoundOff();
+}
+
+void testUntilReleaseLeavesRegionLoopAndStopsAtRegionEnd() {
+    constexpr std::array<std::int16_t, 7> pcm{0, 100, 200, 300, 400, 500, 30000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, 0));
+
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].key_high = 60;
+    zones[0].loop_mode = LoopMode::UntilRelease;
+    zones[0].envelope.release_frames = 16;
+    zones[0].sample_region.enabled = true;
+    zones[0].sample_region.start_frame = 1;
+    zones[0].sample_region.end_frame = 6;
+    zones[0].sample_region.loop_start_frame = 2;
+    zones[0].sample_region.loop_end_frame = 4;
+    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1, zones.data(), zones.size());
+    assert(program.valid());
+
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, 2, 60, 64, 1, &batch) == ZoneResolveStatus::Ok);
+    VoicePool voices(fixture.directory);
+    assert(voices.start(batch.voices[0]));
+
+    std::array<std::int32_t, 8> before{};
+    voices.renderAdd(before.data(), 4);
+    const std::array<std::int32_t, 4> expected_before{100, 200, 300, 200};
+    for (std::size_t i = 0; i < expected_before.size(); ++i) {
+        assert(before[i * 2u] == expected_before[i]);
+        assert(before[i * 2u + 1u] == expected_before[i]);
+    }
+
+    assert(voices.noteOff(2, 60) == 1);
+    std::array<std::int32_t, 8> after{};
+    voices.renderAdd(after.data(), 4);
+    assert(after[0] == 300 && after[1] == 300);
+    assert(after[2] > 0 && after[3] > 0);
+    assert(after[4] > 0 && after[5] > 0);
+    assert(after[6] == 0 && after[7] == 0);
+    assert(voices.activeVoiceCount() == 0);
+    assert(fixture.directory.stats().live_voice_refs == 0);
+}
+
+void testVoiceRejectsInvalidSampleRegionsWithoutLeakingRefs() {
+    constexpr std::array<std::int16_t, 4> pcm{10, 20, 30, 40};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, 0));
+    VoicePool voices(fixture.directory);
+
+    auto params = directVoiceParams();
+    params.sample_region.enabled = true;
+    params.sample_region.start_frame = 2;
+    params.sample_region.end_frame = 2;
+    assert(!voices.start(params));
+    assert(fixture.directory.stats().live_voice_refs == 0);
+
+    params = directVoiceParams();
+    params.sample_region.enabled = true;
+    params.sample_region.start_frame = 1;
+    params.sample_region.end_frame = 5;
+    assert(!voices.start(params));
+    assert(fixture.directory.stats().live_voice_refs == 0);
+
+    params = directVoiceParams();
+    params.loop_mode = LoopMode::Continuous;
+    params.sample_region.enabled = true;
+    params.sample_region.start_frame = 1;
+    params.sample_region.end_frame = 4;
+    params.sample_region.loop_start_frame = 0;
+    params.sample_region.loop_end_frame = 3;
+    assert(!voices.start(params));
+    assert(fixture.directory.stats().live_voice_refs == 0);
+
+    params.sample_region.loop_start_frame = 2;
+    params.sample_region.loop_end_frame = 5;
+    assert(!voices.start(params));
+    assert(fixture.directory.stats().live_voice_refs == 0);
+}
+
+void testDisabledSampleRegionPreservesDescriptorPlayback() {
+    constexpr std::array<std::int16_t, 4> pcm{10, 20, 30, 40};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, 0));
+    VoicePool voices(fixture.directory);
+
+    auto params = directVoiceParams();
+    params.sample_region.enabled = false;
+    params.sample_region.start_frame = 99;
+    params.sample_region.end_frame = 1;
+    params.sample_region.loop_start_frame = 88;
+    params.sample_region.loop_end_frame = 2;
+    assert(voices.start(params));
+
+    std::array<std::int32_t, 10> out{};
+    voices.renderAdd(out.data(), 5);
+    const std::array<std::int32_t, 5> expected{10, 20, 30, 40, 0};
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        assert(out[i * 2u] == expected[i]);
+        assert(out[i * 2u + 1u] == expected[i]);
+    }
+    assert(voices.activeVoiceCount() == 0);
 }
 
 void testRealtimeApplierSharesNoteInstanceAcrossLayersAndChokesOldTrigger() {
@@ -350,8 +614,16 @@ void testScheduledEventToZoneToVoiceToRenderPath() {
 int main() {
     testResolverSelectsKeyVelocityLayersAndPitch();
     testFixedPitchZoneDoesNotTrackKey();
+    testResolverPropagatesPerZoneSampleRegion();
     testResolverRejectsMoreThanHardVoiceCapWithoutPartialBatch();
     testSnapshotRejectsMissingZoneStorage();
+    testSnapshotRejectsInvalidEnabledSampleRegion();
+    testEnabledSampleRegionBoundsVoicePlayback();
+    testSampleRegionInterpolationNeverReadsPastEnd();
+    testEnabledSampleRegionUsesPerZoneLoop();
+    testUntilReleaseLeavesRegionLoopAndStopsAtRegionEnd();
+    testVoiceRejectsInvalidSampleRegionsWithoutLeakingRefs();
+    testDisabledSampleRegionPreservesDescriptorPlayback();
     testRealtimeApplierSharesNoteInstanceAcrossLayersAndChokesOldTrigger();
     testProgramRuntimeCommitRequiresMatchingPreparedIdentity();
     testScheduledEventToZoneToVoiceToRenderPath();
