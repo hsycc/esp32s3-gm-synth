@@ -42,8 +42,8 @@ public:
         ResolvedVoiceBatch* batch) const;
 
     // Production path: after raw zone selection, apply effective velocity plus
-    // current CC7/10/11 and Pitch Bend/RPN state before Voice::start(). It also
-    // carries the immutable source values needed to refresh a sounding Voice
+    // current CC7/10/11/91/93 and Pitch Bend/RPN state before Voice::start(). It
+    // also carries immutable source values needed to refresh a sounding Voice
     // when those channel controllers later change.
     ZoneResolveStatus resolveNoteOn(
         const PlaybackProgramSnapshot& program,
@@ -82,6 +82,9 @@ struct RealtimeProgramEventStats {
     std::uint64_t unsupported_events = 0;
     std::uint64_t invalid_events = 0;
     std::uint64_t missing_active_program = 0;
+    // GM Channel 10 is never allowed to fall through to an old melodic bank.
+    // While bank-128 percussion is unavailable/pending, NoteOn is safely silent.
+    std::uint64_t percussion_program_unavailable = 0;
     std::uint64_t no_matching_zones = 0;
     std::uint64_t resolve_overflows = 0;
     std::uint64_t voices_resolved = 0;
