@@ -24,14 +24,16 @@ struct PlaybackZone {
 
     // root_phase_increment_q32 already includes source/output sample-rate,
     // coarse/fine tuning and sample pitch-correction terms for root_key.
-    // Phase F performs equal-temperament semitone transposition with integer
-    // fixed-point math only. key_tracking=false is useful for fixed-pitch drum
-    // zones. General SF2 scaleTuning support can extend this prepared form
-    // without changing Voice ownership.
+    // Runtime NoteOn performs equal-temperament semitone transposition with
+    // integer fixed-point math only. key_tracking=false is useful for
+    // fixed-pitch drum zones.
     std::uint8_t root_key = 60;
     bool key_tracking = true;
     std::uint64_t root_phase_increment_q32 = voice::kPhaseOneQ32;
 
+    // SoundFont address generators are resolved relative to the resident shdr
+    // sample. Disabled means use the entire sample-global SampleDescriptor.
+    voice::SampleRegion sample_region{};
     voice::LoopMode loop_mode = voice::LoopMode::None;
     std::int32_t gain_left_q15 = voice::kQ15Unity;
     std::int32_t gain_right_q15 = voice::kQ15Unity;
@@ -40,7 +42,9 @@ struct PlaybackZone {
     bool valid() const {
         return key_low <= key_high && key_high <= 127 &&
                velocity_low <= velocity_high && velocity_high <= 127 &&
-               root_key <= 127 && root_phase_increment_q32 != 0;
+               root_key <= 127 && root_phase_increment_q32 != 0 &&
+               (!sample_region.enabled ||
+                sample_region.start_frame < sample_region.end_frame);
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
