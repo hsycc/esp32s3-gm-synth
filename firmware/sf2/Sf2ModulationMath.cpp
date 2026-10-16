@@ -13,8 +13,8 @@ namespace {
 // Q15 form of the SF2 concave curve shown in the 2.x controller model. Entry
 // n is concave(n) for n=0..127. It is generated from the documented curve
 //   -20/96 * log10((i*i)/(127*127)), i = 127-n
-// with endpoints fixed to 0 and 1. The default negative velocity route indexes
-// it with (127 - velocity).
+// with endpoints fixed to 0 and 1. Negative-unipolar sources index it with
+// (127 - MIDI value).
 constexpr std::array<std::uint16_t, 128> kConcaveQ15{{
     0, 47, 94, 142, 190, 238, 287, 336, 386, 436, 486, 537, 589, 640, 693, 745,
     798, 852, 906, 961, 1016, 1072, 1128, 1185, 1242, 1300, 1358, 1417, 1477, 1537, 1598, 1659,
@@ -41,19 +41,67 @@ std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
     return static_cast<std::int32_t>((product + (std::int64_t{1} << 14u)) >> 15u);
 }
 
+void attenuationAndPanToGainQ15(
+    std::int64_t attenuation_cb,
+    std::int64_t pan_sf2_units,
+    std::int32_t* gain_left_q15,
+    std::int32_t* gain_right_q15) {
+    const std::int32_t clamped_attenuation = static_cast<std::int32_t>(
+        std::max<std::int64_t>(0, std::min<std::int64_t>(kSf2MaxAttenuationCb, attenuation_cb)));
+    const std::int32_t amplitude_q15 = attenuationCbToGainQ15(clamped_attenuation);
+
+    const std::int32_t pan = static_cast<std::int32_t>(
+        std::max<std::int64_t>(-500, std::min<std::int64_t>(500, pan_sf2_units)));
+    std::int32_t left = amplitude_q15;
+    std::int32_t right = amplitude_q15;
+    if (pan < 0) {
+        right = multiplyQ15(amplitude_q15, ((500 + pan) * voice::kQ15Unity) / 500);
+    } else if (pan > 0) {
+        left = multiplyQ15(amplitude_q15, ((500 - pan) * voice::kQ15Unity) / 500);
+    }
+
+    *gain_left_q15 = left;
+    *gain_right_q15 = right;
+}
+
 }  // namespace
 
-std::int32_t velocityToAttenuationCb(
-    std::uint8_t velocity,
-    std::int32_t amount_cb) {
-    const unsigned clamped_velocity = std::min<unsigned>(velocity, 127u);
-    const std::size_t curve_index = 127u - clamped_velocity;
+std::int32_t negativeConcaveToAmount(
+    std::uint8_t value,
+    std::int32_t amount) {
+    const unsigned clamped = std::min<unsigned>(value, 127u);
+    const std::size_t curve_index = 127u - clamped;
     const std::int64_t scaled =
-        static_cast<std::int64_t>(amount_cb) * kConcaveQ15[curve_index];
+        static_cast<std::int64_t>(amount) * kConcaveQ15[curve_index];
     if (scaled >= 0) {
         return static_cast<std::int32_t>((scaled + 16383) / 32767);
     }
     return -static_cast<std::int32_t>((-scaled + 16383) / 32767);
+}
+
+std::int32_t velocityToAttenuationCb(
+    std::uint8_t velocity,
+    std::int32_t amount_cb) {
+    return negativeConcaveToAmount(velocity, amount_cb);
+}
+
+std::int32_t controllerToAttenuationCb(
+    std::uint8_t value,
+    std::int32_t amount_cb) {
+    return negativeConcaveToAmount(value, amount_cb);
+}
+
+std::int32_t controllerToPanSf2Units(
+    std::uint8_t value,
+    std::int32_t amount) {
+    // Positive-bipolar linear SoundFont source: (2*v - 128) / 128.
+    const std::int64_t bipolar_numerator =
+        static_cast<std::int64_t>(2 * std::min<unsigned>(value, 127u)) - 128;
+    const std::int64_t scaled = bipolar_numerator * amount;
+    if (scaled >= 0) {
+        return static_cast<std::int32_t>((scaled + 64) / 128);
+    }
+    return -static_cast<std::int32_t>((-scaled + 64) / 128);
 }
 
 std::int32_t attenuationCbToGainQ15(std::int32_t attenuation_cb) {
@@ -93,25 +141,44 @@ void noteOnGainQ15(
         return;
     }
 
-    const std::int64_t summed = static_cast<std::int64_t>(initial_attenuation_cb) +
+    const std::int64_t attenuation = static_cast<std::int64_t>(initial_attenuation_cb) +
         velocityToAttenuationCb(effective_velocity, velocity_to_attenuation_cb);
-    const std::int32_t clamped_attenuation = static_cast<std::int32_t>(
-        std::max<std::int64_t>(0, std::min<std::int64_t>(kSf2MaxAttenuationCb, summed)));
-    const std::int32_t amplitude_q15 = attenuationCbToGainQ15(clamped_attenuation);
+    attenuationAndPanToGainQ15(
+        attenuation,
+        pan_sf2_units,
+        gain_left_q15,
+        gain_right_q15);
+}
 
-    const std::int32_t pan = std::max<std::int32_t>(
-        -500,
-        std::min<std::int32_t>(500, pan_sf2_units));
-    std::int32_t left = amplitude_q15;
-    std::int32_t right = amplitude_q15;
-    if (pan < 0) {
-        right = multiplyQ15(amplitude_q15, ((500 + pan) * voice::kQ15Unity) / 500);
-    } else if (pan > 0) {
-        left = multiplyQ15(amplitude_q15, ((500 - pan) * voice::kQ15Unity) / 500);
+void channelNoteOnGainQ15(
+    std::int32_t initial_attenuation_cb,
+    std::int32_t velocity_to_attenuation_cb,
+    std::uint8_t effective_velocity,
+    std::int32_t zone_pan_sf2_units,
+    std::uint8_t channel_volume,
+    std::int32_t volume_to_attenuation_cb,
+    std::uint8_t channel_pan,
+    std::int32_t pan_amount,
+    std::uint8_t channel_expression,
+    std::int32_t expression_to_attenuation_cb,
+    std::int32_t* gain_left_q15,
+    std::int32_t* gain_right_q15) {
+    if (gain_left_q15 == nullptr || gain_right_q15 == nullptr) {
+        return;
     }
 
-    *gain_left_q15 = left;
-    *gain_right_q15 = right;
+    const std::int64_t attenuation =
+        static_cast<std::int64_t>(initial_attenuation_cb) +
+        velocityToAttenuationCb(effective_velocity, velocity_to_attenuation_cb) +
+        controllerToAttenuationCb(channel_volume, volume_to_attenuation_cb) +
+        controllerToAttenuationCb(channel_expression, expression_to_attenuation_cb);
+    const std::int64_t pan = static_cast<std::int64_t>(zone_pan_sf2_units) +
+        controllerToPanSf2Units(channel_pan, pan_amount);
+    attenuationAndPanToGainQ15(
+        attenuation,
+        pan,
+        gain_left_q15,
+        gain_right_q15);
 }
 
 }  // namespace gm_synth::sf2
