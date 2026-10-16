@@ -3,6 +3,7 @@
 #include "../../firmware/sf2/Sf2ModulationMath.h"
 #include "../../firmware/sf2/Sf2PlaybackMaterializer.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
