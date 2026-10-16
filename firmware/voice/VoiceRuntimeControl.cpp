@@ -11,6 +11,8 @@ bool Voice::applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update) {
     params_.phase_increment_q32 = update.phase_increment_q32;
     params_.gain_left_q15 = clampQ15(update.gain_left_q15);
     params_.gain_right_q15 = clampQ15(update.gain_right_q15);
+    params_.reverb_send_units = update.reverb_send_units;
+    params_.chorus_send_units = update.chorus_send_units;
     return true;
 }
 
