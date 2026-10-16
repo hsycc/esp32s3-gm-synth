@@ -17,7 +17,8 @@ constexpr std::uint64_t kHardIssueMask =
     PlaybackIssueRomSample |
     PlaybackIssueStereoOrLinkedSample |
     PlaybackIssueInvalidRootKey |
-    PlaybackIssueInvalidPhaseIncrement;
+    PlaybackIssueInvalidPhaseIncrement |
+    PlaybackIssueInvalidFixedVelocity;
 
 std::uint32_t timecentsToFrames(std::int32_t timecents, std::uint32_t sample_rate) {
     if (sample_rate == 0) {
@@ -103,12 +104,35 @@ voice::LoopMode loopModeFor(std::int32_t sample_modes, bool* supported) {
 PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     const NativeResolvedZone& native,
     gm::PlaybackZone* output) const {
+    ResolvedZoneModulation conservative{};
+    if (native.preset_modulator_records != 0 || native.instrument_modulator_records != 0) {
+        conservative.unsupported_modulator_records = 1;
+    }
+
+    PlaybackMaterializationResult result = materialize(native, conservative, output);
+    // Without the separately resolved modulator hierarchy we cannot prove that
+    // generator 47 is consistently applied to every velocity-sourced custom
+    // route, so retain the old conservative diagnostic for this overload.
+    if (native.generators.has(47) && result.playablePreview()) {
+        result.issues |= PlaybackIssueFixedVelocityPending;
+        result.status = PlaybackMaterializationStatus::Preview;
+    }
+    return result;
+}
+
+PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
+    const NativeResolvedZone& native,
+    const ResolvedZoneModulation& modulation,
+    gm::PlaybackZone* output) const {
     PlaybackMaterializationResult result{};
     if (output == nullptr || output_sample_rate_ == 0) {
         result.status = PlaybackMaterializationStatus::InvalidArgument;
         return result;
     }
 
+    // Velocity->attenuation is resolved below. Keep the remaining mandatory
+    // default realtime sources explicit until channel state/pitch/LFO support
+    // is wired into the runtime.
     std::uint64_t issues = PlaybackIssueDefaultModulatorsPending;
     if ((native.flags & NativeZoneFlagUnknownGenerator) != 0) {
         issues |= PlaybackIssueUnknownGenerator;
@@ -137,7 +161,7 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     if ((native.flags & NativeZoneFlagRootKeyOutOfRange) != 0) {
         issues |= PlaybackIssueInvalidRootKey;
     }
-    if (native.preset_modulator_records != 0 || native.instrument_modulator_records != 0) {
+    if (modulation.hasUnsupportedModulators()) {
         issues |= PlaybackIssueCustomModulatorsPending;
     }
 
@@ -162,8 +186,10 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         issues |= PlaybackIssueScaleTuningPending;
     }
 
-    if (native.generators.has(47)) {
-        issues |= PlaybackIssueFixedVelocityPending;
+    const bool has_fixed_velocity = native.generators.has(47);
+    const std::int32_t fixed_velocity = native.generators.value(47);
+    if (has_fixed_velocity && (fixed_velocity < 0 || fixed_velocity > 127)) {
+        issues |= PlaybackIssueInvalidFixedVelocity;
     }
     if (differs(native, 33, -12000)) {
         issues |= PlaybackIssueVolumeEnvelopeDelayPending;
@@ -246,6 +272,9 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         }
     }
 
+    // Retain the prepared static gains for direct/legacy PlaybackZone users.
+    // SF2-generated zones additionally carry the raw note-on summing state;
+    // ZoneResolver recomputes final gains from it before Voice::start().
     double static_gain = centibelsToLinear(native.initialAttenuationCb());
     if (!std::isfinite(static_gain)) {
         static_gain = 0.0;
@@ -267,6 +296,16 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     }
     candidate.gain_left_q15 = unitGainQ15(left_gain, &issues);
     candidate.gain_right_q15 = unitGainQ15(right_gain, &issues);
+
+    candidate.note_on_gain.enabled = true;
+    candidate.note_on_gain.initial_attenuation_cb = native.initialAttenuationCb();
+    candidate.note_on_gain.velocity_to_attenuation_cb =
+        modulation.velocity_to_attenuation_cb;
+    candidate.note_on_gain.pan_sf2_units = static_cast<std::int16_t>(pan_units);
+    candidate.note_on_gain.fixed_velocity = has_fixed_velocity &&
+            fixed_velocity >= 0 && fixed_velocity <= 127
+        ? static_cast<std::int16_t>(fixed_velocity)
+        : -1;
 
     candidate.envelope.attack_frames = timecentsToFrames(
         native.generators.value(34, -12000),
