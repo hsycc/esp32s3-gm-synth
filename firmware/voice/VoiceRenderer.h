@@ -59,6 +59,7 @@ struct VoicePoolStats {
     std::uint64_t steal_attempts = 0;
     std::uint64_t steal_successes = 0;
     std::uint64_t steal_failures_tail_budget = 0;
+    std::uint64_t steal_failures_over_target = 0;
     std::uint64_t steal_failures_no_victim = 0;
     std::uint64_t steals_from_release = 0;
     std::uint64_t steals_from_active = 0;
