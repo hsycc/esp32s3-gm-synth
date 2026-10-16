@@ -78,9 +78,11 @@ void test_fm_bank_inherits_mandatory_default_modulators() {
     CHECK(result.supported_records == 0);
     CHECK(result.unsupported_records == 0);
     CHECK(zones[0].velocity_to_attenuation_cb == 960);
+    CHECK(zones[0].velocity_to_filter_fc_cents == -2400);
     CHECK(zones[0].reverb_send_amount == 200);
     CHECK(zones[0].chorus_send_amount == 200);
     CHECK(zones[0].supported_velocity_attenuation_records == 0);
+    CHECK(zones[0].supported_velocity_filter_records == 0);
     CHECK(zones[0].supported_effects_send_records == 0);
     CHECK(!zones[0].hasUnsupportedModulators());
 }
@@ -109,6 +111,7 @@ void test_generaluser_bank_exercises_supported_and_pending_modulators() {
     std::array<ResolvedZoneModulation, 256> zones{};
     Sf2ZoneModulatorResolver resolver;
     bool found_velocity_override = false;
+    bool found_velocity_filter_override_or_cancellation = false;
     bool found_effect_send_override = false;
     bool found_unsupported = false;
 
@@ -130,6 +133,9 @@ void test_generaluser_bank_exercises_supported_and_pending_modulators() {
         for (std::size_t index = 0; index < result.zone_count; ++index) {
             found_velocity_override = found_velocity_override ||
                 zones[index].supported_velocity_attenuation_records != 0;
+            found_velocity_filter_override_or_cancellation =
+                found_velocity_filter_override_or_cancellation ||
+                zones[index].supported_velocity_filter_records != 0;
             found_effect_send_override = found_effect_send_override ||
                 zones[index].supported_effects_send_records != 0 ||
                 zones[index].reverb_send_amount != 200 ||
@@ -139,6 +145,7 @@ void test_generaluser_bank_exercises_supported_and_pending_modulators() {
     }
 
     CHECK(found_velocity_override);
+    CHECK(found_velocity_filter_override_or_cancellation);
     CHECK(found_effect_send_override);
     CHECK(found_unsupported);
 }
