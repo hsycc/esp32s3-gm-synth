@@ -12,6 +12,7 @@ idf_component_register(
         "sf2/Sf2PdtaReader.cpp"
         "sf2/Sf2ResolvedZone.cpp"
         "sf2/Sf2ModulationMath.cpp"
+        "sf2/Sf2FilterMath.cpp"
         "sf2/Sf2ZoneModulatorResolver.cpp"
         "sf2/Sf2PlaybackMaterializer.cpp"
         "sf2/Sf2PlaybackProgramPreparer.cpp"
