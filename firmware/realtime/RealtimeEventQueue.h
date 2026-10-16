@@ -17,6 +17,9 @@ enum class EventType : std::uint8_t {
     ControlChange,
     ProgramChange,
     PitchBend,
+    // Channel Pressure carries its 7-bit pressure value in data1. This is a
+    // channel-wide SoundFont modulator source, distinct from poly key pressure.
+    ChannelPressure,
     // A MIDI decoder may translate the GM System On SysEx message into this
     // compact system-level event before it enters the realtime queue. The audio
     // side performs only bounded state reset + Program Change handoff work.
