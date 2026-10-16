@@ -61,4 +61,18 @@ endif
 
 endmenu
 
+menu "Render timing benchmark"
+
+config GM_SYNTH_RENDER_BENCHMARK_ENABLE
+    bool "Run deterministic Voice DSP render benchmark at boot"
+    default n
+    help
+        Bring-up/CI benchmark only. Renders fixed 4/8/12/16/20/24-Voice
+        workloads using an in-memory deterministic looping PCM fixture and
+        reports min/avg/p50/p95/p99/max block times plus deadline and checksum
+        telemetry. QEMU values are regression baselines only; N16R8 hardware
+        remains authoritative for CPU headroom and stable polyphony.
+
+endmenu
+
 endmenu
