@@ -84,7 +84,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
     ResolvedVoiceBatch* batch) const {
     if (batch == nullptr || channel >= 16 || key > 127 || velocity > 127 ||
         note_instance_id == 0 || program.channel != channel ||
-        program.zone_count > program.zones.size()) {
+        program.zone_count > PlaybackProgramSnapshot::kMaxZones ||
+        (program.zone_count != 0 && program.zones == nullptr)) {
         return ZoneResolveStatus::InvalidArgument;
     }
 
