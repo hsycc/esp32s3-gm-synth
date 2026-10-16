@@ -16,6 +16,7 @@ using gm_synth::voice::AdaptivePolyphonyController;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::VoicePool;
 using gm_synth::voice::VoiceStartParams;
+using gm_synth::voice::VoiceStealConfig;
 using gm_synth::voice::kPhaseOneQ32;
 using gm_synth::voice::kQ15Unity;
 
@@ -65,6 +66,14 @@ AdaptivePolyphonyConfig testConfig() {
     config.min_limit = 2;
     config.initial_limit = 8;
     config.max_limit = 8;
+    return config;
+}
+
+VoiceStealConfig stealConfig(std::uint32_t fade_frames, std::size_t max_tails) {
+    VoiceStealConfig config{};
+    config.enabled = true;
+    config.fade_frames = fade_frames;
+    config.max_tail_voices = max_tails;
     return config;
 }
 
@@ -168,6 +177,91 @@ void testConfigurationIsBoundedByHardCap() {
     assert(controller.stats().current_limit == VoicePool::kHardVoiceCap);
 }
 
+void testStealPrefersReleasingVoiceAndKeepsRefUntilFadeCompletes() {
+    PublishedFixture fixture;
+    VoicePool voices(fixture.directory);
+    voices.setAdmissionLimit(2);
+    voices.setVoiceStealConfig(stealConfig(4, 1));
+
+    auto first = paramsFor(60);
+    first.envelope.release_frames = 64;
+    assert(voices.start(first));
+    assert(voices.start(paramsFor(61)));
+    assert(fixture.directory.stats().live_voice_refs == 2);
+
+    assert(voices.noteOff(0, 60) == 1);
+    assert(voices.start(paramsFor(62)));
+    assert(voices.activeVoiceCount() == 3);
+    assert(voices.activeStealTailCount() == 1);
+    assert(fixture.directory.stats().live_voice_refs == 3);
+    assert(voices.stats().steal_successes == 1);
+    assert(voices.stats().steals_from_release == 1);
+    assert(voices.stats().last_stolen_key == 60);
+
+    std::array<std::int32_t, 8> mix{};
+    voices.renderAdd(mix.data(), 4);
+
+    // Two full-level voices remain constant at 2000; the stolen voice fades
+    // over four frames instead of disappearing at the NoteOn boundary.
+    assert(mix[0] > mix[2]);
+    assert(mix[2] > mix[4]);
+    assert(mix[4] > mix[6]);
+    assert(voices.activeVoiceCount() == 2);
+    assert(voices.activeStealTailCount() == 0);
+    assert(fixture.directory.stats().live_voice_refs == 2);
+    voices.allSoundOff();
+}
+
+void testStealTailBudgetBoundsTransientOversubscription() {
+    PublishedFixture fixture;
+    VoicePool voices(fixture.directory);
+    voices.setAdmissionLimit(2);
+    voices.setVoiceStealConfig(stealConfig(8, 1));
+
+    assert(voices.start(paramsFor(60)));
+    assert(voices.start(paramsFor(61)));
+    assert(voices.start(paramsFor(62)));
+    assert(voices.activeVoiceCount() == 3);
+    assert(voices.activeStealTailCount() == 1);
+    assert(voices.stats().last_stolen_key == 60);
+
+    assert(!voices.start(paramsFor(63)));
+    assert(voices.stats().steal_failures_tail_budget == 1);
+    assert(voices.activeVoiceCount() == 3);
+
+    std::array<std::int32_t, 16> mix{};
+    voices.renderAdd(mix.data(), 8);
+    assert(voices.activeVoiceCount() == 2);
+    assert(voices.activeStealTailCount() == 0);
+
+    assert(voices.start(paramsFor(63)));
+    assert(voices.activeVoiceCount() == 3);
+    assert(voices.activeStealTailCount() == 1);
+    assert(voices.stats().last_stolen_key == 61);
+    voices.allSoundOff();
+}
+
+void testRejectedIncomingSampleNeverSacrificesVictim() {
+    PublishedFixture fixture;
+    VoicePool voices(fixture.directory);
+    voices.setAdmissionLimit(2);
+    voices.setVoiceStealConfig(stealConfig(4, 1));
+
+    assert(voices.start(paramsFor(60)));
+    assert(voices.start(paramsFor(61)));
+    const auto refs_before = fixture.directory.stats().live_voice_refs;
+
+    auto missing = paramsFor(62);
+    missing.sample_id = 1;
+    assert(!voices.start(missing));
+    assert(voices.activeVoiceCount() == 2);
+    assert(voices.activeStealTailCount() == 0);
+    assert(fixture.directory.stats().live_voice_refs == refs_before);
+    assert(voices.stats().steal_successes == 0);
+    assert(voices.stats().start_failures_rejected == 1);
+    voices.allSoundOff();
+}
+
 }  // namespace
 
 int main() {
@@ -176,6 +270,9 @@ int main() {
     testSustainedHighPressureUsesHysteresis();
     testStableLowPressureRecoversGradually();
     testConfigurationIsBoundedByHardCap();
+    testStealPrefersReleasingVoiceAndKeepsRefUntilFadeCompletes();
+    testStealTailBudgetBoundsTransientOversubscription();
+    testRejectedIncomingSampleNeverSacrificesVictim();
     std::cout << "adaptive polyphony tests passed\n";
     return 0;
 }
