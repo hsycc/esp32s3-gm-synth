@@ -52,6 +52,7 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     if (request.channel >= 16 || request.token == 0 ||
         request.bank_generation == 0 || request.snapshot == nullptr ||
         (request.native_capacity != 0 && request.native_scratch == nullptr) ||
+        (request.modulation_capacity != 0 && request.modulation_scratch == nullptr) ||
         (request.playback_capacity != 0 && request.playback_zones == nullptr) ||
         (request.dependency_capacity != 0 && request.dependencies == nullptr)) {
         result.status = PlaybackPrepareStatus::InvalidArgument;
@@ -82,9 +83,11 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     if (required_zones > gm::PlaybackProgramSnapshot::kMaxZones ||
         required_zones > std::numeric_limits<std::uint16_t>::max() ||
         required_zones > request.native_capacity ||
+        required_zones > request.modulation_capacity ||
         required_zones > request.playback_capacity ||
         (required_zones != 0 &&
-         (request.native_scratch == nullptr || request.playback_zones == nullptr))) {
+         (request.native_scratch == nullptr || request.modulation_scratch == nullptr ||
+          request.playback_zones == nullptr))) {
         result.status = PlaybackPrepareStatus::ZoneCapacityExceeded;
         return result;
     }
@@ -105,6 +108,24 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     }
     result.zone_count = resolve_result.zone_count;
 
+    Sf2ZoneModulatorResolver modulator_resolver;
+    ZoneModulatorResolveResult modulator_result{};
+    const ZoneModulatorResolveStatus modulator_status = modulator_resolver.resolveProgram(
+        pdta,
+        request.bank,
+        request.program,
+        request.modulation_scratch,
+        request.modulation_capacity,
+        &modulator_result);
+    result.modulator_resolve_status = modulator_status;
+    result.supported_modulator_records = modulator_result.supported_records;
+    result.unsupported_modulator_records = modulator_result.unsupported_records;
+    if (modulator_status != ZoneModulatorResolveStatus::Ok ||
+        modulator_result.zone_count != required_zones) {
+        result.status = PlaybackPrepareStatus::ModulatorResolveFailed;
+        return result;
+    }
+
     const std::size_t required_dependencies = uniqueDependencyCount(
         request.native_scratch,
         required_zones);
@@ -123,6 +144,7 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
         gm::PlaybackZone candidate{};
         const PlaybackMaterializationResult materialized = materializer_.materialize(
             request.native_scratch[index],
+            request.modulation_scratch[index],
             &candidate);
         result.issue_union |= materialized.issues;
 
@@ -151,6 +173,7 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     for (std::size_t index = 0; index < required_zones; ++index) {
         const PlaybackMaterializationResult materialized = materializer_.materialize(
             request.native_scratch[index],
+            request.modulation_scratch[index],
             &request.playback_zones[index]);
         if (!materialized.playablePreview()) {
             result.first_problem_zone = index;
