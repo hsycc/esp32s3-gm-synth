@@ -11,16 +11,15 @@ void TimedAudioBlockRenderer::saturatingIncrement(std::uint64_t& value) {
     }
 }
 
-std::size_t TimedAudioBlockRenderer::render(
+TimedRenderMeasurement TimedAudioBlockRenderer::renderMeasured(
     std::uint64_t block_start_frame,
-    std::int16_t* interleaved_stereo,
-    bool external_deadline_missed) {
+    std::int16_t* interleaved_stereo) {
+    TimedRenderMeasurement measurement{};
+
     if (now_us_ == nullptr) {
         renderer_.render(block_start_frame, interleaved_stereo);
         saturatingIncrement(stats_.clock_faults);
-        return external_deadline_missed
-            ? monitor_.observeDeadlineMissWithoutTiming()
-            : monitor_.currentAdmissionLimit();
+        return measurement;
     }
 
     const std::uint64_t start_us = now_us_(clock_context_);
@@ -29,9 +28,7 @@ std::size_t TimedAudioBlockRenderer::render(
 
     if (end_us < start_us) {
         saturatingIncrement(stats_.clock_faults);
-        return external_deadline_missed
-            ? monitor_.observeDeadlineMissWithoutTiming()
-            : monitor_.currentAdmissionLimit();
+        return measurement;
     }
 
     std::uint64_t elapsed_us = end_us - start_us;
@@ -40,9 +37,33 @@ std::size_t TimedAudioBlockRenderer::render(
         saturatingIncrement(stats_.duration_clamps);
     }
 
-    stats_.last_render_us = static_cast<std::uint32_t>(elapsed_us);
+    measurement.timing_valid = true;
+    measurement.render_time_us = static_cast<std::uint32_t>(elapsed_us);
+    stats_.last_render_us = measurement.render_time_us;
     saturatingIncrement(stats_.blocks_timed);
-    return monitor_.observeBlock(stats_.last_render_us, external_deadline_missed);
+    return measurement;
+}
+
+std::size_t TimedAudioBlockRenderer::observeMeasurement(
+    const TimedRenderMeasurement& measurement,
+    bool external_deadline_missed) {
+    if (measurement.timing_valid) {
+        return monitor_.observeBlock(
+            measurement.render_time_us,
+            external_deadline_missed);
+    }
+    return external_deadline_missed
+        ? monitor_.observeDeadlineMissWithoutTiming()
+        : monitor_.currentAdmissionLimit();
+}
+
+std::size_t TimedAudioBlockRenderer::render(
+    std::uint64_t block_start_frame,
+    std::int16_t* interleaved_stereo,
+    bool external_deadline_missed) {
+    const TimedRenderMeasurement measurement =
+        renderMeasured(block_start_frame, interleaved_stereo);
+    return observeMeasurement(measurement, external_deadline_missed);
 }
 
 }  // namespace gm_synth::realtime
