@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate realtime zone bound against analyzed SF2 banks
+      - name: Validate realtime zone bounds against analyzed SF2 banks
         shell: bash
         run: |
           set -euo pipefail
@@ -42,42 +42,71 @@ jobs:
           import pathlib
           import re
 
-          header = pathlib.Path("firmware/gm/PlaybackProgramSnapshot.h").read_text()
-          match = re.search(r"kMaxZones\s*=\s*(\d+)", header)
+          playback_header = pathlib.Path("firmware/gm/PlaybackProgramSnapshot.h").read_text()
+          match = re.search(r"kMaxZones\s*=\s*(\d+)", playback_header)
           if not match:
               raise SystemExit("unable to read PlaybackProgramSnapshot::kMaxZones")
-          limit = int(match.group(1))
+          zone_limit = int(match.group(1))
 
-          worst = None
+          voice_header = pathlib.Path("firmware/voice/VoiceRenderer.h").read_text()
+          match = re.search(r"kHardVoiceCap\s*=\s*(\d+)", voice_header)
+          if not match:
+              raise SystemExit("unable to read VoicePool::kHardVoiceCap")
+          overlap_limit = int(match.group(1))
+
+          worst_zones = None
+          worst_overlap = None
           checked = 0
           for path in sorted(glob.glob("assets/sf2/manifests/*.analysis.json")):
               with open(path, "r", encoding="utf-8") as handle:
                   analysis = json.load(handle)
               for program in analysis.get("programs", []):
+                  if "max_overlapping_zones" not in program:
+                      raise SystemExit(f"{path}: analyzed program is missing max_overlapping_zones")
+
                   count = int(program.get("resolved_zone_count", 0))
+                  overlap = int(program["max_overlapping_zones"])
                   checked += 1
-                  item = (
-                      count,
+                  identity = (
                       path,
                       int(program.get("bank", 0)),
                       int(program.get("program", 0)),
                       program.get("name", ""),
                   )
-                  if worst is None or item[0] > worst[0]:
-                      worst = item
-                  if count > limit:
+                  zone_item = (count, *identity)
+                  overlap_item = (overlap, *identity)
+                  if worst_zones is None or zone_item[0] > worst_zones[0]:
+                      worst_zones = zone_item
+                  if worst_overlap is None or overlap_item[0] > worst_overlap[0]:
+                      worst_overlap = overlap_item
+
+                  if count > zone_limit:
                       raise SystemExit(
-                          f"{path}: bank={item[2]} program={item[3]} "
-                          f"name={item[4]!r} resolved_zone_count={count} exceeds kMaxZones={limit}"
+                          f"{path}: bank={identity[1]} program={identity[2]} "
+                          f"name={identity[3]!r} resolved_zone_count={count} "
+                          f"exceeds kMaxZones={zone_limit}"
+                      )
+                  if overlap > overlap_limit:
+                      raise SystemExit(
+                          f"{path}: bank={identity[1]} program={identity[2]} "
+                          f"name={identity[3]!r} max_overlapping_zones={overlap} "
+                          f"exceeds VoicePool::kHardVoiceCap={overlap_limit}"
                       )
 
           if checked == 0:
               raise SystemExit("no analyzed SF2 programs found")
-          assert worst is not None
+          assert worst_zones is not None and worst_overlap is not None
           print(
-              f"validated {checked} analyzed programs against kMaxZones={limit}; "
-              f"worst={worst[0]} zones: {worst[1]} bank={worst[2]} "
-              f"program={worst[3]} name={worst[4]!r}"
+              f"validated {checked} analyzed programs: kMaxZones={zone_limit}, "
+              f"VoicePool::kHardVoiceCap={overlap_limit}"
+          )
+          print(
+              f"worst resolved zones={worst_zones[0]}: {worst_zones[1]} "
+              f"bank={worst_zones[2]} program={worst_zones[3]} name={worst_zones[4]!r}"
+          )
+          print(
+              f"worst simultaneous overlap={worst_overlap[0]}: {worst_overlap[1]} "
+              f"bank={worst_overlap[2]} program={worst_overlap[3]} name={worst_overlap[4]!r}"
           )
           PY
       - name: Build playback zone runtime tests
