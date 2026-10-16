@@ -24,6 +24,18 @@ struct EnvelopeConfig {
     std::uint32_t release_frames = 64;
 };
 
+// Optional per-zone playback window within one resident shdr sample. SoundFont
+// address generators are resolved in the control domain into this relative
+// frame region. When enabled=false the Voice uses the sample-global descriptor
+// exactly as before, preserving the existing direct VoiceStartParams API.
+struct SampleRegion {
+    bool enabled = false;
+    std::uint32_t start_frame = 0;
+    std::uint32_t end_frame = 0;  // exclusive
+    std::uint32_t loop_start_frame = 0;
+    std::uint32_t loop_end_frame = 0;  // exclusive
+};
+
 struct VoiceStartParams {
     sample::SampleId sample_id = 0;
     std::uint8_t channel = 0;
@@ -37,6 +49,7 @@ struct VoiceStartParams {
     std::uint32_t note_instance_id = 0;
     std::uint64_t phase_increment_q32 = kPhaseOneQ32;
     LoopMode loop_mode = LoopMode::None;
+    SampleRegion sample_region{};
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
     EnvelopeConfig envelope{};
@@ -133,6 +146,10 @@ private:
     static std::int32_t clampQ15(std::int32_t value);
     static std::int32_t multiplyQ15(std::int32_t a, std::int32_t b);
 
+    std::uint32_t playbackStartFrame() const;
+    std::uint32_t playbackEndFrame() const;
+    std::uint32_t playbackLoopStartFrame() const;
+    std::uint32_t playbackLoopEndFrame() const;
     bool validLoop() const;
     bool loopActive() const;
     std::int32_t nextEnvelopeLevel();
