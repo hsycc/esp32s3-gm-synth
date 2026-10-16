@@ -22,8 +22,9 @@ idf_component_register(
         "platform/EspPsramArena.cpp"
         "platform/EspStorageBenchmark.cpp"
         "platform/EspRealtimeClock.cpp"
+        "platform/EspI2sAudioSink.cpp"
     INCLUDE_DIRS "."
-    REQUIRES esp_psram esp_timer log
+    REQUIRES esp_psram esp_timer log esp_driver_i2s
     PRIV_REQUIRES heap
 )
 
