@@ -11,6 +11,21 @@ namespace gm_synth::voice {
 constexpr std::int32_t kQ15Unity = 32767;
 constexpr std::uint64_t kPhaseOneQ32 = std::uint64_t{1} << 32;
 constexpr std::int32_t kMaxEffectsSendUnits = 1000;
+constexpr std::uint32_t kFilterCoefficientFractionBits = 24;
+
+struct BiquadLowpassConfig {
+    bool enabled = false;
+    // Transposed-direct-form-II coefficients in signed Q24. The low-pass is
+    // symmetric, so a2 == a0 and need not be stored separately.
+    std::int32_t a0_q24 = 0;
+    std::int32_t a1_q24 = 0;
+    std::int32_t b1_q24 = 0;
+    std::int32_t b2_q24 = 0;
+
+    bool valid() const {
+        return !enabled || (a0_q24 > 0 && a1_q24 >= 0);
+    }
+};
 
 enum class LoopMode : std::uint8_t {
     None = 0,
@@ -19,7 +34,9 @@ enum class LoopMode : std::uint8_t {
 };
 
 struct EnvelopeConfig {
+    std::uint32_t delay_frames = 0;
     std::uint32_t attack_frames = 0;
+    std::uint32_t hold_frames = 0;
     std::uint32_t decay_frames = 0;
     std::int32_t sustain_q15 = kQ15Unity;
     std::uint32_t release_frames = 64;
@@ -87,6 +104,7 @@ struct VoiceStartParams {
     std::uint64_t phase_increment_q32 = kPhaseOneQ32;
     LoopMode loop_mode = LoopMode::None;
     SampleRegion sample_region{};
+    BiquadLowpassConfig lowpass{};
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
     // Prepared send state in SoundFont tenths-of-a-percent units. The dry Voice
@@ -182,13 +200,17 @@ public:
     std::int16_t reverbSendUnits() const { return params_.reverb_send_units; }
     std::int16_t chorusSendUnits() const { return params_.chorus_send_units; }
     std::int32_t envelopeLevelQ15() const { return envelope_level_q15_; }
+    bool lowpassEnabled() const { return params_.lowpass.enabled; }
+    const BiquadLowpassConfig& lowpassConfig() const { return params_.lowpass; }
     const VoiceRealtimeControlConfig& realtimeControl() const {
         return params_.realtime_control;
     }
 
 private:
     enum class EnvelopeStage : std::uint8_t {
-        Attack = 0,
+        Delay = 0,
+        Attack,
+        Hold,
         Decay,
         Sustain,
         Release,
@@ -212,6 +234,7 @@ private:
     bool loopActive() const;
     std::int32_t nextEnvelopeLevel();
     std::int32_t interpolatedSample() const;
+    std::int32_t applyLowpass(std::int32_t sample);
     void advancePhase();
     void beginRelease(std::uint32_t release_frames, FastReleaseKind fast_release_kind);
     void finish();
@@ -226,6 +249,8 @@ private:
     std::uint8_t channel_ = 0;
     std::uint8_t key_ = 0;
     std::uint64_t phase_q32_ = 0;
+    std::int64_t lowpass_z1_q24_ = 0;
+    std::int64_t lowpass_z2_q24_ = 0;
     EnvelopeStage envelope_stage_ = EnvelopeStage::Done;
     std::uint32_t envelope_stage_frame_ = 0;
     std::uint32_t active_release_frames_ = 0;
