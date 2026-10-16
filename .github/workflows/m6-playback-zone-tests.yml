@@ -12,6 +12,7 @@ on:
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
       - "tests/gm/test_playback_zone_runtime.cpp"
+      - "assets/sf2/manifests/*.analysis.json"
       - ".github/workflows/m6-playback-zone-tests.yml"
   pull_request:
     paths:
@@ -23,6 +24,7 @@ on:
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
       - "tests/gm/test_playback_zone_runtime.cpp"
+      - "assets/sf2/manifests/*.analysis.json"
       - ".github/workflows/m6-playback-zone-tests.yml"
 
 jobs:
@@ -30,6 +32,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate realtime zone bound against analyzed SF2 banks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+          import pathlib
+          import re
+
+          header = pathlib.Path("firmware/gm/PlaybackProgramSnapshot.h").read_text()
+          match = re.search(r"kMaxZones\s*=\s*(\d+)", header)
+          if not match:
+              raise SystemExit("unable to read PlaybackProgramSnapshot::kMaxZones")
+          limit = int(match.group(1))
+
+          worst = None
+          checked = 0
+          for path in sorted(glob.glob("assets/sf2/manifests/*.analysis.json")):
+              with open(path, "r", encoding="utf-8") as handle:
+                  analysis = json.load(handle)
+              for program in analysis.get("programs", []):
+                  count = int(program.get("resolved_zone_count", 0))
+                  checked += 1
+                  item = (
+                      count,
+                      path,
+                      int(program.get("bank", 0)),
+                      int(program.get("program", 0)),
+                      program.get("name", ""),
+                  )
+                  if worst is None or item[0] > worst[0]:
+                      worst = item
+                  if count > limit:
+                      raise SystemExit(
+                          f"{path}: bank={item[2]} program={item[3]} "
+                          f"name={item[4]!r} resolved_zone_count={count} exceeds kMaxZones={limit}"
+                      )
+
+          if checked == 0:
+              raise SystemExit("no analyzed SF2 programs found")
+          assert worst is not None
+          print(
+              f"validated {checked} analyzed programs against kMaxZones={limit}; "
+              f"worst={worst[0]} zones: {worst[1]} bank={worst[2]} "
+              f"program={worst[3]} name={worst[4]!r}"
+          )
+          PY
       - name: Build playback zone runtime tests
         shell: bash
         run: |
