@@ -13,6 +13,12 @@ bool Voice::applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update) {
     params_.gain_right_q15 = clampQ15(update.gain_right_q15);
     params_.reverb_send_units = update.reverb_send_units;
     params_.chorus_send_units = update.chorus_send_units;
+    if (params_.vibrato_lfo.enabled) {
+        params_.vibrato_lfo.pitch_depth_cents = update.vibrato_pitch_depth_cents;
+        vibrato_control_frames_remaining_ = 0;
+    } else {
+        current_phase_increment_q32_ = params_.phase_increment_q32;
+    }
     return true;
 }
 
