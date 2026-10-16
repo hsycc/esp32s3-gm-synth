@@ -41,6 +41,12 @@ struct VoiceRenderResult {
     bool finished = false;
 };
 
+struct VoiceStealConfig {
+    bool enabled = false;
+    std::uint32_t fade_frames = 32;
+    std::size_t max_tail_voices = 2;
+};
+
 struct VoicePoolStats {
     std::uint64_t start_attempts = 0;
     std::uint64_t start_successes = 0;
@@ -50,9 +56,18 @@ struct VoicePoolStats {
     std::uint64_t note_off_matches = 0;
     std::uint64_t voices_finished = 0;
     std::uint64_t rendered_voice_frames = 0;
+    std::uint64_t steal_attempts = 0;
+    std::uint64_t steal_successes = 0;
+    std::uint64_t steal_failures_tail_budget = 0;
+    std::uint64_t steal_failures_no_victim = 0;
+    std::uint64_t steals_from_release = 0;
+    std::uint64_t steals_from_active = 0;
     std::size_t active_voices = 0;
     std::size_t peak_active_voices = 0;
     std::size_t admission_limit = 0;
+    std::size_t active_steal_tails = 0;
+    std::uint8_t last_stolen_channel = 0;
+    std::uint8_t last_stolen_key = 0;
 };
 
 class Voice {
@@ -63,10 +78,13 @@ public:
 
     bool start(sample::PublishedSampleDirectory& directory, const VoiceStartParams& params);
     void noteOff();
+    bool beginFastRelease(std::uint32_t fade_frames);
     VoiceRenderResult renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
     void reset();
 
     bool active() const { return active_; }
+    bool releasing() const;
+    bool stealTail() const { return active_ && steal_tail_; }
     std::uint8_t channel() const { return channel_; }
     std::uint8_t key() const { return key_; }
     sample::SampleId sampleId() const { return ref_.sample_id; }
@@ -90,6 +108,7 @@ private:
     std::int32_t nextEnvelopeLevel();
     std::int32_t interpolatedSample() const;
     void advancePhase();
+    void beginRelease(std::uint32_t release_frames, bool steal_tail);
     void finish();
 
     sample::PublishedSampleDirectory* directory_ = nullptr;
@@ -98,11 +117,13 @@ private:
 
     bool active_ = false;
     bool key_released_ = false;
+    bool steal_tail_ = false;
     std::uint8_t channel_ = 0;
     std::uint8_t key_ = 0;
     std::uint64_t phase_q32_ = 0;
     EnvelopeStage envelope_stage_ = EnvelopeStage::Done;
     std::uint32_t envelope_stage_frame_ = 0;
+    std::uint32_t active_release_frames_ = 0;
     std::int32_t envelope_level_q15_ = 0;
     std::int32_t release_start_level_q15_ = 0;
 };
@@ -123,13 +144,23 @@ public:
 
     void setAdmissionLimit(std::size_t limit);
     std::size_t admissionLimit() const { return admission_limit_; }
+    void setVoiceStealConfig(const VoiceStealConfig& config);
+    const VoiceStealConfig& voiceStealConfig() const { return steal_config_; }
     std::size_t activeVoiceCount() const;
+    std::size_t activeStealTailCount() const;
     const VoicePoolStats& stats() const { return stats_; }
 
 private:
+    std::size_t findInactiveSlot() const;
+    std::size_t chooseStealVictim() const;
+    void recordStartedVoice(std::size_t slot, std::size_t active_before);
+
     sample::PublishedSampleDirectory& directory_;
     std::array<Voice, kHardVoiceCap> voices_{};
+    std::array<std::uint64_t, kHardVoiceCap> start_serials_{};
+    std::uint64_t next_start_serial_ = 1;
     std::size_t admission_limit_ = kHardVoiceCap;
+    VoiceStealConfig steal_config_{};
     VoicePoolStats stats_{};
 };
 
