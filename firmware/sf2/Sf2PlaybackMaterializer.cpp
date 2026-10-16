@@ -38,6 +38,26 @@ std::uint32_t timecentsToFrames(std::int32_t timecents, std::uint32_t sample_rat
     return static_cast<std::uint32_t>(frames + 0.5L);
 }
 
+std::uint32_t lfoFrequencyCentsToPhaseStepQ32(
+    std::int32_t frequency_cents,
+    std::uint32_t sample_rate) {
+    if (sample_rate == 0) {
+        return 0;
+    }
+    constexpr long double kAbsoluteCentsZeroHz = 8.176L;
+    constexpr long double kQ32 = 4294967296.0L;
+    const long double hz = kAbsoluteCentsZeroHz *
+        std::exp2(static_cast<long double>(frequency_cents) / 1200.0L);
+    const long double step = hz * kQ32 / static_cast<long double>(sample_rate);
+    if (!std::isfinite(step) || step <= 0.0L) {
+        return 1;
+    }
+    if (step >= static_cast<long double>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::numeric_limits<std::uint32_t>::max();
+    }
+    return std::max<std::uint32_t>(1u, static_cast<std::uint32_t>(step + 0.5L));
+}
+
 std::int32_t unitGainQ15(double gain, std::uint64_t* issues) {
     if (!std::isfinite(gain) || gain <= 0.0) {
         return 0;
@@ -69,10 +89,11 @@ bool modEnvelopeNeedsDsp(const NativeResolvedZone& zone) {
 }
 
 bool lfoNeedsDsp(const NativeResolvedZone& zone) {
-    return differs(zone, 5, 0) || differs(zone, 6, 0) ||
-           differs(zone, 10, 0) || differs(zone, 13, 0) ||
-           differs(zone, 21, -12000) || differs(zone, 22, 0) ||
-           differs(zone, 23, -12000) || differs(zone, 24, 0);
+    // Vibrato LFO (gen6/23/24) is implemented. Mod-LFO pitch/filter/volume and
+    // its delay/frequency remain explicit pending work.
+    return differs(zone, 5, 0) || differs(zone, 10, 0) ||
+           differs(zone, 13, 0) || differs(zone, 21, -12000) ||
+           differs(zone, 22, 0);
 }
 
 voice::LoopMode loopModeFor(std::int32_t sample_modes, bool* supported) {
@@ -131,10 +152,12 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         return result;
     }
 
-    // Velocity/CC7/CC10/CC11/PitchWheel, velocity->filter and CC91/CC93 are
-    // represented now. Keep the conservative default-modulator bit until the
-    // mandatory channel-pressure/mod-wheel vibrato-LFO routes are implemented.
-    std::uint64_t issues = PlaybackIssueDefaultModulatorsPending;
+    // Mandatory SF2 defaults currently represented by the runtime: NoteOn
+    // velocity -> attenuation/filter, Channel Pressure/CC1 -> vibrato depth,
+    // CC7/10/11, Pitch Wheel/RPN and CC91/93. Remaining preview diagnostics
+    // below therefore describe non-default DSP/features rather than a blanket
+    // default-modulator gap.
+    std::uint64_t issues = PlaybackIssueNone;
     if ((native.flags & NativeZoneFlagUnknownGenerator) != 0) {
         issues |= PlaybackIssueUnknownGenerator;
     }
@@ -194,7 +217,7 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     }
 
     // Static cutoff + NoteOn velocity modulation is now represented. Dynamic
-    // mod-envelope/LFO cutoff movement and non-zero resonance remain explicit
+    // mod-envelope/mod-LFO cutoff movement and non-zero resonance remain explicit
     // until their per-voice DSP semantics are validated.
     if (output_sample_rate_ != kSf2FilterOutputSampleRate ||
         native.initialFilterQCb() != 0 ||
@@ -316,6 +339,23 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         modulation.velocity_to_filter_fc_cents;
     candidate.note_on_filter.resonance_cb = static_cast<std::int16_t>(
         std::clamp<std::int32_t>(native.initialFilterQCb(), 0, 960));
+
+    const std::int32_t static_vibrato_depth = native.generators.value(6, 0);
+    candidate.vibrato_lfo.enabled =
+        static_vibrato_depth != 0 ||
+        modulation.channel_pressure_to_vib_lfo_pitch_cents != 0 ||
+        modulation.modulation_wheel_to_vib_lfo_pitch_cents != 0;
+    candidate.vibrato_lfo.delay_frames = timecentsToFrames(
+        native.generators.value(23, -12000),
+        output_sample_rate_);
+    candidate.vibrato_lfo.phase_step_q32 = lfoFrequencyCentsToPhaseStepQ32(
+        native.generators.value(24, 0),
+        output_sample_rate_);
+    candidate.vibrato_lfo.static_pitch_depth_cents = static_vibrato_depth;
+    candidate.vibrato_lfo.channel_pressure_to_pitch_cents =
+        modulation.channel_pressure_to_vib_lfo_pitch_cents;
+    candidate.vibrato_lfo.modulation_wheel_to_pitch_cents =
+        modulation.modulation_wheel_to_vib_lfo_pitch_cents;
 
     candidate.effects_send.enabled = true;
     candidate.effects_send.reverb_sf2_units = static_cast<std::int16_t>(
