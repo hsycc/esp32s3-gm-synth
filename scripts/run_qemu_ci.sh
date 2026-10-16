@@ -59,11 +59,15 @@ require_log() {
     fi
 }
 
-require_log "ESP32-S3 GM synth M0/M3 bring-up"
+# Keep smoke assertions independent of the current milestone label (M3/M6/etc.).
+# This gate validates platform bring-up; milestone-specific behavior belongs in
+# the dedicated integration/benchmark gates below it.
+require_log "ESP32-S3 GM synth"
+require_log "bring-up"
 require_log "Detected physical PSRAM: 8388608 bytes (8.00 MiB)"
 require_log "Requesting PCM residency arena: 4194304 bytes (4.00 MiB)"
 require_log "Residency ready: capacity=4194304 used=0"
-require_log "M3 core linked successfully"
+require_log "core linked successfully"
 
 if grep -Fq "Detected physical PSRAM is below 7 MiB" "$REPORT_PATH"; then
     echo "QEMU did not expose the expected 8 MiB PSRAM baseline" >&2

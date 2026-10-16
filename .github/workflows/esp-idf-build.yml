@@ -17,6 +17,7 @@ on:
       - "scripts/run_qemu_ci.sh"
       - "scripts/run_qemu_sf2_ci.sh"
       - "tools/program_prepare_benchmark/**"
+      - "tools/render_benchmark/**"
       - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
       - "assets/sf2/manifests/subset-sha256.txt"
       - ".github/workflows/esp-idf-build.yml"
@@ -34,6 +35,7 @@ on:
       - "scripts/run_qemu_ci.sh"
       - "scripts/run_qemu_sf2_ci.sh"
       - "tools/program_prepare_benchmark/**"
+      - "tools/render_benchmark/**"
       - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
       - "assets/sf2/manifests/subset-sha256.txt"
       - ".github/workflows/esp-idf-build.yml"
@@ -116,6 +118,17 @@ jobs:
             echo "QEMU real-SF2 log was not produced; no Program Prepare report can be rendered." >&2
           fi
 
+      - name: Render Voice DSP timing telemetry report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.render_benchmark.report \
+            reports/qemu-sf2-flash.log \
+            --expected-voices 4 8 12 16 20 24 \
+            --title "ESP32-S3 QEMU Voice DSP Render Timing Telemetry" \
+            --output reports/qemu-render-timing.md
+          cat reports/qemu-render-timing.md
+
       - name: Build physical N16R8 storage benchmark image
         shell: bash
         run: |
@@ -132,6 +145,7 @@ jobs:
             reports/qemu-sf2-flash.log
             reports/qemu-sf2-flash-preflight.log
             reports/qemu-program-prepare.md
+            reports/qemu-render-timing.md
             build-qemu-sf2/esp32s3_gm_synth.elf
             build-qemu-sf2/esp32s3_gm_synth.map
             sdkconfig.qemu
@@ -173,4 +187,5 @@ jobs:
             reports/qemu-sf2-flash.log
             reports/qemu-sf2-flash-preflight.log
             reports/qemu-program-prepare.md
+            reports/qemu-render-timing.md
           if-no-files-found: error

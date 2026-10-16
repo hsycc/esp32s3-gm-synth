@@ -1,6 +1,7 @@
 #include "sdkconfig.h"
 
 #include "ProgramPrepareBenchmark.h"
+#include "RenderTimingBenchmark.h"
 
 #include "esp_log.h"
 #include "esp_psram.h"
@@ -163,7 +164,7 @@ extern "C" void app_main(void) {
     using gm_synth::platform::EspPsramArena;
     using gm_synth::sample::SampleResidencyManager;
 
-    ESP_LOGI(kTag, "ESP32-S3 GM synth M0/M3 bring-up");
+    ESP_LOGI(kTag, "ESP32-S3 GM synth M0/M6 bring-up");
     ESP_LOGI(kTag, "ESP-IDF: %s", esp_get_idf_version());
     ESP_LOGI(
         kTag,
@@ -257,7 +258,12 @@ extern "C" void app_main(void) {
         return;
     }
 
+    if (!gm_synth::bringup::runOptionalRenderTimingBenchmark()) {
+        ESP_LOGE(kTag, "Render timing benchmark FAILED");
+        return;
+    }
+
     ESP_LOGI(
         kTag,
-        "M3 core linked successfully; storage/I2S/Voice DSP are intentionally not started in this bring-up target");
+        "M6 bring-up core linked successfully; physical I2S output is intentionally not started in this target");
 }
