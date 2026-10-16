@@ -17,4 +17,9 @@ CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=262144
 # functional telemetry only; physical N16R8 remains the performance oracle.
 CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y
 
+# Exercise the actual scheduler + Voice DSP + mix/finalize timed-render path at
+# fixed Voice counts. QEMU times are version-to-version regression telemetry,
+# never a substitute for N16R8 CPU/I2S qualification.
+CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
+
 CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y
