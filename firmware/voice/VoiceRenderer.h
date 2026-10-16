@@ -10,6 +10,7 @@ namespace gm_synth::voice {
 
 constexpr std::int32_t kQ15Unity = 32767;
 constexpr std::uint64_t kPhaseOneQ32 = std::uint64_t{1} << 32;
+constexpr std::int32_t kMaxEffectsSendUnits = 1000;
 
 enum class LoopMode : std::uint8_t {
     None = 0,
@@ -44,6 +45,7 @@ struct SampleRegion {
 struct VoiceRealtimeControlConfig {
     bool enabled = false;
     bool gain_enabled = false;
+    bool effects_send_enabled = false;
     std::uint64_t unbent_phase_increment_q32 = kPhaseOneQ32;
     std::int32_t initial_attenuation_cb = 0;
     std::int32_t velocity_to_attenuation_cb = 0;
@@ -51,14 +53,24 @@ struct VoiceRealtimeControlConfig {
     std::int32_t pan_amount = 0;
     std::int32_t expression_to_attenuation_cb = 0;
     std::int16_t pan_sf2_units = 0;
+    std::int16_t reverb_send_base_units = 0;
+    std::int16_t chorus_send_base_units = 0;
+    std::int32_t reverb_send_cc_amount = 0;
+    std::int32_t chorus_send_cc_amount = 0;
 };
 
 struct VoiceRuntimeControlUpdate {
     std::uint64_t phase_increment_q32 = kPhaseOneQ32;
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
+    std::int16_t reverb_send_units = 0;
+    std::int16_t chorus_send_units = 0;
 
-    bool valid() const { return phase_increment_q32 != 0; }
+    bool valid() const {
+        return phase_increment_q32 != 0 &&
+            reverb_send_units >= 0 && reverb_send_units <= kMaxEffectsSendUnits &&
+            chorus_send_units >= 0 && chorus_send_units <= kMaxEffectsSendUnits;
+    }
 };
 
 struct VoiceStartParams {
@@ -77,6 +89,11 @@ struct VoiceStartParams {
     SampleRegion sample_region{};
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
+    // Prepared send state in SoundFont tenths-of-a-percent units. The dry Voice
+    // renderer does not yet consume these values; a future FX bus can read them
+    // without changing the MIDI/SF2 control contract again.
+    std::int16_t reverb_send_units = 0;
+    std::int16_t chorus_send_units = 0;
     EnvelopeConfig envelope{};
     VoiceRealtimeControlConfig realtime_control{};
 };
@@ -162,6 +179,8 @@ public:
     std::uint64_t phaseIncrementQ32() const { return params_.phase_increment_q32; }
     std::int32_t gainLeftQ15() const { return params_.gain_left_q15; }
     std::int32_t gainRightQ15() const { return params_.gain_right_q15; }
+    std::int16_t reverbSendUnits() const { return params_.reverb_send_units; }
+    std::int16_t chorusSendUnits() const { return params_.chorus_send_units; }
     std::int32_t envelopeLevelQ15() const { return envelope_level_q15_; }
     const VoiceRealtimeControlConfig& realtimeControl() const {
         return params_.realtime_control;
