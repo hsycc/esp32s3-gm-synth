@@ -1,0 +1,50 @@
+name: m6-playback-zone-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/ZoneResolver.*"
+      - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "firmware/realtime/RealtimeEventQueue.*"
+      - "firmware/realtime/BlockEventScheduler.*"
+      - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "tests/gm/test_playback_zone_runtime.cpp"
+      - ".github/workflows/m6-playback-zone-tests.yml"
+  pull_request:
+    paths:
+      - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/ZoneResolver.*"
+      - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "firmware/realtime/RealtimeEventQueue.*"
+      - "firmware/realtime/BlockEventScheduler.*"
+      - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "tests/gm/test_playback_zone_runtime.cpp"
+      - ".github/workflows/m6-playback-zone-tests.yml"
+
+jobs:
+  playback-zone-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build playback zone runtime tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/gm/PlaybackProgramSnapshot.cpp \
+            firmware/gm/ZoneResolver.cpp \
+            firmware/realtime/RealtimeEventQueue.cpp \
+            firmware/realtime/BlockEventScheduler.cpp \
+            firmware/realtime/ScheduledAudioBlockRenderer.cpp \
+            tests/gm/test_playback_zone_runtime.cpp \
+            -o build/host-tests/test_playback_zone_runtime
+      - name: Run playback zone runtime tests
+        run: ./build/host-tests/test_playback_zone_runtime
