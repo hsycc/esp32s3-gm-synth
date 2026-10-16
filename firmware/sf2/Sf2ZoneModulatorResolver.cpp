@@ -9,7 +9,9 @@ namespace {
 
 constexpr std::size_t kNoZone = std::numeric_limits<std::size_t>::max();
 constexpr std::uint16_t kVelocityAttenuationSourceOper = 0x0502u;
+constexpr std::uint16_t kVelocityFilterSourceOper = 0x0102u;
 constexpr std::uint16_t kInitialAttenuationDestination = 48u;
+constexpr std::uint16_t kInitialFilterFcDestination = 8u;
 constexpr std::uint16_t kReverbSourceOper = 0x00DBu;
 constexpr std::uint16_t kReverbDestination = 16u;
 constexpr std::uint16_t kChorusSourceOper = 0x00DDu;
@@ -30,11 +32,14 @@ struct KeyVelocityRange {
 struct ModulatorScan {
     bool velocity_attenuation_found = false;
     std::int32_t velocity_attenuation_amount = 0;
+    bool velocity_filter_found = false;
+    std::int32_t velocity_filter_amount = 0;
     bool reverb_send_found = false;
     std::int32_t reverb_send_amount = 0;
     bool chorus_send_found = false;
     std::int32_t chorus_send_amount = 0;
     std::uint32_t supported_velocity_records = 0;
+    std::uint32_t supported_velocity_filter_records = 0;
     std::uint32_t supported_effects_send_records = 0;
     std::uint32_t supported_records = 0;
     std::uint32_t unsupported_records = 0;
@@ -203,6 +208,25 @@ bool isSupportedVelocityAttenuationRoute(
            modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
 }
 
+bool isSupportedVelocityFilterRoute(
+    const Sf2PdtaReader::Modulator& modulator) {
+    // SoundFont 2.04 route: velocity, negative-unipolar linear, no secondary.
+    return modulator.source_oper == kVelocityFilterSourceOper &&
+           modulator.destination_oper == kInitialFilterFcDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
+bool isIgnoredSf201VelocityFilterCancellation(
+    const Sf2PdtaReader::Modulator& modulator) {
+    // Some real banks explicitly cancel the obsolete 2.01 route as well as the
+    // 2.04 route. We do not instantiate the 2.01 default; a zero-amount record
+    // with its legacy velocity-switch secondary is therefore a supported no-op.
+    return modulator.source_oper == kVelocityFilterSourceOper &&
+           modulator.destination_oper == kInitialFilterFcDestination &&
+           modulator.amount_source_oper == 0x0D02u &&
+           modulator.transform_oper == 0 && modulator.amount == 0;
+}
+
 bool isSupportedReverbSendRoute(const Sf2PdtaReader::Modulator& modulator) {
     return modulator.source_oper == kReverbSourceOper &&
            modulator.destination_oper == kReverbDestination &&
@@ -240,6 +264,16 @@ bool scanModulators(
             scan.velocity_attenuation_amount = modulator.amount;
             scan.supported_velocity_records = saturatingAdd32(scan.supported_velocity_records, 1);
             scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedVelocityFilterRoute(modulator)) {
+            scan.velocity_filter_found = true;
+            scan.velocity_filter_amount = modulator.amount;
+            scan.supported_velocity_filter_records = saturatingAdd32(
+                scan.supported_velocity_filter_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isIgnoredSf201VelocityFilterCancellation(modulator)) {
+            scan.supported_velocity_filter_records = saturatingAdd32(
+                scan.supported_velocity_filter_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
         } else if (isSupportedReverbSendRoute(modulator)) {
             scan.reverb_send_found = true;
             scan.reverb_send_amount = modulator.amount;
@@ -276,6 +310,14 @@ ResolvedZoneModulation combine(
         resolved.velocity_to_attenuation_cb =
             instrument_local.velocity_attenuation_amount;
     }
+    if (instrument_global.velocity_filter_found) {
+        resolved.velocity_to_filter_fc_cents =
+            instrument_global.velocity_filter_amount;
+    }
+    if (instrument_local.velocity_filter_found) {
+        resolved.velocity_to_filter_fc_cents =
+            instrument_local.velocity_filter_amount;
+    }
     if (instrument_global.reverb_send_found) {
         resolved.reverb_send_amount = instrument_global.reverb_send_amount;
     }
@@ -305,6 +347,22 @@ ResolvedZoneModulation combine(
         resolved.velocity_to_attenuation_cb = saturatingAddI32(
             resolved.velocity_to_attenuation_cb,
             preset_velocity_amount);
+    }
+
+    bool preset_filter_found = false;
+    std::int32_t preset_filter_amount = 0;
+    if (preset_global.velocity_filter_found) {
+        preset_filter_found = true;
+        preset_filter_amount = preset_global.velocity_filter_amount;
+    }
+    if (preset_local.velocity_filter_found) {
+        preset_filter_found = true;
+        preset_filter_amount = preset_local.velocity_filter_amount;
+    }
+    if (preset_filter_found) {
+        resolved.velocity_to_filter_fc_cents = saturatingAddI32(
+            resolved.velocity_to_filter_fc_cents,
+            preset_filter_amount);
     }
 
     bool preset_reverb_found = false;
@@ -346,6 +404,13 @@ ResolvedZoneModulation combine(
         saturatingAdd32(
             instrument_global.supported_velocity_records,
             instrument_local.supported_velocity_records));
+    const std::uint32_t supported_filter = saturatingAdd32(
+        saturatingAdd32(
+            preset_global.supported_velocity_filter_records,
+            preset_local.supported_velocity_filter_records),
+        saturatingAdd32(
+            instrument_global.supported_velocity_filter_records,
+            instrument_local.supported_velocity_filter_records));
     const std::uint32_t supported_effects = saturatingAdd32(
         saturatingAdd32(
             preset_global.supported_effects_send_records,
@@ -357,6 +422,7 @@ ResolvedZoneModulation combine(
         saturatingAdd32(preset_global.unsupported_records, preset_local.unsupported_records),
         saturatingAdd32(instrument_global.unsupported_records, instrument_local.unsupported_records));
     resolved.supported_velocity_attenuation_records = clampU16(supported_velocity);
+    resolved.supported_velocity_filter_records = clampU16(supported_filter);
     resolved.supported_effects_send_records = clampU16(supported_effects);
     resolved.unsupported_modulator_records = clampU16(unsupported);
     return resolved;
@@ -565,7 +631,9 @@ ZoneModulatorResolveStatus Sf2ZoneModulatorResolver::resolveProgram(
             result->supported_records = saturatingAdd32(
                 result->supported_records,
                 saturatingAdd32(
-                    resolved.supported_velocity_attenuation_records,
+                    saturatingAdd32(
+                        resolved.supported_velocity_attenuation_records,
+                        resolved.supported_velocity_filter_records),
                     resolved.supported_effects_send_records));
             result->unsupported_records = saturatingAdd32(
                 result->unsupported_records,
