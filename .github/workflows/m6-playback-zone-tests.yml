@@ -1,0 +1,129 @@
+name: m6-playback-zone-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/ZoneResolver.*"
+      - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "firmware/realtime/RealtimeEventQueue.*"
+      - "firmware/realtime/BlockEventScheduler.*"
+      - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "tests/gm/test_playback_zone_runtime.cpp"
+      - "assets/sf2/manifests/*.analysis.json"
+      - ".github/workflows/m6-playback-zone-tests.yml"
+  pull_request:
+    paths:
+      - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/ZoneResolver.*"
+      - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/voice/VoiceRenderer.*"
+      - "firmware/realtime/RealtimeEventQueue.*"
+      - "firmware/realtime/BlockEventScheduler.*"
+      - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "tests/gm/test_playback_zone_runtime.cpp"
+      - "assets/sf2/manifests/*.analysis.json"
+      - ".github/workflows/m6-playback-zone-tests.yml"
+
+jobs:
+  playback-zone-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate realtime zone bounds against analyzed SF2 banks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+          import pathlib
+          import re
+
+          playback_header = pathlib.Path("firmware/gm/PlaybackProgramSnapshot.h").read_text()
+          match = re.search(r"kMaxZones\s*=\s*(\d+)", playback_header)
+          if not match:
+              raise SystemExit("unable to read PlaybackProgramSnapshot::kMaxZones")
+          zone_limit = int(match.group(1))
+
+          voice_header = pathlib.Path("firmware/voice/VoiceRenderer.h").read_text()
+          match = re.search(r"kHardVoiceCap\s*=\s*(\d+)", voice_header)
+          if not match:
+              raise SystemExit("unable to read VoicePool::kHardVoiceCap")
+          overlap_limit = int(match.group(1))
+
+          worst_zones = None
+          worst_overlap = None
+          checked = 0
+          for path in sorted(glob.glob("assets/sf2/manifests/*.analysis.json")):
+              with open(path, "r", encoding="utf-8") as handle:
+                  analysis = json.load(handle)
+              for program in analysis.get("programs", []):
+                  if "max_overlapping_zones" not in program:
+                      raise SystemExit(f"{path}: analyzed program is missing max_overlapping_zones")
+
+                  count = int(program.get("resolved_zone_count", 0))
+                  overlap = int(program["max_overlapping_zones"])
+                  checked += 1
+                  identity = (
+                      path,
+                      int(program.get("bank", 0)),
+                      int(program.get("program", 0)),
+                      program.get("name", ""),
+                  )
+                  zone_item = (count, *identity)
+                  overlap_item = (overlap, *identity)
+                  if worst_zones is None or zone_item[0] > worst_zones[0]:
+                      worst_zones = zone_item
+                  if worst_overlap is None or overlap_item[0] > worst_overlap[0]:
+                      worst_overlap = overlap_item
+
+                  if count > zone_limit:
+                      raise SystemExit(
+                          f"{path}: bank={identity[1]} program={identity[2]} "
+                          f"name={identity[3]!r} resolved_zone_count={count} "
+                          f"exceeds kMaxZones={zone_limit}"
+                      )
+                  if overlap > overlap_limit:
+                      raise SystemExit(
+                          f"{path}: bank={identity[1]} program={identity[2]} "
+                          f"name={identity[3]!r} max_overlapping_zones={overlap} "
+                          f"exceeds VoicePool::kHardVoiceCap={overlap_limit}"
+                      )
+
+          if checked == 0:
+              raise SystemExit("no analyzed SF2 programs found")
+          assert worst_zones is not None and worst_overlap is not None
+          print(
+              f"validated {checked} analyzed programs: kMaxZones={zone_limit}, "
+              f"VoicePool::kHardVoiceCap={overlap_limit}"
+          )
+          print(
+              f"worst resolved zones={worst_zones[0]}: {worst_zones[1]} "
+              f"bank={worst_zones[2]} program={worst_zones[3]} name={worst_zones[4]!r}"
+          )
+          print(
+              f"worst simultaneous overlap={worst_overlap[0]}: {worst_overlap[1]} "
+              f"bank={worst_overlap[2]} program={worst_overlap[3]} name={worst_overlap[4]!r}"
+          )
+          PY
+      - name: Build playback zone runtime tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/gm/PlaybackProgramSnapshot.cpp \
+            firmware/gm/ZoneResolver.cpp \
+            firmware/realtime/RealtimeEventQueue.cpp \
+            firmware/realtime/BlockEventScheduler.cpp \
+            firmware/realtime/ScheduledAudioBlockRenderer.cpp \
+            tests/gm/test_playback_zone_runtime.cpp \
+            -o build/host-tests/test_playback_zone_runtime
+      - name: Run playback zone runtime tests
+        run: ./build/host-tests/test_playback_zone_runtime
