@@ -42,9 +42,9 @@ public:
         ResolvedVoiceBatch* batch) const;
 
     // Production path: after raw zone selection, apply effective velocity plus
-    // current CC7/10/11/91/93 and Pitch Bend/RPN state before Voice::start(). It
-    // also carries immutable source values needed to refresh a sounding Voice
-    // when those channel controllers later change.
+    // current CC1/7/10/11/91/93, Channel Pressure and Pitch Bend/RPN state
+    // before Voice::start(). It also carries immutable source values needed to
+    // refresh a sounding Voice when those channel controls later change.
     ZoneResolveStatus resolveNoteOn(
         const PlaybackProgramSnapshot& program,
         const MidiChannelState& channel_state,
@@ -74,6 +74,7 @@ struct RealtimeProgramEventStats {
     std::uint64_t note_off_events = 0;
     std::uint64_t control_change_events = 0;
     std::uint64_t pitch_bend_events = 0;
+    std::uint64_t channel_pressure_events = 0;
     std::uint64_t controller_state_changes = 0;
     std::uint64_t active_voice_updates = 0;
     std::uint64_t sustain_releases = 0;
