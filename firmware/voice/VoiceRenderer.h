@@ -29,6 +29,12 @@ struct VoiceStartParams {
     std::uint8_t channel = 0;
     std::uint8_t key = 60;
     std::uint8_t velocity = 100;
+    // SoundFont exclusiveClass. Zero means no exclusive-class behavior.
+    std::uint16_t exclusive_class = 0;
+    // All layers spawned by one logical NoteOn should share the same non-zero
+    // ID so they do not exclusive-choke each other. Zero means "un-grouped";
+    // every start is then treated as an independent trigger.
+    std::uint32_t note_instance_id = 0;
     std::uint64_t phase_increment_q32 = kPhaseOneQ32;
     LoopMode loop_mode = LoopMode::None;
     std::int32_t gain_left_q15 = kQ15Unity;
@@ -42,7 +48,11 @@ struct VoiceRenderResult {
 };
 
 struct VoiceStealConfig {
+    // Controls overload-driven victim stealing only. SoundFont exclusive-class
+    // choke remains active when enabled=false.
     bool enabled = false;
+    // The fade and transient-tail budget are shared by overload stealing and
+    // exclusive-class choke so the two policies cannot create unbounded tails.
     std::uint32_t fade_frames = 32;
     std::size_t max_tail_voices = 2;
 };
@@ -63,12 +73,20 @@ struct VoicePoolStats {
     std::uint64_t steal_failures_no_victim = 0;
     std::uint64_t steals_from_release = 0;
     std::uint64_t steals_from_active = 0;
+    std::uint64_t exclusive_choke_attempts = 0;
+    std::uint64_t exclusive_choke_successes = 0;
+    std::uint64_t exclusive_choke_failures_tail_budget = 0;
+    std::uint64_t exclusive_choke_failures_over_target = 0;
+    std::uint64_t exclusive_voices_released = 0;
     std::size_t active_voices = 0;
     std::size_t peak_active_voices = 0;
     std::size_t admission_limit = 0;
     std::size_t active_steal_tails = 0;
+    std::size_t active_exclusive_tails = 0;
+    std::size_t active_fast_release_tails = 0;
     std::uint8_t last_stolen_channel = 0;
     std::uint8_t last_stolen_key = 0;
+    std::uint16_t last_exclusive_class = 0;
 };
 
 class Voice {
@@ -80,14 +98,19 @@ public:
     bool start(sample::PublishedSampleDirectory& directory, const VoiceStartParams& params);
     void noteOff();
     bool beginFastRelease(std::uint32_t fade_frames);
+    bool beginExclusiveRelease(std::uint32_t fade_frames);
     VoiceRenderResult renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
     void reset();
 
     bool active() const { return active_; }
     bool releasing() const;
-    bool stealTail() const { return active_ && steal_tail_; }
+    bool stealTail() const;
+    bool exclusiveTail() const;
+    bool fastReleaseTail() const;
     std::uint8_t channel() const { return channel_; }
     std::uint8_t key() const { return key_; }
+    std::uint16_t exclusiveClass() const { return params_.exclusive_class; }
+    std::uint32_t noteInstanceId() const { return params_.note_instance_id; }
     sample::SampleId sampleId() const { return ref_.sample_id; }
     std::uint64_t phaseQ32() const { return phase_q32_; }
     std::int32_t envelopeLevelQ15() const { return envelope_level_q15_; }
@@ -101,6 +124,12 @@ private:
         Done,
     };
 
+    enum class FastReleaseKind : std::uint8_t {
+        None = 0,
+        VoiceSteal,
+        ExclusiveClass,
+    };
+
     static std::int32_t clampQ15(std::int32_t value);
     static std::int32_t multiplyQ15(std::int32_t a, std::int32_t b);
 
@@ -109,7 +138,7 @@ private:
     std::int32_t nextEnvelopeLevel();
     std::int32_t interpolatedSample() const;
     void advancePhase();
-    void beginRelease(std::uint32_t release_frames, bool steal_tail);
+    void beginRelease(std::uint32_t release_frames, FastReleaseKind fast_release_kind);
     void finish();
 
     sample::PublishedSampleDirectory* directory_ = nullptr;
@@ -118,7 +147,7 @@ private:
 
     bool active_ = false;
     bool key_released_ = false;
-    bool steal_tail_ = false;
+    FastReleaseKind fast_release_kind_ = FastReleaseKind::None;
     std::uint8_t channel_ = 0;
     std::uint8_t key_ = 0;
     std::uint64_t phase_q32_ = 0;
@@ -149,12 +178,19 @@ public:
     const VoiceStealConfig& voiceStealConfig() const { return steal_config_; }
     std::size_t activeVoiceCount() const;
     std::size_t activeStealTailCount() const;
+    std::size_t activeExclusiveTailCount() const;
+    std::size_t activeFastReleaseTailCount() const;
     const VoicePoolStats& stats() const { return stats_; }
 
 private:
     std::size_t findInactiveSlot() const;
     std::size_t chooseStealVictim() const;
+    std::size_t exclusiveVictimCount(const VoiceStartParams& params) const;
+    std::size_t releaseExclusiveVictims(
+        const VoiceStartParams& params,
+        std::size_t incoming_slot);
     void recordStartedVoice(std::size_t slot, std::size_t active_before);
+    void refreshTailStats();
 
     sample::PublishedSampleDirectory& directory_;
     std::array<Voice, kHardVoiceCap> voices_{};
