@@ -11,6 +11,9 @@ namespace gm_synth::sf2 {
 constexpr std::int32_t kSf2DefaultVelocityAttenuationCb = 960;
 constexpr std::int32_t kSf2DefaultControllerAttenuationCb = 960;
 constexpr std::int32_t kSf2DefaultPanAmount = 1000;
+// SF2 default Channel Pressure and CC1 routes each add up to 50 cents to the
+// vibrato-LFO-to-pitch destination.
+constexpr std::int32_t kSf2DefaultVibratoControllerAmountCents = 50;
 // SF2 default CC91/CC93 modulators add up to 200 tenths of a percent to the
 // reverb/chorus generator summing node.
 constexpr std::int32_t kSf2DefaultEffectsSendAmount = 200;
@@ -21,6 +24,12 @@ constexpr std::int32_t kSf2MaxAttenuationCb = 1440;
 // value=127 contributes zero; lower values contribute progressively more of
 // amount. Signed amounts are supported for file-defined modulator replacement.
 std::int32_t negativeConcaveToAmount(
+    std::uint8_t value,
+    std::int32_t amount);
+
+// Positive-unipolar linear SoundFont source. The SF2 controller model uses 128
+// discrete steps, so MIDI value 127 contributes 127/128 of amount.
+std::int32_t positiveLinearToAmount(
     std::uint8_t value,
     std::int32_t amount);
 
