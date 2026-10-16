@@ -10,6 +10,10 @@ namespace {
 constexpr std::size_t kNoZone = std::numeric_limits<std::size_t>::max();
 constexpr std::uint16_t kVelocityAttenuationSourceOper = 0x0502u;
 constexpr std::uint16_t kInitialAttenuationDestination = 48u;
+constexpr std::uint16_t kReverbSourceOper = 0x00DBu;
+constexpr std::uint16_t kReverbDestination = 16u;
+constexpr std::uint16_t kChorusSourceOper = 0x00DDu;
+constexpr std::uint16_t kChorusDestination = 15u;
 
 struct ZoneTableRange {
     std::uint16_t generator_begin = 0;
@@ -26,6 +30,12 @@ struct KeyVelocityRange {
 struct ModulatorScan {
     bool velocity_attenuation_found = false;
     std::int32_t velocity_attenuation_amount = 0;
+    bool reverb_send_found = false;
+    std::int32_t reverb_send_amount = 0;
+    bool chorus_send_found = false;
+    std::int32_t chorus_send_amount = 0;
+    std::uint32_t supported_velocity_records = 0;
+    std::uint32_t supported_effects_send_records = 0;
     std::uint32_t supported_records = 0;
     std::uint32_t unsupported_records = 0;
 };
@@ -193,6 +203,18 @@ bool isSupportedVelocityAttenuationRoute(
            modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
 }
 
+bool isSupportedReverbSendRoute(const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.source_oper == kReverbSourceOper &&
+           modulator.destination_oper == kReverbDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
+bool isSupportedChorusSendRoute(const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.source_oper == kChorusSourceOper &&
+           modulator.destination_oper == kChorusDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
 bool scanModulators(
     Sf2PdtaReader& pdta,
     const ZoneTableRange& range,
@@ -216,6 +238,19 @@ bool scanModulators(
         if (isSupportedVelocityAttenuationRoute(modulator)) {
             scan.velocity_attenuation_found = true;
             scan.velocity_attenuation_amount = modulator.amount;
+            scan.supported_velocity_records = saturatingAdd32(scan.supported_velocity_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedReverbSendRoute(modulator)) {
+            scan.reverb_send_found = true;
+            scan.reverb_send_amount = modulator.amount;
+            scan.supported_effects_send_records = saturatingAdd32(
+                scan.supported_effects_send_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedChorusSendRoute(modulator)) {
+            scan.chorus_send_found = true;
+            scan.chorus_send_amount = modulator.amount;
+            scan.supported_effects_send_records = saturatingAdd32(
+                scan.supported_effects_send_records, 1);
             scan.supported_records = saturatingAdd32(scan.supported_records, 1);
         } else {
             scan.unsupported_records = saturatingAdd32(scan.unsupported_records, 1);
@@ -232,7 +267,7 @@ ResolvedZoneModulation combine(
     const ModulatorScan& instrument_local) {
     ResolvedZoneModulation resolved{};
 
-    // Instrument modulators supersede an identical mandatory default route.
+    // Instrument modulators supersede identical mandatory default routes.
     if (instrument_global.velocity_attenuation_found) {
         resolved.velocity_to_attenuation_cb =
             instrument_global.velocity_attenuation_amount;
@@ -241,32 +276,88 @@ ResolvedZoneModulation combine(
         resolved.velocity_to_attenuation_cb =
             instrument_local.velocity_attenuation_amount;
     }
+    if (instrument_global.reverb_send_found) {
+        resolved.reverb_send_amount = instrument_global.reverb_send_amount;
+    }
+    if (instrument_local.reverb_send_found) {
+        resolved.reverb_send_amount = instrument_local.reverb_send_amount;
+    }
+    if (instrument_global.chorus_send_found) {
+        resolved.chorus_send_amount = instrument_global.chorus_send_amount;
+    }
+    if (instrument_local.chorus_send_found) {
+        resolved.chorus_send_amount = instrument_local.chorus_send_amount;
+    }
 
-    // Preset global/local obey their own supersession rule; the surviving
-    // preset route is then additive to the instrument/default result.
-    bool preset_found = false;
-    std::int32_t preset_amount = 0;
+    // Preset global/local obey their own supersession rule; each surviving
+    // preset route is additive to the instrument/default result.
+    bool preset_velocity_found = false;
+    std::int32_t preset_velocity_amount = 0;
     if (preset_global.velocity_attenuation_found) {
-        preset_found = true;
-        preset_amount = preset_global.velocity_attenuation_amount;
+        preset_velocity_found = true;
+        preset_velocity_amount = preset_global.velocity_attenuation_amount;
     }
     if (preset_local.velocity_attenuation_found) {
-        preset_found = true;
-        preset_amount = preset_local.velocity_attenuation_amount;
+        preset_velocity_found = true;
+        preset_velocity_amount = preset_local.velocity_attenuation_amount;
     }
-    if (preset_found) {
+    if (preset_velocity_found) {
         resolved.velocity_to_attenuation_cb = saturatingAddI32(
             resolved.velocity_to_attenuation_cb,
-            preset_amount);
+            preset_velocity_amount);
     }
 
-    const std::uint32_t supported = saturatingAdd32(
-        saturatingAdd32(preset_global.supported_records, preset_local.supported_records),
-        saturatingAdd32(instrument_global.supported_records, instrument_local.supported_records));
+    bool preset_reverb_found = false;
+    std::int32_t preset_reverb_amount = 0;
+    if (preset_global.reverb_send_found) {
+        preset_reverb_found = true;
+        preset_reverb_amount = preset_global.reverb_send_amount;
+    }
+    if (preset_local.reverb_send_found) {
+        preset_reverb_found = true;
+        preset_reverb_amount = preset_local.reverb_send_amount;
+    }
+    if (preset_reverb_found) {
+        resolved.reverb_send_amount = saturatingAddI32(
+            resolved.reverb_send_amount,
+            preset_reverb_amount);
+    }
+
+    bool preset_chorus_found = false;
+    std::int32_t preset_chorus_amount = 0;
+    if (preset_global.chorus_send_found) {
+        preset_chorus_found = true;
+        preset_chorus_amount = preset_global.chorus_send_amount;
+    }
+    if (preset_local.chorus_send_found) {
+        preset_chorus_found = true;
+        preset_chorus_amount = preset_local.chorus_send_amount;
+    }
+    if (preset_chorus_found) {
+        resolved.chorus_send_amount = saturatingAddI32(
+            resolved.chorus_send_amount,
+            preset_chorus_amount);
+    }
+
+    const std::uint32_t supported_velocity = saturatingAdd32(
+        saturatingAdd32(
+            preset_global.supported_velocity_records,
+            preset_local.supported_velocity_records),
+        saturatingAdd32(
+            instrument_global.supported_velocity_records,
+            instrument_local.supported_velocity_records));
+    const std::uint32_t supported_effects = saturatingAdd32(
+        saturatingAdd32(
+            preset_global.supported_effects_send_records,
+            preset_local.supported_effects_send_records),
+        saturatingAdd32(
+            instrument_global.supported_effects_send_records,
+            instrument_local.supported_effects_send_records));
     const std::uint32_t unsupported = saturatingAdd32(
         saturatingAdd32(preset_global.unsupported_records, preset_local.unsupported_records),
         saturatingAdd32(instrument_global.unsupported_records, instrument_local.unsupported_records));
-    resolved.supported_velocity_attenuation_records = clampU16(supported);
+    resolved.supported_velocity_attenuation_records = clampU16(supported_velocity);
+    resolved.supported_effects_send_records = clampU16(supported_effects);
     resolved.unsupported_modulator_records = clampU16(unsupported);
     return resolved;
 }
@@ -473,7 +564,9 @@ ZoneModulatorResolveStatus Sf2ZoneModulatorResolver::resolveProgram(
                 instrument_local_modulators);
             result->supported_records = saturatingAdd32(
                 result->supported_records,
-                resolved.supported_velocity_attenuation_records);
+                saturatingAdd32(
+                    resolved.supported_velocity_attenuation_records,
+                    resolved.supported_effects_send_records));
             result->unsupported_records = saturatingAdd32(
                 result->unsupported_records,
                 resolved.unsupported_modulator_records);
