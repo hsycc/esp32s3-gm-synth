@@ -226,7 +226,18 @@ void testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones() {
     assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
     assert(result.zone_count == 200);
     assert(result.supported_modulator_records > 0);
-    assert(result.unsupported_modulator_records > 0);
+
+    std::uint32_t expected_supported = 0;
+    std::uint32_t expected_unsupported = 0;
+    for (std::size_t index = 0; index < result.zone_count; ++index) {
+        expected_supported += modulation[index].supported_velocity_attenuation_records;
+        expected_supported += modulation[index].supported_velocity_filter_records;
+        expected_supported += modulation[index].supported_effects_send_records;
+        expected_unsupported += modulation[index].unsupported_modulator_records;
+    }
+    assert(result.supported_modulator_records == expected_supported);
+    assert(result.unsupported_modulator_records == expected_unsupported);
+
     assert(result.required_dependency_capacity > dependencies.size());
     assert(snapshot.token == 55);
 }
