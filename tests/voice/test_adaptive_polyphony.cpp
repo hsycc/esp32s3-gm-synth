@@ -177,6 +177,25 @@ void testConfigurationIsBoundedByHardCap() {
     assert(controller.stats().current_limit == VoicePool::kHardVoiceCap);
 }
 
+void testStealingDoesNotFightARecentlyLoweredAdmissionTarget() {
+    PublishedFixture fixture;
+    VoicePool voices(fixture.directory);
+    voices.setAdmissionLimit(4);
+    voices.setVoiceStealConfig(stealConfig(4, 2));
+
+    for (std::uint8_t key = 60; key < 64; ++key) {
+        assert(voices.start(paramsFor(key)));
+    }
+    voices.setAdmissionLimit(2);
+
+    assert(!voices.start(paramsFor(70)));
+    assert(voices.activeVoiceCount() == 4);
+    assert(voices.activeStealTailCount() == 0);
+    assert(voices.stats().steal_failures_over_target == 1);
+    assert(voices.stats().steal_successes == 0);
+    voices.allSoundOff();
+}
+
 void testStealPrefersReleasingVoiceAndKeepsRefUntilFadeCompletes() {
     PublishedFixture fixture;
     VoicePool voices(fixture.directory);
@@ -270,6 +289,7 @@ int main() {
     testSustainedHighPressureUsesHysteresis();
     testStableLowPressureRecoversGradually();
     testConfigurationIsBoundedByHardCap();
+    testStealingDoesNotFightARecentlyLoweredAdmissionTarget();
     testStealPrefersReleasingVoiceAndKeepsRefUntilFadeCompletes();
     testStealTailBudgetBoundsTransientOversubscription();
     testRejectedIncomingSampleNeverSacrificesVictim();
