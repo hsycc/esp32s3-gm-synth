@@ -1,6 +1,7 @@
 #include "gm/PlaybackProgramSnapshot.h"
 #include "gm/ZoneResolver.h"
 #include "sample/PublishedSampleDirectory.h"
+#include "sf2/Sf2ModulationMath.h"
 #include "voice/VoiceRenderer.h"
 
 #include <array>
@@ -20,6 +21,7 @@ using gm_synth::realtime::RealtimeEvent;
 using gm_synth::sample::PublishedSampleDirectory;
 using gm_synth::sample::ResidentRecord;
 using gm_synth::sample::SampleDescriptor;
+using gm_synth::sf2::channelEffectsSendSf2Units;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::Voice;
 using gm_synth::voice::VoicePool;
@@ -68,6 +70,11 @@ PlaybackZone liveZone() {
     zone.note_on_gain.expression_to_attenuation_cb = 960;
     zone.note_on_gain.pan_sf2_units = 0;
     zone.note_on_gain.fixed_velocity = -1;
+    zone.effects_send.enabled = true;
+    zone.effects_send.reverb_sf2_units = 100;
+    zone.effects_send.chorus_sf2_units = 50;
+    zone.effects_send.reverb_cc_amount = 200;
+    zone.effects_send.chorus_cc_amount = 300;
     return zone;
 }
 
@@ -122,6 +129,8 @@ struct VoiceSnapshot {
     std::uint64_t phase_increment_q32 = 0;
     std::int32_t gain_left_q15 = 0;
     std::int32_t gain_right_q15 = 0;
+    std::int16_t reverb_send_units = 0;
+    std::int16_t chorus_send_units = 0;
 };
 
 bool captureVoice(void* opaque, Voice& voice) {
@@ -133,6 +142,8 @@ bool captureVoice(void* opaque, Voice& voice) {
     snapshot->phase_increment_q32 = voice.phaseIncrementQ32();
     snapshot->gain_left_q15 = voice.gainLeftQ15();
     snapshot->gain_right_q15 = voice.gainRightQ15();
+    snapshot->reverb_send_units = voice.reverbSendUnits();
+    snapshot->chorus_send_units = voice.chorusSendUnits();
     return false;
 }
 
@@ -205,6 +216,29 @@ void testLiveGainPanAndPitchUpdateAlreadySoundingVoice() {
     assert(f.applier.stats().active_voice_updates >= 7);
 }
 
+void testCc91AndCc93UpdatePreparedEffectsSendState() {
+    RuntimeFixture f;
+    assert(f.applier.apply(noteOn(60), f.voices));
+    VoiceSnapshot snapshot = activeVoice(f.voices);
+    assert(snapshot.reverb_send_units == 100);
+    assert(snapshot.chorus_send_units == 50);
+
+    assert(f.applier.apply(cc(91, 64), f.voices));
+    snapshot = activeVoice(f.voices);
+    assert(snapshot.reverb_send_units ==
+           channelEffectsSendSf2Units(100, 64, 200));
+    assert(snapshot.chorus_send_units == 50);
+
+    assert(f.applier.apply(cc(93, 127), f.voices));
+    snapshot = activeVoice(f.voices);
+    assert(snapshot.reverb_send_units ==
+           channelEffectsSendSf2Units(100, 64, 200));
+    assert(snapshot.chorus_send_units ==
+           channelEffectsSendSf2Units(50, 127, 300));
+    assert(f.applier.channelState(2).reverb_send == 64);
+    assert(f.applier.channelState(2).chorus_send == 127);
+}
+
 void testSustainDefersNoteOffUntilPedalRelease() {
     RuntimeFixture f;
     assert(f.applier.apply(cc(7, 127), f.voices));
@@ -270,6 +304,10 @@ void testResetControllersReleasesSustainAndRecentersActivePitch() {
     assert(after.phase_increment_q32 == kPhaseOneQ32);
     assert(after.gain_left_q15 < kQ15Unity);
     assert(after.gain_right_q15 == 0);
+    // CC121 preserves channel effect-send mix state and therefore the sounding
+    // Voice send state too; full GM reset is the operation that zeros CC91/93.
+    assert(after.reverb_send_units == before.reverb_send_units);
+    assert(after.chorus_send_units == before.chorus_send_units);
     assert(f.applier.stats().sustain_releases == 1);
 
     std::array<std::int32_t, 12> release{};
@@ -281,6 +319,7 @@ void testResetControllersReleasesSustainAndRecentersActivePitch() {
 
 int main() {
     testLiveGainPanAndPitchUpdateAlreadySoundingVoice();
+    testCc91AndCc93UpdatePreparedEffectsSendState();
     testSustainDefersNoteOffUntilPedalRelease();
     testAllNotesOffRespectsSustainAndAllSoundOffIsImmediate();
     testResetControllersReleasesSustainAndRecentersActivePitch();
