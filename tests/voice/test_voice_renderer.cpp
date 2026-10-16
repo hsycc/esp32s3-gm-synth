@@ -13,6 +13,7 @@ using gm_synth::sample::SampleDescriptor;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::VoicePool;
 using gm_synth::voice::VoiceStartParams;
+using gm_synth::voice::VoiceStealConfig;
 using gm_synth::voice::kPhaseOneQ32;
 using gm_synth::voice::kQ15Unity;
 
@@ -54,6 +55,25 @@ VoiceStartParams basicParams(std::uint32_t sample_id = 0) {
     params.envelope.sustain_q15 = kQ15Unity;
     params.envelope.release_frames = 8;
     return params;
+}
+
+VoiceStartParams loopingParams(std::uint16_t exclusive_class = 0, std::uint32_t note_instance_id = 0) {
+    auto params = basicParams();
+    params.loop_mode = LoopMode::Continuous;
+    params.exclusive_class = exclusive_class;
+    params.note_instance_id = note_instance_id;
+    return params;
+}
+
+VoiceStealConfig fastReleaseConfig(
+    std::uint32_t fade_frames,
+    std::size_t max_tail_voices,
+    bool stealing_enabled = false) {
+    VoiceStealConfig config{};
+    config.enabled = stealing_enabled;
+    config.fade_frames = fade_frames;
+    config.max_tail_voices = max_tail_voices;
+    return config;
 }
 
 void testOneShotAndVoiceRefLifetime() {
@@ -211,6 +231,177 @@ void testReleaseEnvelopeCompletesOnContinuousLoop() {
     assert(fixture.directory.stats().live_voice_refs == 0);
 }
 
+void testDuplicateSameNoteStacksAndNoteOffReleasesAllMatches() {
+    constexpr std::array<std::int16_t, 16> pcm{
+        1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000,
+        1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    auto params = loopingParams();
+    params.envelope.release_frames = 4;
+    assert(pool.start(params));
+    assert(pool.start(params));
+    assert(pool.activeVoiceCount() == 2);
+    assert(pool.stats().exclusive_choke_attempts == 0);
+
+    assert(pool.noteOff(params.channel, params.key) == 2);
+    std::array<std::int32_t, 8> release{};
+    pool.renderAdd(release.data(), 4);
+    assert(pool.activeVoiceCount() == 0);
+    assert(pool.stats().note_off_matches == 2);
+    assert(fixture.directory.stats().live_voice_refs == 0);
+}
+
+void testExclusiveClassPreservesLayersFromSameNoteInstance() {
+    constexpr std::array<std::int16_t, 16> pcm{
+        1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000,
+        1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    pool.setVoiceStealConfig(fastReleaseConfig(4, 2));
+
+    auto first_layer = loopingParams(7, 100);
+    auto second_layer = first_layer;
+    second_layer.key = 65;
+    assert(pool.start(first_layer));
+    assert(pool.start(second_layer));
+    assert(pool.activeVoiceCount() == 2);
+    assert(pool.activeExclusiveTailCount() == 0);
+    assert(pool.stats().exclusive_choke_attempts == 0);
+
+    auto next_note = loopingParams(7, 101);
+    next_note.key = 66;
+    assert(pool.start(next_note));
+    assert(pool.activeVoiceCount() == 3);
+    assert(pool.activeExclusiveTailCount() == 2);
+    assert(pool.activeFastReleaseTailCount() == 2);
+    assert(pool.stats().exclusive_choke_attempts == 1);
+    assert(pool.stats().exclusive_choke_successes == 1);
+    assert(pool.stats().exclusive_voices_released == 2);
+    assert(pool.stats().last_exclusive_class == 7);
+
+    std::array<std::int32_t, 8> mix{};
+    pool.renderAdd(mix.data(), 4);
+    assert(pool.activeVoiceCount() == 1);
+    assert(pool.activeExclusiveTailCount() == 0);
+    assert(pool.activeFastReleaseTailCount() == 0);
+    assert(fixture.directory.stats().live_voice_refs == 1);
+    pool.allSoundOff();
+}
+
+void testExclusiveClassIsScopedToMidiChannel() {
+    constexpr std::array<std::int16_t, 8> pcm{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    auto channel_two = loopingParams(9, 1);
+    auto channel_three = loopingParams(9, 2);
+    channel_three.channel = 3;
+
+    assert(pool.start(channel_two));
+    assert(pool.start(channel_three));
+    assert(pool.activeVoiceCount() == 2);
+    assert(pool.activeExclusiveTailCount() == 0);
+    assert(pool.stats().exclusive_choke_attempts == 0);
+    pool.allSoundOff();
+}
+
+void testExclusiveReplacementAtAdmissionLimitDoesNotRequireStealing() {
+    constexpr std::array<std::int16_t, 8> pcm{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    pool.setAdmissionLimit(1);
+    pool.setVoiceStealConfig(fastReleaseConfig(4, 1, false));
+
+    assert(pool.start(loopingParams(12, 1)));
+    assert(pool.start(loopingParams(12, 2)));
+    assert(pool.activeVoiceCount() == 2);
+    assert(pool.activeExclusiveTailCount() == 1);
+    assert(pool.stats().steal_attempts == 0);
+    assert(pool.stats().exclusive_choke_successes == 1);
+
+    std::array<std::int32_t, 8> mix{};
+    pool.renderAdd(mix.data(), 4);
+    assert(pool.activeVoiceCount() == 1);
+    assert(pool.activeExclusiveTailCount() == 0);
+    pool.allSoundOff();
+}
+
+void testExclusiveRejectedIncomingNeverSacrificesExistingVoice() {
+    constexpr std::array<std::int16_t, 8> pcm{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    auto old_voice = loopingParams(15, 1);
+    assert(pool.start(old_voice));
+    assert(fixture.directory.stats().live_voice_refs == 1);
+
+    auto missing = loopingParams(15, 2);
+    missing.sample_id = 1;
+    assert(!pool.start(missing));
+    assert(pool.activeVoiceCount() == 1);
+    assert(pool.activeExclusiveTailCount() == 0);
+    assert(pool.stats().start_failures_rejected == 1);
+    assert(pool.stats().exclusive_choke_successes == 0);
+    assert(fixture.directory.stats().live_voice_refs == 1);
+    pool.allSoundOff();
+}
+
+void testExclusiveTailBudgetRejectsWithoutPartialChoke() {
+    constexpr std::array<std::int16_t, 8> pcm{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    pool.setVoiceStealConfig(fastReleaseConfig(8, 1));
+    assert(pool.start(loopingParams(20, 1)));
+    assert(pool.start(loopingParams(20, 1)));
+    assert(pool.activeVoiceCount() == 2);
+    assert(pool.activeFastReleaseTailCount() == 0);
+
+    assert(!pool.start(loopingParams(20, 2)));
+    assert(pool.activeVoiceCount() == 2);
+    assert(pool.activeFastReleaseTailCount() == 0);
+    assert(pool.stats().exclusive_choke_attempts == 1);
+    assert(pool.stats().exclusive_choke_failures_tail_budget == 1);
+    assert(pool.stats().exclusive_choke_successes == 0);
+    assert(fixture.directory.stats().live_voice_refs == 2);
+    pool.allSoundOff();
+}
+
+void testExclusiveReplacementDoesNotFightLoweredAdmissionTarget() {
+    constexpr std::array<std::int16_t, 8> pcm{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
+    PublishedFixture fixture;
+    assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
+
+    VoicePool pool(fixture.directory);
+    pool.setVoiceStealConfig(fastReleaseConfig(4, 2));
+    auto exclusive = loopingParams(22, 1);
+    assert(pool.start(exclusive));
+
+    auto unrelated = loopingParams();
+    unrelated.key = 70;
+    assert(pool.start(unrelated));
+    assert(pool.activeVoiceCount() == 2);
+
+    pool.setAdmissionLimit(1);
+    auto replacement = loopingParams(22, 2);
+    assert(!pool.start(replacement));
+    assert(pool.activeVoiceCount() == 2);
+    assert(pool.activeFastReleaseTailCount() == 0);
+    assert(pool.stats().exclusive_choke_failures_over_target == 1);
+    assert(pool.stats().exclusive_choke_successes == 0);
+    pool.allSoundOff();
+}
+
 void testHardVoiceCapAndRejectedStartAreBounded() {
     constexpr std::array<std::int16_t, 8> pcm{100, 100, 100, 100, 100, 100, 100, 100};
     PublishedFixture fixture;
@@ -264,6 +455,13 @@ int main() {
     testContinuousLoopWrapsDeterministically();
     testUntilReleaseLeavesLoopAndPlaysTail();
     testReleaseEnvelopeCompletesOnContinuousLoop();
+    testDuplicateSameNoteStacksAndNoteOffReleasesAllMatches();
+    testExclusiveClassPreservesLayersFromSameNoteInstance();
+    testExclusiveClassIsScopedToMidiChannel();
+    testExclusiveReplacementAtAdmissionLimitDoesNotRequireStealing();
+    testExclusiveRejectedIncomingNeverSacrificesExistingVoice();
+    testExclusiveTailBudgetRejectsWithoutPartialChoke();
+    testExclusiveReplacementDoesNotFightLoweredAdmissionTarget();
     testHardVoiceCapAndRejectedStartAreBounded();
     testInvalidLoopAndZeroPhaseRejectWithoutLeakingRef();
     std::cout << "voice renderer tests passed\n";

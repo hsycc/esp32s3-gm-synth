@@ -71,6 +71,18 @@ bool Voice::releasing() const {
     return active_ && envelope_stage_ == EnvelopeStage::Release;
 }
 
+bool Voice::stealTail() const {
+    return active_ && fast_release_kind_ == FastReleaseKind::VoiceSteal;
+}
+
+bool Voice::exclusiveTail() const {
+    return active_ && fast_release_kind_ == FastReleaseKind::ExclusiveClass;
+}
+
+bool Voice::fastReleaseTail() const {
+    return active_ && fast_release_kind_ != FastReleaseKind::None;
+}
+
 bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartParams& params) {
     if (active_) {
         return false;
@@ -105,7 +117,7 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     key_ = params.key;
     phase_q32_ = 0;
     key_released_ = false;
-    steal_tail_ = false;
+    fast_release_kind_ = FastReleaseKind::None;
     envelope_stage_frame_ = 0;
     active_release_frames_ = 0;
     release_start_level_q15_ = 0;
@@ -125,13 +137,15 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     return true;
 }
 
-void Voice::beginRelease(std::uint32_t release_frames, bool steal_tail) {
+void Voice::beginRelease(
+    std::uint32_t release_frames,
+    FastReleaseKind fast_release_kind) {
     if (!active_) {
         return;
     }
 
     key_released_ = true;
-    steal_tail_ = steal_tail;
+    fast_release_kind_ = fast_release_kind;
     if (release_frames == 0 || envelope_level_q15_ <= 0) {
         finish();
         return;
@@ -147,14 +161,26 @@ void Voice::noteOff() {
     if (!active_ || key_released_) {
         return;
     }
-    beginRelease(params_.envelope.release_frames, false);
+    beginRelease(params_.envelope.release_frames, FastReleaseKind::None);
 }
 
 bool Voice::beginFastRelease(std::uint32_t fade_frames) {
     if (!active_) {
         return false;
     }
-    beginRelease(std::max<std::uint32_t>(fade_frames, 1u), true);
+    beginRelease(
+        std::max<std::uint32_t>(fade_frames, 1u),
+        FastReleaseKind::VoiceSteal);
+    return true;
+}
+
+bool Voice::beginExclusiveRelease(std::uint32_t fade_frames) {
+    if (!active_) {
+        return false;
+    }
+    beginRelease(
+        std::max<std::uint32_t>(fade_frames, 1u),
+        FastReleaseKind::ExclusiveClass);
     return true;
 }
 
@@ -289,7 +315,7 @@ void Voice::finish() {
     }
     active_ = false;
     key_released_ = false;
-    steal_tail_ = false;
+    fast_release_kind_ = FastReleaseKind::None;
     phase_q32_ = 0;
     envelope_stage_ = EnvelopeStage::Done;
     envelope_stage_frame_ = 0;
@@ -356,7 +382,7 @@ std::size_t VoicePool::chooseStealVictim() const {
     std::size_t best = kHardVoiceCap;
     for (std::size_t index = 0; index < voices_.size(); ++index) {
         const Voice& candidate = voices_[index];
-        if (!candidate.active() || candidate.stealTail()) {
+        if (!candidate.active() || candidate.fastReleaseTail()) {
             continue;
         }
         if (best == kHardVoiceCap) {
@@ -390,6 +416,61 @@ std::size_t VoicePool::chooseStealVictim() const {
     return best;
 }
 
+std::size_t VoicePool::exclusiveVictimCount(const VoiceStartParams& params) const {
+    if (params.exclusive_class == 0) {
+        return 0;
+    }
+
+    std::size_t count = 0;
+    for (const Voice& voice : voices_) {
+        if (!voice.active() || voice.fastReleaseTail() ||
+            voice.channel() != params.channel ||
+            voice.exclusiveClass() != params.exclusive_class) {
+            continue;
+        }
+
+        const bool same_note_instance = params.note_instance_id != 0 &&
+            voice.noteInstanceId() == params.note_instance_id;
+        if (!same_note_instance) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t VoicePool::releaseExclusiveVictims(
+    const VoiceStartParams& params,
+    std::size_t incoming_slot) {
+    if (params.exclusive_class == 0) {
+        return 0;
+    }
+
+    std::size_t released = 0;
+    for (std::size_t index = 0; index < voices_.size(); ++index) {
+        if (index == incoming_slot) {
+            continue;
+        }
+
+        Voice& voice = voices_[index];
+        if (!voice.active() || voice.fastReleaseTail() ||
+            voice.channel() != params.channel ||
+            voice.exclusiveClass() != params.exclusive_class) {
+            continue;
+        }
+
+        const bool same_note_instance = params.note_instance_id != 0 &&
+            voice.noteInstanceId() == params.note_instance_id;
+        if (same_note_instance) {
+            continue;
+        }
+
+        if (voice.beginExclusiveRelease(steal_config_.fade_frames)) {
+            ++released;
+        }
+    }
+    return released;
+}
+
 void VoicePool::recordStartedVoice(std::size_t slot, std::size_t active_before) {
     start_serials_[slot] = next_start_serial_;
     if (next_start_serial_ != std::numeric_limits<std::uint64_t>::max()) {
@@ -400,12 +481,18 @@ void VoicePool::recordStartedVoice(std::size_t slot, std::size_t active_before) 
     stats_.peak_active_voices = std::max(stats_.peak_active_voices, stats_.active_voices);
 }
 
+void VoicePool::refreshTailStats() {
+    stats_.active_steal_tails = activeStealTailCount();
+    stats_.active_exclusive_tails = activeExclusiveTailCount();
+    stats_.active_fast_release_tails = activeFastReleaseTailCount();
+}
+
 bool VoicePool::start(const VoiceStartParams& params) {
     util::saturatingIncrement(stats_.start_attempts);
     const std::size_t active = activeVoiceCount();
 
-    // Preserve the M4 hard-cap meaning: a 33rd active voice is a physical
-    // pool-capacity failure even if the M6 policy would otherwise steal.
+    // Preserve the hard-cap meaning: a 33rd active Voice is never created,
+    // including for semantic exclusive-class replacement.
     if (active >= kHardVoiceCap) {
         util::saturatingIncrement(stats_.start_failures_full);
         return false;
@@ -417,13 +504,59 @@ bool VoicePool::start(const VoiceStartParams& params) {
         return false;
     }
 
-    if (active < admission_limit_) {
+    const std::size_t exclusive_victims = exclusiveVictimCount(params);
+    if (exclusive_victims != 0) {
+        util::saturatingIncrement(stats_.exclusive_choke_attempts);
+
+        const std::size_t fast_tails = activeFastReleaseTailCount();
+        const std::size_t available_tail_slots =
+            steal_config_.max_tail_voices > fast_tails
+            ? steal_config_.max_tail_voices - fast_tails
+            : 0;
+        if (exclusive_victims > available_tail_slots) {
+            util::saturatingIncrement(stats_.exclusive_choke_failures_tail_budget);
+            util::saturatingIncrement(stats_.start_failures_admission);
+            return false;
+        }
+
+        // If adaptive admission was recently lowered below the still-sounding
+        // non-tail population, do not let semantic replacement add more work
+        // until normal releases bring the pool back to the new target.
+        const std::size_t non_tail_active = active - fast_tails;
+        if (active >= admission_limit_ && non_tail_active > admission_limit_) {
+            util::saturatingIncrement(stats_.exclusive_choke_failures_over_target);
+            util::saturatingIncrement(stats_.start_failures_admission);
+            return false;
+        }
+    }
+
+    // Below the admission target, or exactly at the target with at least one
+    // semantic exclusive victim, the incoming Voice may start. The latter is a
+    // replacement: the old Voice(s) become bounded fast-release tails.
+    if (active < admission_limit_ || exclusive_victims != 0) {
+        // Acquire and validate the incoming SampleRef before changing any old
+        // Voice. A missing/corrupt incoming sample must never sacrifice sound.
         if (!voices_[target].start(directory_, params)) {
             util::saturatingIncrement(stats_.start_failures_rejected);
             return false;
         }
+
+        if (exclusive_victims != 0) {
+            const std::size_t released = releaseExclusiveVictims(params, target);
+            if (released != exclusive_victims) {
+                // Voice mutation is single-threaded in the audio domain, so a
+                // mismatch is not expected. Keep the new Voice rather than
+                // attempting a partial rollback of already-fading victims.
+                util::saturatingAdd(stats_.exclusive_voices_released, released);
+            } else {
+                util::saturatingAdd(stats_.exclusive_voices_released, released);
+            }
+            util::saturatingIncrement(stats_.exclusive_choke_successes);
+            stats_.last_exclusive_class = params.exclusive_class;
+        }
+
         recordStartedVoice(target, active);
-        stats_.active_steal_tails = activeStealTailCount();
+        refreshTailStats();
         return true;
     }
 
@@ -433,8 +566,8 @@ bool VoicePool::start(const VoiceStartParams& params) {
     }
 
     util::saturatingIncrement(stats_.steal_attempts);
-    const std::size_t steal_tails = activeStealTailCount();
-    const std::size_t non_tail_active = active - steal_tails;
+    const std::size_t fast_tails = activeFastReleaseTailCount();
+    const std::size_t non_tail_active = active - fast_tails;
 
     // A newly lowered adaptive limit may sit below the still-sounding Voice
     // count. Do not use stealing to admit even more work until natural/normal
@@ -446,7 +579,7 @@ bool VoicePool::start(const VoiceStartParams& params) {
     }
 
     if (steal_config_.max_tail_voices == 0 ||
-        steal_tails >= steal_config_.max_tail_voices) {
+        fast_tails >= steal_config_.max_tail_voices) {
         util::saturatingIncrement(stats_.steal_failures_tail_budget);
         util::saturatingIncrement(stats_.start_failures_admission);
         return false;
@@ -485,7 +618,7 @@ bool VoicePool::start(const VoiceStartParams& params) {
     }
     stats_.last_stolen_channel = victim_channel;
     stats_.last_stolen_key = victim_key;
-    stats_.active_steal_tails = activeStealTailCount();
+    refreshTailStats();
     return true;
 }
 
@@ -499,7 +632,7 @@ std::size_t VoicePool::noteOff(std::uint8_t channel, std::uint8_t key) {
     }
     util::saturatingAdd(stats_.note_off_matches, matches);
     stats_.active_voices = activeVoiceCount();
-    stats_.active_steal_tails = activeStealTailCount();
+    refreshTailStats();
     return matches;
 }
 
@@ -519,7 +652,7 @@ void VoicePool::renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_co
         }
     }
     stats_.active_voices = activeVoiceCount();
-    stats_.active_steal_tails = activeStealTailCount();
+    refreshTailStats();
 }
 
 void VoicePool::allSoundOff() {
@@ -530,7 +663,7 @@ void VoicePool::allSoundOff() {
         }
     }
     stats_.active_voices = 0;
-    stats_.active_steal_tails = 0;
+    refreshTailStats();
 }
 
 void VoicePool::setAdmissionLimit(std::size_t limit) {
@@ -560,6 +693,26 @@ std::size_t VoicePool::activeStealTailCount() const {
     std::size_t count = 0;
     for (const Voice& voice : voices_) {
         if (voice.stealTail()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t VoicePool::activeExclusiveTailCount() const {
+    std::size_t count = 0;
+    for (const Voice& voice : voices_) {
+        if (voice.exclusiveTail()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t VoicePool::activeFastReleaseTailCount() const {
+    std::size_t count = 0;
+    for (const Voice& voice : voices_) {
+        if (voice.fastReleaseTail()) {
             ++count;
         }
     }

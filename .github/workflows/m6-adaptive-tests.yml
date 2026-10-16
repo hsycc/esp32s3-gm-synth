@@ -8,6 +8,7 @@ on:
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/sample/PublishedSampleDirectory.*"
       - "tests/voice/test_adaptive_polyphony.cpp"
+      - "tests/voice/test_voice_renderer.cpp"
       - ".github/workflows/m6-adaptive-tests.yml"
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/sample/PublishedSampleDirectory.*"
       - "tests/voice/test_adaptive_polyphony.cpp"
+      - "tests/voice/test_voice_renderer.cpp"
       - ".github/workflows/m6-adaptive-tests.yml"
 
 jobs:
@@ -35,3 +37,14 @@ jobs:
             -o build/host-tests/test_adaptive_polyphony
       - name: Run adaptive polyphony tests
         run: ./build/host-tests/test_adaptive_polyphony
+      - name: Build M6 duplicate/exclusive voice policy tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            tests/voice/test_voice_renderer.cpp \
+            -o build/host-tests/test_voice_renderer
+      - name: Run duplicate/exclusive voice policy tests
+        run: ./build/host-tests/test_voice_renderer
