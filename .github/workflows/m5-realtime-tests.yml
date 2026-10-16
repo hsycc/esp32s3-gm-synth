@@ -1,0 +1,39 @@
+name: m5-realtime-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/realtime/**"
+      - "firmware/voice/**"
+      - "firmware/sample/PublishedSampleDirectory.*"
+      - "tests/realtime/**"
+      - ".github/workflows/m5-realtime-tests.yml"
+  pull_request:
+    paths:
+      - "firmware/realtime/**"
+      - "firmware/voice/**"
+      - "firmware/sample/PublishedSampleDirectory.*"
+      - "tests/realtime/**"
+      - ".github/workflows/m5-realtime-tests.yml"
+
+jobs:
+  realtime-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build M5 realtime tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/realtime/RealtimeEventQueue.cpp \
+            firmware/realtime/BlockEventScheduler.cpp \
+            firmware/realtime/ScheduledAudioBlockRenderer.cpp \
+            tests/realtime/test_scheduled_audio.cpp \
+            -o build/host-tests/test_scheduled_audio
+      - name: Run sample-accurate realtime tests
+        run: ./build/host-tests/test_scheduled_audio
