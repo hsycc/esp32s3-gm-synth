@@ -5,6 +5,8 @@
 #include <cstdio>
 
 using gm_synth::sf2::attenuationCbToGainQ15;
+using gm_synth::sf2::channelEffectsSendSf2Units;
+using gm_synth::sf2::controllerToEffectsSendSf2Units;
 using gm_synth::sf2::noteOnGainQ15;
 using gm_synth::sf2::velocityToAttenuationCb;
 using gm_synth::voice::kQ15Unity;
@@ -63,12 +65,26 @@ void test_note_on_gain_sums_before_clamp_and_then_pans() {
     CHECK(right == kQ15Unity);
 }
 
+void test_effects_send_controller_is_positive_unipolar_and_clamped() {
+    CHECK(controllerToEffectsSendSf2Units(0, 200) == 0);
+    CHECK(controllerToEffectsSendSf2Units(64, 200) == 100);
+    CHECK(controllerToEffectsSendSf2Units(127, 200) == 198);
+    CHECK(controllerToEffectsSendSf2Units(127, 300) == 298);
+    CHECK(controllerToEffectsSendSf2Units(64, -200) == -100);
+
+    CHECK(channelEffectsSendSf2Units(100, 64, 200) == 200);
+    CHECK(channelEffectsSendSf2Units(50, 127, 300) == 348);
+    CHECK(channelEffectsSendSf2Units(950, 127, 200) == 1000);
+    CHECK(channelEffectsSendSf2Units(20, 127, -200) == 0);
+}
+
 }  // namespace
 
 int main() {
     test_default_velocity_curve_matches_sf2_reference_points();
     test_centibel_gain_is_fixed_point_and_clamped();
     test_note_on_gain_sums_before_clamp_and_then_pans();
+    test_effects_send_controller_is_positive_unipolar_and_clamped();
 
     if (failures != 0) {
         std::fprintf(stderr, "%d SF2 modulation-math checks failed\n", failures);
