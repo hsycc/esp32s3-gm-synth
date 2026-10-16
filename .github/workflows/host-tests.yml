@@ -122,6 +122,15 @@ jobs:
             tests/sf2/test_sf2_playback_materializer.cpp \
             -o build/host-tests/test_sf2_playback_materializer
 
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+            firmware/sf2/Sf2PdtaReader.cpp \
+            firmware/sf2/Sf2ResolvedZone.cpp \
+            firmware/voice/PitchMath.cpp \
+            firmware/sf2/Sf2PlaybackMaterializer.cpp \
+            firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
+            tests/sf2/test_sf2_playback_program_preparer.cpp \
+            -o build/host-tests/test_sf2_playback_program_preparer
+
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
             firmware/storage/VfsRandomAccessReader.cpp \
             firmware/sf2/Sf2SampleSource.cpp \
@@ -177,6 +186,8 @@ jobs:
         run: ./build/host-tests/test_sf2_resolved_zone
       - name: Run SF2 playback materializer tests
         run: ./build/host-tests/test_sf2_playback_materializer
+      - name: Run SF2 playback program preparer tests
+        run: ./build/host-tests/test_sf2_playback_program_preparer
       - name: Run VFS random-access reader integration tests
         run: ./build/host-tests/test_vfs_random_access_reader
       - name: Run storage read benchmark tests
