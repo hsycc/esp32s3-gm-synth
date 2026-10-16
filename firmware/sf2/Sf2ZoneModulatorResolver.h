@@ -8,19 +8,20 @@
 
 namespace gm_synth::sf2 {
 
-// Compact modulation state needed by the current runtime. The Note-On velocity
-// route is currently resolved from file modulators. Mandatory realtime channel
-// routes are carried explicitly at their SF2 defaults so the runtime contract
-// is ready for per-zone replacement as additional modulator identities are
-// promoted from unsupported to supported.
+// Compact modulation state needed by the current runtime. Mandatory realtime
+// routes are carried explicitly at their SF2 defaults and file-defined routes
+// with the same identity may replace/augment them according to SF2 hierarchy.
 struct ResolvedZoneModulation {
     std::int32_t velocity_to_attenuation_cb = kSf2DefaultVelocityAttenuationCb;
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t pan_amount = kSf2DefaultPanAmount;
     std::int32_t expression_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
+    std::int32_t reverb_send_amount = kSf2DefaultEffectsSendAmount;
+    std::int32_t chorus_send_amount = kSf2DefaultEffectsSendAmount;
     std::int32_t pitch_wheel_to_pitch_cents = 12700;
 
     std::uint16_t supported_velocity_attenuation_records = 0;
+    std::uint16_t supported_effects_send_records = 0;
     std::uint16_t unsupported_modulator_records = 0;
 
     bool hasUnsupportedModulators() const {
