@@ -45,8 +45,14 @@ TimedRenderMeasurement TimedAudioBlockRenderer::renderMeasured(
 }
 
 std::size_t TimedAudioBlockRenderer::observeMeasurement(
-    const TimedRenderMeasurement& measurement,
+    TimedRenderMeasurement& measurement,
     bool external_deadline_missed) {
+    if (measurement.observed_) {
+        saturatingIncrement(stats_.duplicate_observations);
+        return monitor_.currentAdmissionLimit();
+    }
+    measurement.observed_ = true;
+
     if (measurement.timing_valid) {
         return monitor_.observeBlock(
             measurement.render_time_us,
@@ -61,7 +67,7 @@ std::size_t TimedAudioBlockRenderer::render(
     std::uint64_t block_start_frame,
     std::int16_t* interleaved_stereo,
     bool external_deadline_missed) {
-    const TimedRenderMeasurement measurement =
+    TimedRenderMeasurement measurement =
         renderMeasured(block_start_frame, interleaved_stereo);
     return observeMeasurement(measurement, external_deadline_missed);
 }
