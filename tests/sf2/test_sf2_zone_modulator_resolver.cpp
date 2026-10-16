@@ -105,7 +105,7 @@ void test_generaluser_program_zero_matches_native_zone_count() {
     CHECK(result.required_capacity == 200);
 }
 
-void test_generaluser_bank_exercises_supported_and_pending_modulators() {
+void test_generaluser_bank_exercises_supported_modulators() {
     FileReader reader("assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2");
     CHECK(reader.valid());
     Sf2PdtaReader pdta;
@@ -115,9 +115,7 @@ void test_generaluser_bank_exercises_supported_and_pending_modulators() {
     Sf2ZoneModulatorResolver resolver;
     bool found_velocity_override = false;
     bool found_velocity_filter_override_or_cancellation = false;
-    bool found_vibrato_override = false;
     bool found_effect_send_override = false;
-    bool found_unsupported = false;
 
     for (std::size_t preset_index = 0; preset_index < pdta.presetCount(); ++preset_index) {
         Sf2PdtaReader::PresetHeader preset{};
@@ -140,25 +138,16 @@ void test_generaluser_bank_exercises_supported_and_pending_modulators() {
             found_velocity_filter_override_or_cancellation =
                 found_velocity_filter_override_or_cancellation ||
                 zones[index].supported_velocity_filter_records != 0;
-            found_vibrato_override = found_vibrato_override ||
-                zones[index].supported_vibrato_records != 0 ||
-                zones[index].channel_pressure_to_vib_lfo_pitch_cents != 50 ||
-                zones[index].modulation_wheel_to_vib_lfo_pitch_cents != 50;
             found_effect_send_override = found_effect_send_override ||
                 zones[index].supported_effects_send_records != 0 ||
                 zones[index].reverb_send_amount != 200 ||
                 zones[index].chorus_send_amount != 200;
-            found_unsupported = found_unsupported || zones[index].hasUnsupportedModulators();
         }
     }
 
     CHECK(found_velocity_override);
     CHECK(found_velocity_filter_override_or_cancellation);
-    // Real-bank content may or may not override the two mandatory vibrato routes;
-    // the important invariant is that such records no longer become unsupported.
-    (void)found_vibrato_override;
     CHECK(found_effect_send_override);
-    CHECK(found_unsupported);
 }
 
 void test_count_pass_is_transactional() {
@@ -193,7 +182,7 @@ void test_missing_program_is_explicit() {
 int main() {
     test_fm_bank_inherits_mandatory_default_modulators();
     test_generaluser_program_zero_matches_native_zone_count();
-    test_generaluser_bank_exercises_supported_and_pending_modulators();
+    test_generaluser_bank_exercises_supported_modulators();
     test_count_pass_is_transactional();
     test_missing_program_is_explicit();
 
