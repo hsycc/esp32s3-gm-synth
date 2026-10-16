@@ -24,6 +24,20 @@ std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
     return -static_cast<std::int32_t>(((-product) + (std::int64_t{1} << 14)) >> 15);
 }
 
+std::int32_t roundQ24ToInt(std::int64_t value) {
+    constexpr std::int64_t kRound = std::int64_t{1} << (kFilterCoefficientFractionBits - 1u);
+    std::int64_t rounded = 0;
+    if (value >= 0) {
+        rounded = (value + kRound) >> kFilterCoefficientFractionBits;
+    } else {
+        rounded = -(((-value) + kRound) >> kFilterCoefficientFractionBits);
+    }
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        rounded,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+}
+
 }  // namespace
 
 std::int32_t Voice::clampQ15(std::int32_t value) {
@@ -148,7 +162,8 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
         (region_start <= region_loop_start &&
          region_loop_start < region_loop_end &&
          region_loop_end <= region_end);
-    if (!descriptor_valid || !region_valid || !loop_valid || params.phase_increment_q32 == 0) {
+    if (!descriptor_valid || !region_valid || !loop_valid ||
+        params.phase_increment_q32 == 0 || !params.lowpass.valid()) {
         directory.release(acquired);
         return false;
     }
@@ -163,15 +178,23 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     channel_ = params.channel;
     key_ = params.key;
     phase_q32_ = static_cast<std::uint64_t>(region_start) << 32;
+    lowpass_z1_q24_ = 0;
+    lowpass_z2_q24_ = 0;
     key_released_ = false;
     fast_release_kind_ = FastReleaseKind::None;
     envelope_stage_frame_ = 0;
     active_release_frames_ = 0;
     release_start_level_q15_ = 0;
 
-    if (params_.envelope.attack_frames != 0) {
+    if (params_.envelope.delay_frames != 0) {
+        envelope_stage_ = EnvelopeStage::Delay;
+        envelope_level_q15_ = 0;
+    } else if (params_.envelope.attack_frames != 0) {
         envelope_stage_ = EnvelopeStage::Attack;
         envelope_level_q15_ = 0;
+    } else if (params_.envelope.hold_frames != 0) {
+        envelope_stage_ = EnvelopeStage::Hold;
+        envelope_level_q15_ = kQ15Unity;
     } else if (params_.envelope.decay_frames != 0) {
         envelope_stage_ = EnvelopeStage::Decay;
         envelope_level_q15_ = kQ15Unity;
@@ -233,12 +256,32 @@ bool Voice::beginExclusiveRelease(std::uint32_t fade_frames) {
 
 std::int32_t Voice::nextEnvelopeLevel() {
     switch (envelope_stage_) {
+        case EnvelopeStage::Delay: {
+            const std::uint32_t total = params_.envelope.delay_frames;
+            envelope_level_q15_ = 0;
+            if (total == 0 || ++envelope_stage_frame_ >= total) {
+                envelope_stage_frame_ = 0;
+                if (params_.envelope.attack_frames != 0) {
+                    envelope_stage_ = EnvelopeStage::Attack;
+                } else if (params_.envelope.hold_frames != 0) {
+                    envelope_stage_ = EnvelopeStage::Hold;
+                } else if (params_.envelope.decay_frames != 0) {
+                    envelope_stage_ = EnvelopeStage::Decay;
+                } else {
+                    envelope_stage_ = EnvelopeStage::Sustain;
+                }
+            }
+            return 0;
+        }
+
         case EnvelopeStage::Attack: {
             const std::uint32_t total = params_.envelope.attack_frames;
             if (total == 0) {
-                envelope_stage_ = params_.envelope.decay_frames != 0
-                    ? EnvelopeStage::Decay
-                    : EnvelopeStage::Sustain;
+                envelope_stage_ = params_.envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (params_.envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
                 envelope_stage_frame_ = 0;
                 return nextEnvelopeLevel();
             }
@@ -248,10 +291,24 @@ std::int32_t Voice::nextEnvelopeLevel() {
             ++envelope_stage_frame_;
             if (envelope_stage_frame_ >= total) {
                 envelope_level_q15_ = kQ15Unity;
+                envelope_stage_ = params_.envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (params_.envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
+                envelope_stage_frame_ = 0;
+            }
+            return envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Hold: {
+            const std::uint32_t total = params_.envelope.hold_frames;
+            envelope_level_q15_ = kQ15Unity;
+            if (total == 0 || ++envelope_stage_frame_ >= total) {
+                envelope_stage_frame_ = 0;
                 envelope_stage_ = params_.envelope.decay_frames != 0
                     ? EnvelopeStage::Decay
                     : EnvelopeStage::Sustain;
-                envelope_stage_frame_ = 0;
             }
             return envelope_level_q15_;
         }
@@ -335,6 +392,25 @@ std::int32_t Voice::interpolatedSample() const {
         ((delta * static_cast<std::int64_t>(fraction)) >> 32));
 }
 
+std::int32_t Voice::applyLowpass(std::int32_t sample) {
+    if (!params_.lowpass.enabled) {
+        return sample;
+    }
+
+    const BiquadLowpassConfig& filter = params_.lowpass;
+    const std::int64_t output_q24 =
+        static_cast<std::int64_t>(sample) * filter.a0_q24 + lowpass_z1_q24_;
+    const std::int32_t output = roundQ24ToInt(output_q24);
+    lowpass_z1_q24_ =
+        static_cast<std::int64_t>(sample) * filter.a1_q24 +
+        lowpass_z2_q24_ -
+        static_cast<std::int64_t>(output) * filter.b1_q24;
+    lowpass_z2_q24_ =
+        static_cast<std::int64_t>(sample) * filter.a0_q24 -
+        static_cast<std::int64_t>(output) * filter.b2_q24;
+    return output;
+}
+
 void Voice::advancePhase() {
     if (!active_ || !ref_.valid() || ref_.record == nullptr) {
         return;
@@ -365,6 +441,8 @@ void Voice::finish() {
     key_released_ = false;
     fast_release_kind_ = FastReleaseKind::None;
     phase_q32_ = 0;
+    lowpass_z1_q24_ = 0;
+    lowpass_z2_q24_ = 0;
     envelope_stage_ = EnvelopeStage::Done;
     envelope_stage_frame_ = 0;
     active_release_frames_ = 0;
@@ -395,7 +473,7 @@ VoiceRenderResult Voice::renderAdd(
             break;
         }
 
-        const std::int32_t mono = interpolatedSample();
+        const std::int32_t mono = applyLowpass(interpolatedSample());
         const std::int32_t left_gain = multiplyQ15(params_.gain_left_q15, envelope);
         const std::int32_t right_gain = multiplyQ15(params_.gain_right_q15, envelope);
         interleaved_stereo[frame * 2u] += scaleSampleQ15(mono, left_gain);
