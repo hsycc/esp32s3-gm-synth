@@ -16,6 +16,7 @@ using gm_synth::gm::PlaybackZone;
 using gm_synth::sample::SampleId;
 using gm_synth::sf2::NativeResolvedZone;
 using gm_synth::sf2::PlaybackIssueDefaultModulatorsPending;
+using gm_synth::sf2::PlaybackIssueEffectsSendPending;
 using gm_synth::sf2::PlaybackPreparePolicy;
 using gm_synth::sf2::PlaybackPrepareRequest;
 using gm_synth::sf2::PlaybackPrepareStatus;
@@ -90,7 +91,7 @@ PlaybackPrepareRequest requestFor(
     return request;
 }
 
-void testFmProgramPreparesSnapshotAndResolvedDefaultVelocityRoute() {
+void testFmProgramPreparesSnapshotAndResolvedDefaultRoutes() {
     FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
     assert(reader.valid());
     Sf2PdtaReader pdta;
@@ -122,7 +123,8 @@ void testFmProgramPreparesSnapshotAndResolvedDefaultVelocityRoute() {
     assert(result.supported_modulator_records == 0);
     assert(result.unsupported_modulator_records == 0);
     assert(result.preview_zone_count == 1);
-    assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) != 0);
+    assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) == 0);
+    assert((result.issue_union & PlaybackIssueEffectsSendPending) != 0);
     assert(snapshot.valid());
     assert(snapshot.channel == 2);
     assert(snapshot.bank == 0);
@@ -136,6 +138,9 @@ void testFmProgramPreparesSnapshotAndResolvedDefaultVelocityRoute() {
     assert(playback[0].note_on_gain.enabled);
     assert(playback[0].note_on_gain.velocity_to_attenuation_cb == 960);
     assert(playback[0].note_on_gain.fixed_velocity == -1);
+    assert(playback[0].vibrato_lfo.enabled);
+    assert(playback[0].vibrato_lfo.channel_pressure_to_pitch_cents == 50);
+    assert(playback[0].vibrato_lfo.modulation_wheel_to_pitch_cents == 50);
     assert(playback[0].valid());
 }
 
@@ -167,7 +172,8 @@ void testStrictQualificationRejectsBeforeMutatingPlaybackStorage() {
     assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
     assert(result.first_problem_zone == 0);
     assert(result.preview_zone_count == 1);
-    assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) != 0);
+    assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) == 0);
+    assert((result.issue_union & PlaybackIssueEffectsSendPending) != 0);
     assert(playback[0].sample_id == 999);
     assert(playback[0].key_low == 19);
     assert(snapshot.token == 1234);
@@ -232,6 +238,7 @@ void testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones() {
     for (std::size_t index = 0; index < result.zone_count; ++index) {
         expected_supported += modulation[index].supported_velocity_attenuation_records;
         expected_supported += modulation[index].supported_velocity_filter_records;
+        expected_supported += modulation[index].supported_vibrato_records;
         expected_supported += modulation[index].supported_effects_send_records;
         expected_unsupported += modulation[index].unsupported_modulator_records;
     }
@@ -318,7 +325,7 @@ void testInvalidIdentityDoesNotTouchOutputs() {
 }  // namespace
 
 int main() {
-    testFmProgramPreparesSnapshotAndResolvedDefaultVelocityRoute();
+    testFmProgramPreparesSnapshotAndResolvedDefaultRoutes();
     testStrictQualificationRejectsBeforeMutatingPlaybackStorage();
     testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch();
     testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones();
