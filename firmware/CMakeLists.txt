@@ -18,8 +18,10 @@ idf_component_register(
         "realtime/BlockEventScheduler.cpp"
         "realtime/ScheduledAudioBlockRenderer.cpp"
         "realtime/RenderDeadlineMonitor.cpp"
+        "realtime/TimedAudioBlockRenderer.cpp"
         "platform/EspPsramArena.cpp"
         "platform/EspStorageBenchmark.cpp"
+        "platform/EspRealtimeClock.cpp"
     INCLUDE_DIRS "."
     REQUIRES esp_psram esp_timer log
     PRIV_REQUIRES heap
