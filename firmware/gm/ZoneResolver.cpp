@@ -87,6 +87,8 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
         : ZoneResolver::transposeCents(source.unbent_phase_increment_q32, bend_cents);
     update.gain_left_q15 = voice.gainLeftQ15();
     update.gain_right_q15 = voice.gainRightQ15();
+    update.reverb_send_units = voice.reverbSendUnits();
+    update.chorus_send_units = voice.chorusSendUnits();
 
     if (source.gain_enabled) {
         sf2::channelNoteOnGainQ15(
@@ -102,6 +104,19 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
             source.expression_to_attenuation_cb,
             &update.gain_left_q15,
             &update.gain_right_q15);
+    }
+
+    if (source.effects_send_enabled) {
+        update.reverb_send_units = static_cast<std::int16_t>(
+            sf2::channelEffectsSendSf2Units(
+                source.reverb_send_base_units,
+                context->state->reverb_send,
+                source.reverb_send_cc_amount));
+        update.chorus_send_units = static_cast<std::int16_t>(
+            sf2::channelEffectsSendSf2Units(
+                source.chorus_send_base_units,
+                context->state->chorus_send,
+                source.chorus_send_cc_amount));
     }
 
     return voice.applyRuntimeControlUpdate(update);
@@ -229,6 +244,10 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 &params.gain_left_q15,
                 &params.gain_right_q15);
         }
+        if (zone.effects_send.enabled) {
+            params.reverb_send_units = zone.effects_send.reverb_sf2_units;
+            params.chorus_send_units = zone.effects_send.chorus_sf2_units;
+        }
         params.envelope = zone.envelope;
         batch->voices[batch->count++] = params;
     }
@@ -299,9 +318,22 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 &params.gain_left_q15,
                 &params.gain_right_q15);
         }
+        if (zone.effects_send.enabled) {
+            params.reverb_send_units = static_cast<std::int16_t>(
+                sf2::channelEffectsSendSf2Units(
+                    zone.effects_send.reverb_sf2_units,
+                    channel_state.reverb_send,
+                    zone.effects_send.reverb_cc_amount));
+            params.chorus_send_units = static_cast<std::int16_t>(
+                sf2::channelEffectsSendSf2Units(
+                    zone.effects_send.chorus_sf2_units,
+                    channel_state.chorus_send,
+                    zone.effects_send.chorus_cc_amount));
+        }
         params.envelope = zone.envelope;
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
+        params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
         params.realtime_control.unbent_phase_increment_q32 = key_increment;
         params.realtime_control.initial_attenuation_cb =
             zone.note_on_gain.initial_attenuation_cb;
@@ -313,6 +345,14 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.realtime_control.expression_to_attenuation_cb =
             zone.note_on_gain.expression_to_attenuation_cb;
         params.realtime_control.pan_sf2_units = zone.note_on_gain.pan_sf2_units;
+        params.realtime_control.reverb_send_base_units =
+            zone.effects_send.reverb_sf2_units;
+        params.realtime_control.chorus_send_base_units =
+            zone.effects_send.chorus_sf2_units;
+        params.realtime_control.reverb_send_cc_amount =
+            zone.effects_send.reverb_cc_amount;
+        params.realtime_control.chorus_send_cc_amount =
+            zone.effects_send.chorus_cc_amount;
         batch->voices[batch->count++] = params;
     }
 
@@ -385,6 +425,7 @@ bool RealtimeProgramEventApplier::apply(
         constexpr std::uint32_t kRefreshMask =
             ChannelControlGainChanged |
             ChannelControlPanChanged |
+            ChannelControlEffectsChanged |
             ChannelControlPitchRangeChanged |
             ChannelControlResetControllers;
         if ((action & kRefreshMask) != 0 &&
@@ -415,6 +456,15 @@ bool RealtimeProgramEventApplier::apply(
     if (program == nullptr) {
         util::saturatingIncrement(stats_.missing_active_program);
         return false;
+    }
+
+    // Never use an old melodic fallback for GM Channel 10. Program Prepare may
+    // be pending, or the loaded SF2 may have no bank-128 drum preset at all; in
+    // either case percussion NoteOn remains silent until a real drum snapshot
+    // is active instead of producing the wrong instrument.
+    if (event.channel == kGmPercussionChannel && program->bank != kSf2PercussionBank) {
+        util::saturatingIncrement(stats_.percussion_program_unavailable);
+        return true;
     }
 
     const ZoneResolveStatus status = resolver_.resolveNoteOn(
