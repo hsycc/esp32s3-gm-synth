@@ -185,6 +185,7 @@ printf '\n[10/11] Build and run GM MIDI channel-state tests\n'
 printf '\n[11/11] Build and run channel-state NoteOn runtime tests\n'
 "${CXX}" "${COMMON_FLAGS[@]}" -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
+  firmware/sample/ProgramSnapshot.cpp \
   firmware/voice/VoiceRenderer.cpp \
   firmware/sf2/Sf2ModulationMath.cpp \
   firmware/gm/MidiChannelState.cpp \
