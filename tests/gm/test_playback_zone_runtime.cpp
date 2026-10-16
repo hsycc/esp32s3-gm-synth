@@ -85,13 +85,17 @@ PlaybackZone loopingZone(std::uint32_t sample_id) {
 PlaybackProgramSnapshot playbackProgram(
     std::uint8_t channel,
     std::uint8_t program,
-    std::uint32_t token) {
+    std::uint32_t token,
+    const PlaybackZone* zones = nullptr,
+    std::uint16_t zone_count = 0) {
     PlaybackProgramSnapshot snapshot{};
     snapshot.channel = channel;
     snapshot.bank = 0;
     snapshot.program = program;
     snapshot.token = token;
     snapshot.bank_generation = 1;
+    snapshot.zones = zones;
+    snapshot.zone_count = zone_count;
     return snapshot;
 }
 
@@ -110,15 +114,15 @@ ProgramSnapshot residencyProgram(
 }
 
 void testResolverSelectsKeyVelocityLayersAndPitch() {
-    PlaybackProgramSnapshot program = playbackProgram(2, 10, 1);
-    program.zone_count = 3;
-    program.zones[0] = loopingZone(0);
-    program.zones[0].exclusive_class = 7;
-    program.zones[1] = loopingZone(1);
-    program.zones[1].exclusive_class = 7;
-    program.zones[2] = loopingZone(2);
-    program.zones[2].velocity_low = 81;
-    program.zones[2].velocity_high = 127;
+    std::array<PlaybackZone, 3> zones{};
+    zones[0] = loopingZone(0);
+    zones[0].exclusive_class = 7;
+    zones[1] = loopingZone(1);
+    zones[1].exclusive_class = 7;
+    zones[2] = loopingZone(2);
+    zones[2].velocity_low = 81;
+    zones[2].velocity_high = 127;
+    PlaybackProgramSnapshot program = playbackProgram(2, 10, 1, zones.data(), zones.size());
     assert(program.valid());
 
     ZoneResolver resolver;
@@ -141,13 +145,12 @@ void testResolverSelectsKeyVelocityLayersAndPitch() {
 }
 
 void testFixedPitchZoneDoesNotTrackKey() {
-    PlaybackProgramSnapshot program = playbackProgram(9, 0, 1);
-    program.zone_count = 1;
-    program.zones[0] = loopingZone(0);
-    program.zones[0].key_low = 35;
-    program.zones[0].key_high = 81;
-    program.zones[0].root_phase_increment_q32 = kPhaseOneQ32 / 2u;
-    program.zones[0].key_tracking = false;
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].key_low = 35;
+    zones[0].key_high = 81;
+    zones[0].root_phase_increment_q32 = kPhaseOneQ32 / 2u;
+    zones[0].key_tracking = false;
+    PlaybackProgramSnapshot program = playbackProgram(9, 0, 1, zones.data(), zones.size());
 
     ZoneResolver resolver;
     ResolvedVoiceBatch batch{};
@@ -157,11 +160,16 @@ void testFixedPitchZoneDoesNotTrackKey() {
 }
 
 void testResolverRejectsMoreThanHardVoiceCapWithoutPartialBatch() {
-    PlaybackProgramSnapshot program = playbackProgram(1, 0, 1);
-    program.zone_count = static_cast<std::uint16_t>(VoicePool::kHardVoiceCap + 1u);
-    for (std::size_t i = 0; i < program.zone_count; ++i) {
-        program.zones[i] = loopingZone(static_cast<std::uint32_t>(i % 4u));
+    std::array<PlaybackZone, VoicePool::kHardVoiceCap + 1u> zones{};
+    for (std::size_t i = 0; i < zones.size(); ++i) {
+        zones[i] = loopingZone(static_cast<std::uint32_t>(i % 4u));
     }
+    PlaybackProgramSnapshot program = playbackProgram(
+        1,
+        0,
+        1,
+        zones.data(),
+        static_cast<std::uint16_t>(zones.size()));
     assert(program.valid());
 
     ZoneResolver resolver;
@@ -169,6 +177,16 @@ void testResolverRejectsMoreThanHardVoiceCapWithoutPartialBatch() {
     assert(resolver.resolveNoteOn(program, 1, 60, 64, 5, &batch) ==
            ZoneResolveStatus::TooManyMatches);
     assert(batch.count == 0);
+}
+
+void testSnapshotRejectsMissingZoneStorage() {
+    PlaybackProgramSnapshot program = playbackProgram(0, 0, 1, nullptr, 1);
+    assert(!program.valid());
+
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, 0, 60, 64, 1, &batch) ==
+           ZoneResolveStatus::InvalidArgument);
 }
 
 void testRealtimeApplierSharesNoteInstanceAcrossLayersAndChokesOldTrigger() {
@@ -183,12 +201,10 @@ void testRealtimeApplierSharesNoteInstanceAcrossLayersAndChokesOldTrigger() {
     assert(fixture.publish(0, pcm_a.data(), pcm_a.size(), 0, pcm_a.size()));
     assert(fixture.publish(1, pcm_b.data(), pcm_b.size(), 0, pcm_b.size()));
 
-    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1);
-    program.zone_count = 2;
-    program.zones[0] = loopingZone(0);
-    program.zones[0].exclusive_class = 7;
-    program.zones[1] = loopingZone(1);
-    program.zones[1].exclusive_class = 7;
+    std::array<PlaybackZone, 2> zones{loopingZone(0), loopingZone(1)};
+    zones[0].exclusive_class = 7;
+    zones[1].exclusive_class = 7;
+    PlaybackProgramSnapshot program = playbackProgram(2, 0, 1, zones.data(), zones.size());
 
     PlaybackProgramSnapshotExchange exchange;
     assert(exchange.setInitialActive(&program));
@@ -282,12 +298,11 @@ void testScheduledEventToZoneToVoiceToRenderPath() {
     PublishedFixture fixture;
     assert(fixture.publish(0, pcm.data(), pcm.size(), 0, pcm.size()));
 
-    PlaybackProgramSnapshot program = playbackProgram(1, 0, 1);
-    program.zone_count = 1;
-    program.zones[0] = loopingZone(0);
-    program.zones[0].key_low = 60;
-    program.zones[0].key_high = 60;
-    program.zones[0].envelope.release_frames = 2;
+    std::array<PlaybackZone, 1> zones{loopingZone(0)};
+    zones[0].key_low = 60;
+    zones[0].key_high = 60;
+    zones[0].envelope.release_frames = 2;
+    PlaybackProgramSnapshot program = playbackProgram(1, 0, 1, zones.data(), zones.size());
 
     PlaybackProgramSnapshotExchange programs;
     assert(programs.setInitialActive(&program));
@@ -336,6 +351,7 @@ int main() {
     testResolverSelectsKeyVelocityLayersAndPitch();
     testFixedPitchZoneDoesNotTrackKey();
     testResolverRejectsMoreThanHardVoiceCapWithoutPartialBatch();
+    testSnapshotRejectsMissingZoneStorage();
     testRealtimeApplierSharesNoteInstanceAcrossLayersAndChokesOldTrigger();
     testProgramRuntimeCommitRequiresMatchingPreparedIdentity();
     testScheduledEventToZoneToVoiceToRenderPath();
