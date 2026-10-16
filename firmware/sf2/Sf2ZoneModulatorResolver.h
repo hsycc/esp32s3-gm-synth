@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Sf2FilterMath.h"
 #include "Sf2ModulationMath.h"
 #include "Sf2PdtaReader.h"
 
@@ -13,6 +14,7 @@ namespace gm_synth::sf2 {
 // with the same identity may replace/augment them according to SF2 hierarchy.
 struct ResolvedZoneModulation {
     std::int32_t velocity_to_attenuation_cb = kSf2DefaultVelocityAttenuationCb;
+    std::int32_t velocity_to_filter_fc_cents = kSf2DefaultVelocityFilterCutoffCents;
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t pan_amount = kSf2DefaultPanAmount;
     std::int32_t expression_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
@@ -21,6 +23,7 @@ struct ResolvedZoneModulation {
     std::int32_t pitch_wheel_to_pitch_cents = 12700;
 
     std::uint16_t supported_velocity_attenuation_records = 0;
+    std::uint16_t supported_velocity_filter_records = 0;
     std::uint16_t supported_effects_send_records = 0;
     std::uint16_t unsupported_modulator_records = 0;
 
