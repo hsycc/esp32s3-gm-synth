@@ -17,6 +17,7 @@ idf_component_register(
         "realtime/RealtimeEventQueue.cpp"
         "realtime/BlockEventScheduler.cpp"
         "realtime/ScheduledAudioBlockRenderer.cpp"
+        "realtime/RenderDeadlineMonitor.cpp"
         "platform/EspPsramArena.cpp"
         "platform/EspStorageBenchmark.cpp"
     INCLUDE_DIRS "."
