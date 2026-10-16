@@ -21,6 +21,7 @@ idf_component_register(
         "gm/ZoneResolver.cpp"
         "voice/PitchMath.cpp"
         "voice/VoiceRenderer.cpp"
+        "voice/VoiceRuntimeControl.cpp"
         "voice/AudioBlockRenderer.cpp"
         "voice/AdaptivePolyphony.cpp"
         "realtime/RealtimeEventQueue.cpp"

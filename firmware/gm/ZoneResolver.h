@@ -42,7 +42,9 @@ public:
         ResolvedVoiceBatch* batch) const;
 
     // Production path: after raw zone selection, apply effective velocity plus
-    // current CC7/10/11 and Pitch Bend/RPN state before Voice::start().
+    // current CC7/10/11 and Pitch Bend/RPN state before Voice::start(). It also
+    // carries the immutable source values needed to refresh a sounding Voice
+    // when those channel controllers later change.
     ZoneResolveStatus resolveNoteOn(
         const PlaybackProgramSnapshot& program,
         const MidiChannelState& channel_state,
@@ -73,6 +75,10 @@ struct RealtimeProgramEventStats {
     std::uint64_t control_change_events = 0;
     std::uint64_t pitch_bend_events = 0;
     std::uint64_t controller_state_changes = 0;
+    std::uint64_t active_voice_updates = 0;
+    std::uint64_t sustain_releases = 0;
+    std::uint64_t all_notes_off_events = 0;
+    std::uint64_t all_sound_off_events = 0;
     std::uint64_t unsupported_events = 0;
     std::uint64_t invalid_events = 0;
     std::uint64_t missing_active_program = 0;
@@ -84,8 +90,8 @@ struct RealtimeProgramEventStats {
 };
 
 // Production-shaped event adapter. MIDI channel state is fixed-size and owned
-// by the audio-side applier, so sample-accurate CC/Pitch Bend events update the
-// exact state observed by subsequent NoteOn events without allocation or locks.
+// by the audio-side applier, so sample-accurate channel events update both the
+// state observed by future NoteOn events and already-sounding Voices.
 class RealtimeProgramEventApplier {
 public:
     explicit RealtimeProgramEventApplier(PlaybackProgramSnapshotExchange& programs)
@@ -106,6 +112,7 @@ public:
 
 private:
     std::uint32_t allocateNoteInstanceId();
+    std::size_t refreshActiveVoices(std::uint8_t channel, voice::VoicePool& voices);
 
     PlaybackProgramSnapshotExchange& programs_;
     MidiChannelStateBank channel_states_{};

@@ -5,12 +5,13 @@
 namespace gm_synth::gm {
 
 void MidiChannelState::resetControllers() {
-    volume = 100;
-    pan = 64;
+    // MIDI CC121 / RP-015 style reset: preserve mix/program state such as
+    // Channel Volume, Pan, Bank, Program and effect sends. Reset performance
+    // controllers, Pitch Bend and parameter selection instead. A full GM System
+    // On reset is a separate operation and will restore mix defaults too.
     expression = 127;
     sustain = 0;
-    reverb_send = 0;
-    chorus_send = 0;
+    pitch_bend = kPitchBendCenter;
     rpn_msb = 127;
     rpn_lsb = 127;
     nrpn_msb = 127;
@@ -22,10 +23,13 @@ void MidiChannelState::resetAll() {
     bank_msb = 0;
     bank_lsb = 0;
     program = 0;
-    resetControllers();
-    pitch_bend = kPitchBendCenter;
+    volume = 100;
+    pan = 64;
+    reverb_send = 0;
+    chorus_send = 0;
     pitch_bend_range_semitones = 2;
     pitch_bend_range_cents = 0;
+    resetControllers();
 }
 
 std::uint32_t MidiChannelState::applyControlChange(
@@ -108,9 +112,7 @@ std::uint32_t MidiChannelState::applyControlChange(
             resetControllers();
             return ChannelControlResetControllers |
                 ChannelControlGainChanged |
-                ChannelControlPanChanged |
                 ChannelControlSustainChanged |
-                ChannelControlEffectsChanged |
                 ChannelControlRpnSelectionChanged;
         case 123:
             return ChannelControlAllNotesOff;

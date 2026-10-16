@@ -36,6 +36,31 @@ struct SampleRegion {
     std::uint32_t loop_end_frame = 0;  // exclusive
 };
 
+// Opaque realtime-control source copied into a Voice at NoteOn. VoiceRenderer
+// never interprets SoundFont/MIDI semantics from these fields; the GM layer
+// owns the transforms and writes back a final VoiceRuntimeControlUpdate. This
+// keeps dependency direction GM/SF2 -> Voice while still allowing already-
+// sounding Voices to react sample-accurately to channel controller events.
+struct VoiceRealtimeControlConfig {
+    bool enabled = false;
+    bool gain_enabled = false;
+    std::uint64_t unbent_phase_increment_q32 = kPhaseOneQ32;
+    std::int32_t initial_attenuation_cb = 0;
+    std::int32_t velocity_to_attenuation_cb = 0;
+    std::int32_t volume_to_attenuation_cb = 0;
+    std::int32_t pan_amount = 0;
+    std::int32_t expression_to_attenuation_cb = 0;
+    std::int16_t pan_sf2_units = 0;
+};
+
+struct VoiceRuntimeControlUpdate {
+    std::uint64_t phase_increment_q32 = kPhaseOneQ32;
+    std::int32_t gain_left_q15 = kQ15Unity;
+    std::int32_t gain_right_q15 = kQ15Unity;
+
+    bool valid() const { return phase_increment_q32 != 0; }
+};
+
 struct VoiceStartParams {
     sample::SampleId sample_id = 0;
     std::uint8_t channel = 0;
@@ -53,6 +78,7 @@ struct VoiceStartParams {
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
     EnvelopeConfig envelope{};
+    VoiceRealtimeControlConfig realtime_control{};
 };
 
 struct VoiceRenderResult {
@@ -77,6 +103,11 @@ struct VoicePoolStats {
     std::uint64_t start_failures_full = 0;
     std::uint64_t start_failures_admission = 0;
     std::uint64_t note_off_matches = 0;
+    std::uint64_t sustain_deferred_note_offs = 0;
+    std::uint64_t sustain_release_voices = 0;
+    std::uint64_t all_notes_off_matches = 0;
+    std::uint64_t channel_sound_off_voices = 0;
+    std::uint64_t runtime_control_updates = 0;
     std::uint64_t voices_finished = 0;
     std::uint64_t rendered_voice_frames = 0;
     std::uint64_t steal_attempts = 0;
@@ -112,6 +143,7 @@ public:
     void noteOff();
     bool beginFastRelease(std::uint32_t fade_frames);
     bool beginExclusiveRelease(std::uint32_t fade_frames);
+    bool applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update);
     VoiceRenderResult renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
     void reset();
 
@@ -122,11 +154,18 @@ public:
     bool fastReleaseTail() const;
     std::uint8_t channel() const { return channel_; }
     std::uint8_t key() const { return key_; }
+    std::uint8_t velocity() const { return params_.velocity; }
     std::uint16_t exclusiveClass() const { return params_.exclusive_class; }
     std::uint32_t noteInstanceId() const { return params_.note_instance_id; }
     sample::SampleId sampleId() const { return ref_.sample_id; }
     std::uint64_t phaseQ32() const { return phase_q32_; }
+    std::uint64_t phaseIncrementQ32() const { return params_.phase_increment_q32; }
+    std::int32_t gainLeftQ15() const { return params_.gain_left_q15; }
+    std::int32_t gainRightQ15() const { return params_.gain_right_q15; }
     std::int32_t envelopeLevelQ15() const { return envelope_level_q15_; }
+    const VoiceRealtimeControlConfig& realtimeControl() const {
+        return params_.realtime_control;
+    }
 
 private:
     enum class EnvelopeStage : std::uint8_t {
@@ -175,6 +214,8 @@ private:
     std::int32_t release_start_level_q15_ = 0;
 };
 
+using ActiveVoiceUpdater = bool (*)(void* context, Voice& voice);
+
 class VoicePool {
 public:
     static constexpr std::size_t kHardVoiceCap = 32;
@@ -186,8 +227,22 @@ public:
 
     bool start(const VoiceStartParams& params);
     std::size_t noteOff(std::uint8_t channel, std::uint8_t key);
+    // GM/MIDI path: when sustain is down, physical NoteOff is remembered for
+    // this exact slot-start serial and released only when the pedal comes up.
+    std::size_t noteOff(std::uint8_t channel, std::uint8_t key, bool sustain_down);
+    std::size_t releaseSustain(std::uint8_t channel);
+    std::size_t allNotesOff(std::uint8_t channel, bool sustain_down);
     void renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
     void allSoundOff();
+    std::size_t allSoundOff(std::uint8_t channel);
+
+    // Fixed-cap bounded visitor used by the GM layer to recompute controller
+    // state for already-sounding Voices. No allocation, locks, or container
+    // mutation occurs while the visitor runs.
+    std::size_t updateActiveVoices(
+        std::uint8_t channel,
+        ActiveVoiceUpdater updater,
+        void* context);
 
     void setAdmissionLimit(std::size_t limit);
     std::size_t admissionLimit() const { return admission_limit_; }
@@ -212,6 +267,10 @@ private:
     sample::PublishedSampleDirectory& directory_;
     std::array<Voice, kHardVoiceCap> voices_{};
     std::array<std::uint64_t, kHardVoiceCap> start_serials_{};
+    // Zero means no deferred sustain NoteOff. A saved serial is valid only if
+    // it still equals start_serials_[slot], preventing stale pedal state from a
+    // finished/reused slot from touching a later Voice.
+    std::array<std::uint64_t, kHardVoiceCap> sustain_pending_serials_{};
     std::uint64_t next_start_serial_ = 1;
     std::size_t admission_limit_ = kHardVoiceCap;
     VoiceStealConfig steal_config_{};

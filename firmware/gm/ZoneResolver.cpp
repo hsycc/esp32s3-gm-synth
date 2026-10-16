@@ -65,6 +65,48 @@ std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) 
         : velocity;
 }
 
+struct ActiveVoiceRefreshContext {
+    const MidiChannelState* state = nullptr;
+};
+
+bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
+    auto* context = static_cast<ActiveVoiceRefreshContext*>(opaque);
+    if (context == nullptr || context->state == nullptr) {
+        return false;
+    }
+
+    const voice::VoiceRealtimeControlConfig& source = voice.realtimeControl();
+    if (!source.enabled || source.unbent_phase_increment_q32 == 0) {
+        return false;
+    }
+
+    voice::VoiceRuntimeControlUpdate update{};
+    const int bend_cents = ZoneResolver::pitchBendCents(*context->state);
+    update.phase_increment_q32 = bend_cents == 0
+        ? source.unbent_phase_increment_q32
+        : ZoneResolver::transposeCents(source.unbent_phase_increment_q32, bend_cents);
+    update.gain_left_q15 = voice.gainLeftQ15();
+    update.gain_right_q15 = voice.gainRightQ15();
+
+    if (source.gain_enabled) {
+        sf2::channelNoteOnGainQ15(
+            source.initial_attenuation_cb,
+            source.velocity_to_attenuation_cb,
+            voice.velocity(),
+            source.pan_sf2_units,
+            context->state->volume,
+            source.volume_to_attenuation_cb,
+            context->state->pan,
+            source.pan_amount,
+            context->state->expression,
+            source.expression_to_attenuation_cb,
+            &update.gain_left_q15,
+            &update.gain_right_q15);
+    }
+
+    return voice.applyRuntimeControlUpdate(update);
+}
+
 }  // namespace
 
 std::uint64_t ZoneResolver::transposeSemitones(
@@ -258,6 +300,19 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 &params.gain_right_q15);
         }
         params.envelope = zone.envelope;
+        params.realtime_control.enabled = true;
+        params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
+        params.realtime_control.unbent_phase_increment_q32 = key_increment;
+        params.realtime_control.initial_attenuation_cb =
+            zone.note_on_gain.initial_attenuation_cb;
+        params.realtime_control.velocity_to_attenuation_cb =
+            zone.note_on_gain.velocity_to_attenuation_cb;
+        params.realtime_control.volume_to_attenuation_cb =
+            zone.note_on_gain.volume_to_attenuation_cb;
+        params.realtime_control.pan_amount = zone.note_on_gain.pan_amount;
+        params.realtime_control.expression_to_attenuation_cb =
+            zone.note_on_gain.expression_to_attenuation_cb;
+        params.realtime_control.pan_sf2_units = zone.note_on_gain.pan_sf2_units;
         batch->voices[batch->count++] = params;
     }
 
@@ -273,6 +328,18 @@ std::uint32_t RealtimeProgramEventApplier::allocateNoteInstanceId() {
     return id;
 }
 
+std::size_t RealtimeProgramEventApplier::refreshActiveVoices(
+    std::uint8_t channel,
+    voice::VoicePool& voices) {
+    ActiveVoiceRefreshContext context{&channel_states_.channel(channel)};
+    const std::size_t updated = voices.updateActiveVoices(
+        channel,
+        &refreshActiveVoice,
+        &context);
+    util::saturatingAdd(stats_.active_voice_updates, updated);
+    return updated;
+}
+
 bool RealtimeProgramEventApplier::apply(
     const realtime::RealtimeEvent& event,
     voice::VoicePool& voices) {
@@ -284,22 +351,46 @@ bool RealtimeProgramEventApplier::apply(
     if (event.type == realtime::EventType::NoteOff ||
         (event.type == realtime::EventType::NoteOn && event.data2 == 0)) {
         util::saturatingIncrement(stats_.note_off_events);
-        voices.noteOff(event.channel, event.data1);
+        const MidiChannelState& state = channel_states_.channel(event.channel);
+        voices.noteOff(event.channel, event.data1, state.sustainDown());
         return true;
     }
 
     if (event.type == realtime::EventType::ControlChange) {
         util::saturatingIncrement(stats_.control_change_events);
+        const bool sustain_before = channel_states_.channel(event.channel).sustainDown();
         const std::uint32_t action = channel_states_.applyControlChange(
             event.channel,
             event.data1,
             event.data2);
+        const MidiChannelState& state = channel_states_.channel(event.channel);
         if (action != ChannelControlNone) {
             util::saturatingIncrement(stats_.controller_state_changes);
         }
-        // Sustain, live gain/pan updates and channel-mode actions are consumed
-        // in the next runtime layer. The state transition itself is already
-        // sample-accurate for subsequent NoteOn events.
+
+        if ((action & ChannelControlAllSoundOff) != 0) {
+            util::saturatingIncrement(stats_.all_sound_off_events);
+            voices.allSoundOff(event.channel);
+        }
+        if ((action & ChannelControlAllNotesOff) != 0) {
+            util::saturatingIncrement(stats_.all_notes_off_events);
+            voices.allNotesOff(event.channel, state.sustainDown());
+        }
+        if ((action & ChannelControlSustainChanged) != 0 &&
+            sustain_before && !state.sustainDown()) {
+            const std::size_t released = voices.releaseSustain(event.channel);
+            util::saturatingAdd(stats_.sustain_releases, released);
+        }
+
+        constexpr std::uint32_t kRefreshMask =
+            ChannelControlGainChanged |
+            ChannelControlPanChanged |
+            ChannelControlPitchRangeChanged |
+            ChannelControlResetControllers;
+        if ((action & kRefreshMask) != 0 &&
+            (action & ChannelControlAllSoundOff) == 0) {
+            refreshActiveVoices(event.channel, voices);
+        }
         return true;
     }
 
@@ -310,6 +401,7 @@ bool RealtimeProgramEventApplier::apply(
             return false;
         }
         util::saturatingIncrement(stats_.controller_state_changes);
+        refreshActiveVoices(event.channel, voices);
         return true;
     }
 
