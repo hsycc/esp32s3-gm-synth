@@ -1,0 +1,310 @@
+#include "../../firmware/sf2/Sf2PlaybackMaterializer.h"
+#include "../../firmware/voice/PitchMath.h"
+
+#include <cassert>
+#include <cmath>
+#include <cstdint>
+#include <iostream>
+
+namespace {
+
+using gm_synth::gm::PlaybackZone;
+using gm_synth::sf2::NativeResolvedZone;
+using gm_synth::sf2::NativeZoneFlagAddressOutsideSampleHeader;
+using gm_synth::sf2::NativeZoneFlagIgnoredInvalidPresetGenerator;
+using gm_synth::sf2::NativeZoneFlagInvalidLoopRange;
+using gm_synth::sf2::NativeZoneFlagRomSample;
+using gm_synth::sf2::NativeZoneFlagStereoOrLinkedSample;
+using gm_synth::sf2::PlaybackIssueAddressOutsideResidentSample;
+using gm_synth::sf2::PlaybackIssueCustomModulatorsPending;
+using gm_synth::sf2::PlaybackIssueDefaultModulatorsPending;
+using gm_synth::sf2::PlaybackIssueEffectsSendPending;
+using gm_synth::sf2::PlaybackIssueFilterPending;
+using gm_synth::sf2::PlaybackIssueFixedVelocityPending;
+using gm_synth::sf2::PlaybackIssueGainAboveUnityClamped;
+using gm_synth::sf2::PlaybackIssueIgnoredInvalidPresetGenerator;
+using gm_synth::sf2::PlaybackIssueInvalidLoop;
+using gm_synth::sf2::PlaybackIssueLfoPending;
+using gm_synth::sf2::PlaybackIssueModEnvelopePending;
+using gm_synth::sf2::PlaybackIssuePanLawApproximation;
+using gm_synth::sf2::PlaybackIssueRomSample;
+using gm_synth::sf2::PlaybackIssueScaleTuningPending;
+using gm_synth::sf2::PlaybackIssueStereoOrLinkedSample;
+using gm_synth::sf2::PlaybackIssueUnsupportedSampleMode;
+using gm_synth::sf2::PlaybackIssueVolumeEnvelopeDelayPending;
+using gm_synth::sf2::PlaybackIssueVolumeEnvelopeHoldPending;
+using gm_synth::sf2::PlaybackIssueVolumeEnvelopeKeyScalingPending;
+using gm_synth::sf2::PlaybackMaterializationStatus;
+using gm_synth::sf2::Sf2PlaybackMaterializer;
+using gm_synth::voice::LoopMode;
+using gm_synth::voice::kPhaseOneQ32;
+using gm_synth::voice::kQ15Unity;
+
+NativeResolvedZone baseZone() {
+    NativeResolvedZone zone{};
+    zone.bank = 0;
+    zone.program = 0;
+    zone.sample_id = 1;
+    zone.key_low = 12;
+    zone.key_high = 100;
+    zone.velocity_low = 1;
+    zone.velocity_high = 127;
+    zone.sample_start = 100;
+    zone.sample_end = 200;
+    zone.loop_start = 120;
+    zone.loop_end = 180;
+    zone.shdr_start = 100;
+    zone.shdr_end = 200;
+    zone.shdr_loop_start = 120;
+    zone.shdr_loop_end = 180;
+    zone.sample_rate = 44100;
+    zone.sample_root_key = 60;
+    zone.sample_pitch_correction_cents = 0;
+    zone.sample_type = 1;
+    return zone;
+}
+
+void testSimpleZoneBecomesExplicitPreview() {
+    Sf2PlaybackMaterializer materializer;
+    PlaybackZone output{};
+    const auto result = materializer.materialize(baseZone(), &output);
+
+    assert(result.status == PlaybackMaterializationStatus::Preview);
+    assert(result.playablePreview());
+    assert(result.hasIssue(PlaybackIssueDefaultModulatorsPending));
+    assert(output.sample_id == 1);
+    assert(output.key_low == 12);
+    assert(output.key_high == 100);
+    assert(output.velocity_low == 1);
+    assert(output.velocity_high == 127);
+    assert(output.root_key == 60);
+    assert(output.key_tracking);
+    assert(output.root_phase_increment_q32 == kPhaseOneQ32);
+    assert(output.loop_mode == LoopMode::None);
+    assert(!output.sample_region.enabled);
+    assert(output.gain_left_q15 == kQ15Unity);
+    assert(output.gain_right_q15 == kQ15Unity);
+    assert(output.envelope.attack_frames == 43);
+    assert(output.envelope.decay_frames == 43);
+    assert(output.envelope.sustain_q15 == kQ15Unity);
+    assert(output.envelope.release_frames == 43);
+    assert(output.valid());
+}
+
+void testResolvedAddressWindowAndLoopAreRelativeToResidentSample() {
+    NativeResolvedZone native = baseZone();
+    native.sample_start = 110;
+    native.sample_end = 190;
+    native.loop_start = 130;
+    native.loop_end = 170;
+    native.generators.set(54, 1);
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.status == PlaybackMaterializationStatus::Preview);
+    assert(output.loop_mode == LoopMode::Continuous);
+    assert(output.sample_region.enabled);
+    assert(output.sample_region.start_frame == 10);
+    assert(output.sample_region.end_frame == 90);
+    assert(output.sample_region.loop_start_frame == 30);
+    assert(output.sample_region.loop_end_frame == 70);
+    assert(output.valid());
+
+    native.generators.set(54, 3);
+    const auto release_loop = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(release_loop.playablePreview());
+    assert(output.loop_mode == LoopMode::UntilRelease);
+}
+
+void testPitchMaterializationIncludesRateTuneAndCorrection() {
+    NativeResolvedZone native = baseZone();
+    native.sample_rate = 22050;
+    native.sample_pitch_correction_cents = 5;
+    native.generators.set(51, 1);
+    native.generators.set(52, -5);
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    const std::uint64_t expected = gm_synth::voice::phaseIncrementQ32(22050, 44100, 100.0);
+    assert(output.root_phase_increment_q32 == expected);
+    assert(output.key_tracking);
+}
+
+void testFixedKeyAndScaleTuningQualification() {
+    NativeResolvedZone native = baseZone();
+    native.generators.set(46, 64);
+    native.generators.set(56, 100);
+
+    PlaybackZone output{};
+    auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(!output.key_tracking);
+    assert(output.root_phase_increment_q32 ==
+           gm_synth::voice::phaseIncrementQ32(44100, 44100, 400.0));
+
+    native = baseZone();
+    native.generators.set(56, 0);
+    result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(!output.key_tracking);
+    assert(!result.hasIssue(PlaybackIssueScaleTuningPending));
+
+    native.generators.set(56, 50);
+    result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(output.key_tracking);  // preview uses current 100-cent runtime tracking
+    assert(result.hasIssue(PlaybackIssueScaleTuningPending));
+}
+
+void testEnvelopeFieldsAreConvertedFromNativeSf2Units() {
+    NativeResolvedZone native = baseZone();
+    native.generators.set(34, 0);      // 1 second
+    native.generators.set(36, -1200);  // 0.5 second
+    native.generators.set(37, 600);    // 60 dB sustain attenuation
+    native.generators.set(38, 1200);   // 2 seconds
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(output.envelope.attack_frames == 44100);
+    assert(output.envelope.decay_frames == 22050);
+    assert(output.envelope.release_frames == 88200);
+    assert(output.envelope.sustain_q15 >= 32 && output.envelope.sustain_q15 <= 33);
+}
+
+void testUnsupportedEnvelopeFilterModulationAndEffectsAreReported() {
+    NativeResolvedZone native = baseZone();
+    native.generators.set(33, 0);
+    native.generators.set(35, 0);
+    native.generators.set(39, 100);
+    native.generators.set(8, 12000);
+    native.generators.set(11, 1200);
+    native.generators.set(25, 0);
+    native.generators.set(6, 25);
+    native.generators.set(23, 0);
+    native.generators.set(15, 300);
+    native.generators.set(16, 400);
+    native.generators.set(47, 100);
+    native.preset_modulator_records = 1;
+    native.instrument_modulator_records = 2;
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(result.hasIssue(PlaybackIssueVolumeEnvelopeDelayPending));
+    assert(result.hasIssue(PlaybackIssueVolumeEnvelopeHoldPending));
+    assert(result.hasIssue(PlaybackIssueVolumeEnvelopeKeyScalingPending));
+    assert(result.hasIssue(PlaybackIssueFilterPending));
+    assert(result.hasIssue(PlaybackIssueModEnvelopePending));
+    assert(result.hasIssue(PlaybackIssueLfoPending));
+    assert(result.hasIssue(PlaybackIssueEffectsSendPending));
+    assert(result.hasIssue(PlaybackIssueFixedVelocityPending));
+    assert(result.hasIssue(PlaybackIssueCustomModulatorsPending));
+}
+
+void testStaticPanAndGainRemainExplicitApproximations() {
+    NativeResolvedZone native = baseZone();
+    native.generators.set(17, 500);
+    native.generators.set(48, 60);
+
+    PlaybackZone output{};
+    auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(result.hasIssue(PlaybackIssuePanLawApproximation));
+    assert(output.gain_left_q15 == 0);
+    assert(output.gain_right_q15 > 16000 && output.gain_right_q15 < 17000);
+
+    native = baseZone();
+    native.generators.set(48, -100);
+    result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(result.hasIssue(PlaybackIssueGainAboveUnityClamped));
+    assert(output.gain_left_q15 == kQ15Unity);
+    assert(output.gain_right_q15 == kQ15Unity);
+}
+
+void testHardAddressFailureDoesNotMutateOutput() {
+    NativeResolvedZone native = baseZone();
+    native.sample_start = 90;
+    native.flags |= NativeZoneFlagAddressOutsideSampleHeader;
+
+    PlaybackZone output{};
+    output.sample_id = 777;
+    output.key_low = 17;
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.status == PlaybackMaterializationStatus::Unrepresentable);
+    assert(!result.playablePreview());
+    assert(result.hasIssue(PlaybackIssueAddressOutsideResidentSample));
+    assert(output.sample_id == 777);
+    assert(output.key_low == 17);
+}
+
+void testHardLoopSampleModeRomAndStereoFailuresAreExplicit() {
+    PlaybackZone output{};
+
+    NativeResolvedZone native = baseZone();
+    native.generators.set(54, 1);
+    native.flags |= NativeZoneFlagInvalidLoopRange;
+    auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.status == PlaybackMaterializationStatus::Unrepresentable);
+    assert(result.hasIssue(PlaybackIssueInvalidLoop));
+
+    native = baseZone();
+    native.generators.set(54, 2);
+    result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.status == PlaybackMaterializationStatus::Unrepresentable);
+    assert(result.hasIssue(PlaybackIssueUnsupportedSampleMode));
+
+    native = baseZone();
+    native.flags |= NativeZoneFlagRomSample;
+    result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.status == PlaybackMaterializationStatus::Unrepresentable);
+    assert(result.hasIssue(PlaybackIssueRomSample));
+
+    native = baseZone();
+    native.flags |= NativeZoneFlagStereoOrLinkedSample;
+    result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.status == PlaybackMaterializationStatus::Unrepresentable);
+    assert(result.hasIssue(PlaybackIssueStereoOrLinkedSample));
+}
+
+void testMalformedPresetGeneratorWarningSurvivesMaterialization() {
+    NativeResolvedZone native = baseZone();
+    native.flags |= NativeZoneFlagIgnoredInvalidPresetGenerator;
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(result.hasIssue(PlaybackIssueIgnoredInvalidPresetGenerator));
+}
+
+void testInvalidArgumentsAreTransactional() {
+    NativeResolvedZone native = baseZone();
+    const auto null_output = Sf2PlaybackMaterializer{}.materialize(native, nullptr);
+    assert(null_output.status == PlaybackMaterializationStatus::InvalidArgument);
+
+    PlaybackZone output{};
+    output.sample_id = 42;
+    const auto zero_rate = Sf2PlaybackMaterializer{0}.materialize(native, &output);
+    assert(zero_rate.status == PlaybackMaterializationStatus::InvalidArgument);
+    assert(output.sample_id == 42);
+}
+
+}  // namespace
+
+int main() {
+    testSimpleZoneBecomesExplicitPreview();
+    testResolvedAddressWindowAndLoopAreRelativeToResidentSample();
+    testPitchMaterializationIncludesRateTuneAndCorrection();
+    testFixedKeyAndScaleTuningQualification();
+    testEnvelopeFieldsAreConvertedFromNativeSf2Units();
+    testUnsupportedEnvelopeFilterModulationAndEffectsAreReported();
+    testStaticPanAndGainRemainExplicitApproximations();
+    testHardAddressFailureDoesNotMutateOutput();
+    testHardLoopSampleModeRomAndStereoFailuresAreExplicit();
+    testMalformedPresetGeneratorWarningSurvivesMaterialization();
+    testInvalidArgumentsAreTransactional();
+    std::cout << "SF2 playback materializer host checks passed\n";
+    return 0;
+}
