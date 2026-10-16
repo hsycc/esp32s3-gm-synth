@@ -69,7 +69,8 @@ void testSimpleZoneBecomesExplicitPreview() {
 
     assert(result.status == PlaybackMaterializationStatus::Preview);
     assert(result.playablePreview());
-    assert(result.hasIssue(PlaybackIssueDefaultModulatorsPending));
+    assert(!result.hasIssue(PlaybackIssueDefaultModulatorsPending));
+    assert(result.hasIssue(PlaybackIssueEffectsSendPending));
     assert(output.sample_id == 1);
     assert(output.key_low == 12);
     assert(output.key_high == 100);
@@ -93,6 +94,12 @@ void testSimpleZoneBecomesExplicitPreview() {
     assert(output.note_on_filter.velocity_to_cutoff_cents == -2400);
     assert(output.note_on_filter.resonance_cb == 0);
     assert(!result.hasIssue(PlaybackIssueFilterPending));
+    assert(output.vibrato_lfo.enabled);
+    assert(output.vibrato_lfo.delay_frames == 43);
+    assert(output.vibrato_lfo.phase_step_q32 != 0);
+    assert(output.vibrato_lfo.static_pitch_depth_cents == 0);
+    assert(output.vibrato_lfo.channel_pressure_to_pitch_cents == 50);
+    assert(output.vibrato_lfo.modulation_wheel_to_pitch_cents == 50);
     assert(output.valid());
 }
 
@@ -208,6 +215,28 @@ void testStaticFilterAndVelocityRouteAreMaterialized() {
     assert(output.note_on_filter.resonance_cb == 60);
 }
 
+void testVibratoGeneratorsAndControllerRoutesAreMaterialized() {
+    NativeResolvedZone native = baseZone();
+    native.generators.set(6, 25);
+    native.generators.set(23, 0);    // 1 second delay
+    native.generators.set(24, 1200); // one octave above 8.176 Hz
+    ResolvedZoneModulation modulation{};
+    modulation.channel_pressure_to_vib_lfo_pitch_cents = 30;
+    modulation.modulation_wheel_to_vib_lfo_pitch_cents = 70;
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
+    assert(result.playablePreview());
+    assert(!result.hasIssue(PlaybackIssueDefaultModulatorsPending));
+    assert(!result.hasIssue(PlaybackIssueLfoPending));
+    assert(output.vibrato_lfo.enabled);
+    assert(output.vibrato_lfo.delay_frames == 44100);
+    assert(output.vibrato_lfo.phase_step_q32 != 0);
+    assert(output.vibrato_lfo.static_pitch_depth_cents == 25);
+    assert(output.vibrato_lfo.channel_pressure_to_pitch_cents == 30);
+    assert(output.vibrato_lfo.modulation_wheel_to_pitch_cents == 70);
+}
+
 void testUnsupportedDynamicFilterModulationAndEffectsAreReported() {
     NativeResolvedZone native = baseZone();
     native.generators.set(33, 0);
@@ -216,8 +245,8 @@ void testUnsupportedDynamicFilterModulationAndEffectsAreReported() {
     native.generators.set(8, 12000);
     native.generators.set(11, 1200);
     native.generators.set(25, 0);
-    native.generators.set(6, 25);
-    native.generators.set(23, 0);
+    native.generators.set(5, 25);  // mod-LFO pitch remains pending
+    native.generators.set(21, 0);
     native.generators.set(15, 300);
     native.generators.set(16, 400);
     native.generators.set(47, 100);
@@ -335,6 +364,7 @@ int main() {
     testFixedKeyAndScaleTuningQualification();
     testEnvelopeFieldsAreConvertedFromNativeSf2Units();
     testStaticFilterAndVelocityRouteAreMaterialized();
+    testVibratoGeneratorsAndControllerRoutesAreMaterialized();
     testUnsupportedDynamicFilterModulationAndEffectsAreReported();
     testStaticPanAndGainRemainExplicitApproximations();
     testHardAddressFailureDoesNotMutateOutput();
