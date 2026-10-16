@@ -10,15 +10,17 @@
 
 namespace gm_synth::gm {
 
-// Compact parameters whose final value depends on the incoming NoteOn. Keeping
-// the raw SoundFont attenuation summing node here is important: a negative
-// preset initialAttenuation may cancel part of velocity/controller attenuation
-// before the final [0, 1440] cB clamp, so it cannot be safely baked into a
-// pre-clamped static Q15 gain during Program Prepare.
+// Compact parameters whose final value depends on the incoming NoteOn and the
+// current MIDI channel controller state. Keeping the raw SoundFont attenuation
+// summing node here is important: a negative preset initialAttenuation may
+// cancel part of velocity/controller attenuation before the final clamp.
 struct NoteOnGainConfig {
     bool enabled = false;
     std::int32_t initial_attenuation_cb = 0;
     std::int32_t velocity_to_attenuation_cb = 0;
+    std::int32_t volume_to_attenuation_cb = 960;
+    std::int32_t pan_amount = 1000;
+    std::int32_t expression_to_attenuation_cb = 960;
     std::int16_t pan_sf2_units = 0;
     // -1 means use the incoming NoteOn velocity. SF2 generator 47 may replace
     // the velocity used by note-on modulators without changing zone selection.
@@ -45,9 +47,8 @@ struct PlaybackZone {
 
     // root_phase_increment_q32 already includes source/output sample-rate,
     // coarse/fine tuning and sample pitch-correction terms for root_key.
-    // Runtime NoteOn performs equal-temperament semitone transposition with
-    // integer fixed-point math only. key_tracking=false is useful for
-    // fixed-pitch drum zones.
+    // Runtime NoteOn performs equal-temperament transposition with integer
+    // fixed-point math only. key_tracking=false is useful for drum zones.
     std::uint8_t root_key = 60;
     bool key_tracking = true;
     std::uint64_t root_phase_increment_q32 = voice::kPhaseOneQ32;
@@ -95,8 +96,7 @@ struct PlaybackProgramSnapshot {
 
     // Caller-owned immutable storage. The pointed-to zone array must remain
     // alive and unchanged from READY publication until the snapshot is retired
-    // and acknowledged by the control domain. This mirrors ProgramSnapshot's
-    // caller-owned lifetime while keeping the exchange itself pointer-sized.
+    // and acknowledged by the control domain.
     const PlaybackZone* zones = nullptr;
     std::uint16_t zone_count = 0;
 
