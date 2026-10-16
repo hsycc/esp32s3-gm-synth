@@ -35,6 +35,13 @@ std::size_t RenderDeadlineMonitor::observeBlock(
     return controller_.observeBlock(render_time_us, deadline_missed);
 }
 
+std::size_t RenderDeadlineMonitor::observeDeadlineMissWithoutTiming() {
+    saturatingIncrement(stats_.blocks_observed);
+    saturatingIncrement(stats_.deadline_misses);
+    saturatingIncrement(stats_.untimed_deadline_misses);
+    return controller_.observeBlock(0, true);
+}
+
 std::uint32_t RenderDeadlineMonitor::percentile(
     const std::array<std::uint32_t, kWindowSize>& sorted,
     std::size_t count,
@@ -54,6 +61,7 @@ RenderTimingSnapshot RenderDeadlineMonitor::snapshot() const {
     RenderTimingSnapshot result{};
     result.blocks_observed = stats_.blocks_observed;
     result.deadline_misses = stats_.deadline_misses;
+    result.untimed_deadline_misses = stats_.untimed_deadline_misses;
     result.sample_count = window_count_;
     result.admission_limit = controller_.stats().current_limit;
 
