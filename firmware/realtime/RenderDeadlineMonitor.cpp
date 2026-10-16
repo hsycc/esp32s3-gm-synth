@@ -1,16 +1,11 @@
 #include "RenderDeadlineMonitor.h"
 
+#include "util/SaturatingCounter.h"
+
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 
 namespace gm_synth::realtime {
-
-void RenderDeadlineMonitor::saturatingIncrement(std::uint64_t& value) {
-    if (value != std::numeric_limits<std::uint64_t>::max()) {
-        ++value;
-    }
-}
 
 std::size_t RenderDeadlineMonitor::observeBlock(
     std::uint32_t render_time_us,
@@ -21,7 +16,7 @@ std::size_t RenderDeadlineMonitor::observeBlock(
         ++window_count_;
     }
 
-    saturatingIncrement(stats_.blocks_observed);
+    util::saturatingIncrement(stats_.blocks_observed);
     stats_.last_render_us = render_time_us;
     stats_.peak_render_us = std::max(stats_.peak_render_us, render_time_us);
     stats_.window_count = window_count_;
@@ -29,16 +24,16 @@ std::size_t RenderDeadlineMonitor::observeBlock(
     const bool effective_miss = deadline_missed ||
         render_time_us >= controller_.config().block_budget_us;
     if (effective_miss) {
-        saturatingIncrement(stats_.deadline_misses);
+        util::saturatingIncrement(stats_.deadline_misses);
     }
 
     return controller_.observeBlock(render_time_us, deadline_missed);
 }
 
 std::size_t RenderDeadlineMonitor::observeDeadlineMissWithoutTiming() {
-    saturatingIncrement(stats_.blocks_observed);
-    saturatingIncrement(stats_.deadline_misses);
-    saturatingIncrement(stats_.untimed_deadline_misses);
+    util::saturatingIncrement(stats_.blocks_observed);
+    util::saturatingIncrement(stats_.deadline_misses);
+    util::saturatingIncrement(stats_.untimed_deadline_misses);
     return controller_.observeBlock(0, true);
 }
 
