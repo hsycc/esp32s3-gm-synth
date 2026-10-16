@@ -55,8 +55,12 @@ public:
 
 private:
     std::array<RealtimeEvent, kCapacity> events_{};
-    alignas(64) std::atomic<std::uint32_t> head_{0};
-    alignas(64) std::atomic<std::uint32_t> tail_{0};
+
+    // 32-bit atomics are naturally aligned on ESP32-S3. Avoid desktop-style
+    // cache-line over-alignment here: Xtensa does not need 64-byte alignment
+    // for SPSC correctness, and excessive alignment can exceed target limits.
+    std::atomic<std::uint32_t> head_{0};
+    std::atomic<std::uint32_t> tail_{0};
 
     bool producer_has_timestamp_ = false;
     std::uint64_t producer_last_timestamp_ = 0;
