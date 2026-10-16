@@ -18,9 +18,10 @@ enum class PlaybackMaterializationStatus : std::uint8_t {
 enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueNone = 0,
 
-    // Velocity attenuation/filter, CC7/10/11/91/93 and Pitch Wheel/RPN are
-    // represented now. Remaining mandatory SF2 defaults are chiefly the
-    // mod-wheel/channel-pressure vibrato-LFO routes.
+    // Reserved historical diagnostic bit. The mandatory runtime routes currently
+    // targeted for V1 (velocity attenuation/filter, Channel Pressure/CC1
+    // vibrato, CC7/10/11/91/93 and Pitch Wheel/RPN) are represented now. Keep
+    // the bit position stable for old telemetry decoders, but do not emit it.
     PlaybackIssueDefaultModulatorsPending = std::uint64_t{1} << 0,
     PlaybackIssueCustomModulatorsPending = std::uint64_t{1} << 1,
     PlaybackIssueUnknownGenerator = std::uint64_t{1} << 2,
@@ -48,6 +49,8 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     // means non-zero resonance or dynamic mod-env/LFO filter motion is pending.
     PlaybackIssueFilterPending = std::uint64_t{1} << 15,
     PlaybackIssueModEnvelopePending = std::uint64_t{1} << 16,
+    // Vibrato LFO pitch is implemented. This bit now means Mod-LFO pitch,
+    // filter or volume modulation (gen5/10/13/21/22) is still pending.
     PlaybackIssueLfoPending = std::uint64_t{1} << 17,
     // Reverb/chorus generator + CC91/93 send values are preserved and updated
     // sample-accurately in Voice state; this bit means the actual FX bus/DSP
