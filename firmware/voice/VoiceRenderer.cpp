@@ -317,7 +317,8 @@ void Voice::reset() {
 
 bool VoicePool::start(const VoiceStartParams& params) {
     ++stats_.start_attempts;
-    if (activeVoiceCount() >= admission_limit_) {
+    const std::size_t active = activeVoiceCount();
+    if (admission_limit_ < kHardVoiceCap && active >= admission_limit_) {
         ++stats_.start_failures_admission;
         return false;
     }
@@ -331,7 +332,7 @@ bool VoicePool::start(const VoiceStartParams& params) {
             return false;
         }
         ++stats_.start_successes;
-        stats_.active_voices = activeVoiceCount();
+        stats_.active_voices = active + 1u;
         stats_.peak_active_voices = std::max(stats_.peak_active_voices, stats_.active_voices);
         return true;
     }
