@@ -6,8 +6,8 @@ config GM_SYNTH_PCM_ARENA_BYTES
     range 1048576 6291456
     help
         PSRAM bytes reserved as the contiguous PCM residency arena during
-        ESP32-S3 N16R8 bring-up. The default is 4 MiB until real hardware
-        telemetry proves that a larger arena leaves sufficient system reserve.
+        ESP32-S3 N16R8 bring-up. The production/default value remains 4 MiB;
+        dedicated qualification configs may request a larger measured arena.
 
 menu "SF2 storage benchmark"
 
@@ -48,14 +48,13 @@ config GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE
         control/storage benchmark only; it must never run in the audio task.
 
 config GM_SYNTH_QEMU_FLASH_SF2_TEST
-    bool "Mount QEMU-only raw FATFS SF2 flash fixture"
+    bool "Mount benchmark raw FATFS SF2 flash fixture"
     default n
     help
-        QEMU/CI integration test only. Mounts the read-only raw SPI-flash FATFS
-        partition labelled qemu_sf2 at /sf2 before the storage benchmark. The
-        dedicated QEMU build generates that partition from a pinned public SF2.
-        The same raw-fixture mechanism is also reused by the dedicated physical
-        hardware benchmark build; do not enable it in production firmware.
+        Integration/qualification build option. Mounts the read-only raw
+        SPI-flash FATFS partition labelled qemu_sf2 at /sf2 before the storage
+        benchmark. The historical name is retained for compatibility; the same
+        raw fixture is intentionally used by QEMU and physical N16R8 builds.
 
 endif
 
@@ -67,11 +66,21 @@ config GM_SYNTH_RENDER_BENCHMARK_ENABLE
     bool "Run deterministic Voice DSP render benchmark at boot"
     default n
     help
-        Bring-up/CI benchmark only. Renders fixed 4/8/12/16/20/24-Voice
-        workloads using an in-memory deterministic looping PCM fixture and
-        reports min/avg/p50/p95/p99/max block times plus deadline and checksum
-        telemetry. QEMU values are regression baselines only; N16R8 hardware
-        remains authoritative for CPU headroom and stable polyphony.
+        Bring-up/CI benchmark only. Renders fixed Voice-count workloads using
+        an in-memory deterministic looping PCM fixture and reports min/avg/
+        p50/p95/p99/max block times plus deadline and checksum telemetry.
+
+if GM_SYNTH_RENDER_BENCHMARK_ENABLE
+
+config GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
+    bool "Mark render telemetry as physical qualification evidence"
+    default n
+    help
+        Enable only in the dedicated physical N16R8 qualification image. QEMU
+        must leave this disabled so its timing remains explicitly labelled as
+        regression telemetry rather than hardware performance evidence.
+
+endif
 
 endmenu
 

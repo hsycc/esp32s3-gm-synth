@@ -30,7 +30,15 @@ constexpr std::uint32_t kSampleRate = 44100;
 constexpr std::uint32_t kBlockBudgetUs = 1451;
 constexpr std::size_t kWarmupBlocks = 16;
 constexpr std::size_t kMeasuredBlocks = realtime::RenderDeadlineMonitor::kWindowSize;
-constexpr std::array<std::size_t, 6> kVoiceCounts{{4, 8, 12, 16, 20, 24}};
+constexpr std::array<std::size_t, 8> kVoiceCounts{{1, 4, 8, 12, 16, 18, 20, 24}};
+
+#ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
+constexpr char kTimingScope[] = "hardware";
+constexpr unsigned kPhysicalTimingEvidence = 1;
+#else
+constexpr char kTimingScope[] = "qemu_regression";
+constexpr unsigned kPhysicalTimingEvidence = 0;
+#endif
 
 voice::AdaptivePolyphonyConfig fixedBenchmarkPolicy() {
     voice::AdaptivePolyphonyConfig config{};
@@ -46,9 +54,9 @@ voice::AdaptivePolyphonyConfig fixedBenchmarkPolicy() {
 }
 
 void initializePcm(std::array<std::int16_t, kPcmFrames>& pcm) {
-    // Deterministic low-amplitude triangle-ish waveform. Even 24 unity-gain
-    // voices remain below int16 clipping, so the benchmark measures normal mix
-    // cost rather than saturation behavior.
+    // Deterministic low-amplitude triangle-ish waveform. Even the 24-Voice
+    // case stays in a useful bounded range while exercising interpolation,
+    // Voice mixing, effects processing and final saturation checks.
     for (std::size_t i = 0; i < pcm.size(); ++i) {
         const std::int32_t phase = static_cast<std::int32_t>(i % 128u);
         const std::int32_t triangle = phase < 64 ? phase : 127 - phase;
@@ -136,12 +144,14 @@ bool runOptionalRenderTimingBenchmark() {
 
     ESP_LOGI(
         kTag,
-        "render_bench: START frames_per_block=%u sample_rate=%u warmup_blocks=%u measured_blocks=%u budget_us=%u qemu_timing_regression_only=1",
+        "render_bench: START frames_per_block=%u sample_rate=%u warmup_blocks=%u measured_blocks=%u budget_us=%u timing_scope=%s physical_timing_evidence=%u",
         static_cast<unsigned>(realtime::ScheduledAudioBlockRenderer::kFramesPerBlock),
         static_cast<unsigned>(kSampleRate),
         static_cast<unsigned>(kWarmupBlocks),
         static_cast<unsigned>(kMeasuredBlocks),
-        static_cast<unsigned>(kBlockBudgetUs));
+        static_cast<unsigned>(kBlockBudgetUs),
+        kTimingScope,
+        kPhysicalTimingEvidence);
 
     std::uint64_t block_start_frame = 0;
     for (const std::size_t voice_count : kVoiceCounts) {
@@ -239,10 +249,12 @@ bool runOptionalRenderTimingBenchmark() {
 
     ESP_LOGI(
         kTag,
-        "render_bench: PASS cases=%u final_refs=0 clock_faults=%llu duration_clamps=%llu qemu_timing_regression_only=1",
+        "render_bench: PASS cases=%u final_refs=0 clock_faults=%llu duration_clamps=%llu timing_scope=%s physical_timing_evidence=%u",
         static_cast<unsigned>(kVoiceCounts.size()),
         static_cast<unsigned long long>(timed_renderer.stats().clock_faults),
-        static_cast<unsigned long long>(timed_renderer.stats().duration_clamps));
+        static_cast<unsigned long long>(timed_renderer.stats().duration_clamps),
+        kTimingScope,
+        kPhysicalTimingEvidence);
     return true;
 }
 

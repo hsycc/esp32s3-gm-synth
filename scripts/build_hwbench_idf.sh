@@ -18,10 +18,6 @@ if [[ ! -f "$IDF_PY" ]]; then
     exit 1
 fi
 
-# Some ESP-IDF environment managers (including Espressif's newer activation
-# flow) expose idf.py as a shell function instead of adding $IDF_PATH/tools to
-# PATH. Shell functions are not inherited by this bash script, so invoke the
-# real idf.py through the activated ESP-IDF Python environment explicitly.
 if [[ -n "${IDF_PYTHON_ENV_PATH:-}" && -x "$IDF_PYTHON_ENV_PATH/bin/python" ]]; then
     IDF_PYTHON="$IDF_PYTHON_ENV_PATH/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
@@ -84,7 +80,7 @@ if [[ "$fixture_bytes" -ne 5898214 ]]; then
     exit 1
 fi
 
-echo "== Configure ESP32-S3 N16R8 hardware benchmark =="
+echo "== Configure ESP32-S3 N16R8 M6 qualification image =="
 run_idf -B "$BUILD_DIR" \
     -D "SDKCONFIG=$SDKCONFIG_PATH" \
     -D "SDKCONFIG_DEFAULTS=$ROOT_DIR/sdkconfig.defaults;$ROOT_DIR/sdkconfig.hwbench.defaults" \
@@ -93,17 +89,20 @@ run_idf -B "$BUILD_DIR" \
 echo "== Build firmware + raw FATFS fixture =="
 run_idf -B "$BUILD_DIR" build
 
-echo "== Verify hardware benchmark configuration =="
+echo "== Verify M6 qualification configuration =="
 grep -q '^CONFIG_IDF_TARGET="esp32s3"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHMODE_DIO=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHFREQ_80M=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_SPEED_80M=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
 
 if [[ ! -f "$BUILD_DIR/qemu_sf2.bin" ]]; then
@@ -119,17 +118,21 @@ if [[ -f "$BUILD_DIR/flash_args" ]]; then
 fi
 
 echo
-echo "Hardware benchmark image is ready."
+echo "N16R8 M6 qualification image is ready."
 echo "  build dir : $BUILD_DIR"
 echo "  sdkconfig : $SDKCONFIG_PATH"
 echo "  flash     : DIO / 80 MHz / 16 MiB"
 echo "  fixture   : $fixture_bytes bytes"
+echo "  PCM arena : 4.50 MiB (4718592 bytes)"
 echo "  storage   : 4 MiB per chunk size (4/8/16/32/64 KiB)"
 echo "  prepare   : cold/warm + cache pressure/LRU + commit/retire/release-tail"
+echo "  render    : 1/4/8/12/16/18/20/24 Voices, 64-frame blocks"
+echo "  memory    : PSRAM + internal-SRAM snapshots before/after Prepare/Render"
+echo "  I2S       : not started by this qualification image"
 
 if [[ -n "$PORT" ]]; then
     echo
-    echo "== Flash hardware benchmark to $PORT =="
+    echo "== Flash M6 qualification image to $PORT =="
     run_idf -B "$BUILD_DIR" -p "$PORT" flash
     echo
     echo "Flash complete. Start the serial monitor with:"

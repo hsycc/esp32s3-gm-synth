@@ -124,12 +124,12 @@ jobs:
           set -euo pipefail
           python -m tools.render_benchmark.report \
             reports/qemu-sf2-flash.log \
-            --expected-voices 4 8 12 16 20 24 \
+            --expected-voices 1 4 8 12 16 18 20 24 \
             --title "ESP32-S3 QEMU Voice DSP Render Timing Telemetry" \
             --output reports/qemu-render-timing.md
           cat reports/qemu-render-timing.md
 
-      - name: Build physical N16R8 storage benchmark image
+      - name: Build physical N16R8 M6 qualification image
         shell: bash
         run: |
           set -euo pipefail
@@ -151,10 +151,10 @@ jobs:
             sdkconfig.qemu
           if-no-files-found: warn
 
-      - name: Upload physical N16R8 storage benchmark image
+      - name: Upload physical N16R8 M6 qualification image
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-n16r8-storage-benchmark
+          name: esp32s3-n16r8-m6-qualification
           path: |
             build-hwbench/bootloader/bootloader.bin
             build-hwbench/partition_table/partition-table.bin

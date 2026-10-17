@@ -1,24 +1,32 @@
-# Dedicated real-hardware ESP32-S3 N16R8 internal-flash storage + Program Prepare benchmark.
-# Layer this file after sdkconfig.defaults. It deliberately reuses the same
-# raw-FATFS fixture path exercised by QEMU so emulator and hardware runs parse
-# the exact same SF2 bytes and execute the exact same VFS -> PSRAM code path.
+# Dedicated physical ESP32-S3 N16R8 M6 qualification image.
+# Layer this file after sdkconfig.defaults. It reuses the same raw-FATFS fixture
+# as QEMU for storage/Program Prepare comparability, but physical timing is
+# explicitly marked as hardware qualification evidence.
 
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_qemu.csv"
 
+# Host GM128 qualification found 4.50 MiB to be the first tested arena that can
+# admit the representative 16-channel Active + worst READY transaction. This
+# dedicated hardware image measures whether that candidate leaves safe total
+# N16R8 memory headroom. The normal firmware default remains 4 MiB.
+CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592
+
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"
-# Real hardware uses the production-sized sweep: every 4/8/16/32/64 KiB pass
-# reads 4 MiB from the real SF2 smpl payload directly into the PSRAM arena.
+# Keep the established physical storage sweep at 4 MiB for direct comparison
+# with the 2026-10-15 baseline even though the qualification arena is 4.5 MiB.
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304
 
-# After residency initialization, exercise cold/warm Program Prepare, cache
-# pressure + safe LRU eviction, block-boundary commit/retire and release-tail
-# lifetime using the same mounted SF2.
+# Exercise cold/warm Program Prepare, cache pressure + safe LRU eviction,
+# block-boundary commit/retire and release-tail lifetime using the mounted SF2.
 CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y
 
-# Despite the historical QEMU name, this option only enables the generated
-# raw-flash FATFS fixture and its read-only mount. It is hardware-agnostic and
-# intentionally reused here until the configuration name is generalized.
+# Measure the actual Voice DSP render path at fixed Voice counts on hardware.
+CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y
+
+# Historical name retained for compatibility: this mounts the generated raw
+# flash FATFS fixture and is intentionally shared by QEMU and physical builds.
 CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y
