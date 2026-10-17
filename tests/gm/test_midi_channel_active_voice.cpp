@@ -2,6 +2,7 @@
 #include "gm/ZoneResolver.h"
 #include "sample/PublishedSampleDirectory.h"
 #include "sf2/Sf2ModulationMath.h"
+#include "sf2/Sf2PanMath.h"
 #include "voice/VoiceRenderer.h"
 
 #include <array>
@@ -22,6 +23,7 @@ using gm_synth::sample::PublishedSampleDirectory;
 using gm_synth::sample::ResidentRecord;
 using gm_synth::sample::SampleDescriptor;
 using gm_synth::sf2::channelEffectsSendSf2Units;
+using gm_synth::sf2::sf2PanChannelGainQ15;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::Voice;
 using gm_synth::voice::VoicePool;
@@ -66,7 +68,7 @@ PlaybackZone liveZone() {
     zone.note_on_gain.initial_attenuation_cb = 0;
     zone.note_on_gain.velocity_to_attenuation_cb = 0;
     zone.note_on_gain.volume_to_attenuation_cb = 960;
-    zone.note_on_gain.pan_amount = 1000;
+    zone.note_on_gain.pan_amount = 500;
     zone.note_on_gain.expression_to_attenuation_cb = 960;
     zone.note_on_gain.pan_sf2_units = 0;
     zone.note_on_gain.fixed_velocity = -1;
@@ -184,8 +186,8 @@ void testLiveGainPanAndPitchUpdateAlreadySoundingVoice() {
 
     VoiceSnapshot snapshot = activeVoice(f.voices);
     assert(snapshot.phase_increment_q32 == kPhaseOneQ32);
-    assert(snapshot.gain_left_q15 == kQ15Unity);
-    assert(snapshot.gain_right_q15 == kQ15Unity);
+    assert(snapshot.gain_left_q15 == sf2PanChannelGainQ15(0, true));
+    assert(snapshot.gain_right_q15 == sf2PanChannelGainQ15(0, false));
 
     assert(f.applier.apply(cc(7, 80), f.voices));
     const VoiceSnapshot volume = activeVoice(f.voices);
@@ -198,12 +200,15 @@ void testLiveGainPanAndPitchUpdateAlreadySoundingVoice() {
 
     assert(f.applier.apply(cc(7, 127), f.voices));
     assert(f.applier.apply(cc(11, 127), f.voices));
-    assert(f.applier.apply(cc(10, 32), f.voices));
+    assert(f.applier.apply(cc(10, 0), f.voices));
     const VoiceSnapshot left = activeVoice(f.voices);
     assert(left.gain_left_q15 == kQ15Unity);
     assert(left.gain_right_q15 == 0);
 
     assert(f.applier.apply(cc(10, 64), f.voices));
+    const VoiceSnapshot recentered = activeVoice(f.voices);
+    assert(recentered.gain_left_q15 == sf2PanChannelGainQ15(0, true));
+    assert(recentered.gain_right_q15 == sf2PanChannelGainQ15(0, false));
     assert(f.applier.apply(pitchBend(16383), f.voices));
     const VoiceSnapshot bent = activeVoice(f.voices);
     assert(bent.phase_increment_q32 == ZoneResolver::transposeSemitones(kPhaseOneQ32, 2));
@@ -302,8 +307,8 @@ void testResetControllersReleasesSustainAndRecentersActivePitch() {
 
     const VoiceSnapshot after = activeVoice(f.voices);
     assert(after.phase_increment_q32 == kPhaseOneQ32);
-    assert(after.gain_left_q15 < kQ15Unity);
-    assert(after.gain_right_q15 == 0);
+    assert(after.gain_left_q15 > after.gain_right_q15);
+    assert(after.gain_right_q15 > 0);
     // CC121 preserves channel effect-send mix state and therefore the sounding
     // Voice send state too; full GM reset is the operation that zeros CC91/93.
     assert(after.reverb_send_units == before.reverb_send_units);
