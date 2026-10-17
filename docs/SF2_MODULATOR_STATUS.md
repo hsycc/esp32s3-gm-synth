@@ -1,10 +1,10 @@
 # SF2 Modulator Runtime Status
 
-This note records the runtime-modulator coverage that is continuously exercised by the SoundFont subsets committed to this repository. It is a qualification statement for those exact checked-in assets, not a claim that arbitrary SF2 custom modulators are universally supported.
+This note records the runtime-modulator coverage that is continuously exercised by the SoundFont assets committed to this repository. It is a qualification statement for those exact checked-in assets, not a claim that arbitrary SF2 custom modulators are universally supported.
 
 ## Checked-in real-bank closure
 
-The Phase G host gate resolves every preset in the current checked-in subsets and requires zero unsupported modulator records for each resolved program/zone.
+The Phase G host gate resolves every preset in the compact compatibility subsets and requires zero unsupported modulator records for each resolved program/zone. The tracked full FM/GM source is additionally used as the GM128 + standard-drum Program Prepare baseline.
 
 ### GeneralUser GS subset
 
@@ -28,11 +28,22 @@ The generic immutable NoteOn source evaluator is deliberately bounded and curren
 
 The current subset contains 23 bank-0 presets. Its effective `imod` records are the zero-amount SF2 2.01 velocity/filter cancellation pattern (`sourceOper 0x0102`, `amountSourceOper 0x0D02`, destination `initialFilterFc`). The resolver recognizes this pattern as supported semantic cancellation rather than reporting it as an unknown custom modulator.
 
-### FM/GM Open subset
+### FM/GM Open compact subset
 
-The current checked-in subset contains 67 bank-0 presets and no effective file-defined `pmod`/`imod` records. Every one of those 67 presets is required to pass strict Program Prepare with no preview-only issue and no unsupported modulator diagnostic.
+The 6 MiB checked-in subset contains 67 bank-0 presets and no effective file-defined `pmod`/`imod` records. Every one of those 67 presets is required to pass strict Program Prepare with no preview-only issue and no unsupported modulator diagnostic. It remains the fast parser/resolver fixture used by storage/QEMU tests.
 
-This asset is **not** the final GM128 qualification bank: the checked-in subset currently has 67 melodic presets and no bank-128 drum preset. Final product qualification still requires all 128 GM melodic programs plus the standard drum path as defined in `REQUIREMENTS.md`.
+### FM/GM Open full GM baseline
+
+The repository also tracks `assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2` as an ordinary Git file. Phase G uses that full source for the GM semantic gate rather than treating the 67-preset subset as final GM coverage.
+
+The full-bank gate requires:
+- bank 0 programs 0–127 all StrictQualified Program Prepare successfully;
+- representative low/mid/high notes resolve to prepared zones for every melodic program;
+- bank 128 / program 0 prepares successfully as the standard drum path;
+- required GM drum notes 35–81 are covered by fixed-pitch prepared zones;
+- every prepared program reports zero unsupported modulator records and zero Preview zones.
+
+This is a host semantic qualification of the checked-in bank. It does not replace physical N16R8 audio/deadline/polyphony qualification or listening/reference-render checks.
 
 ## Compatibility boundary
 
