@@ -1,6 +1,7 @@
 #include "Sf2PlaybackMaterializer.h"
 
 #include "Sf2FilterMath.h"
+#include "Sf2ResonantFilterMath.h"
 #include "../voice/PitchMath.h"
 
 #include <algorithm>
@@ -207,9 +208,9 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         issues |= PlaybackIssueInvalidFixedVelocity;
     }
 
-    // Static cutoff, velocity, Mod-LFO and Mod-Envelope cutoff movement are
-    // represented. Resonance remains explicit until Q/gain behavior is qualified.
-    if (output_sample_rate_ != kSf2FilterOutputSampleRate || native.initialFilterQCb() != 0) {
+    // The current fixed-point filter path covers static cutoff, velocity,
+    // resonance, Mod-LFO and Mod-Envelope movement at 44.1 kHz.
+    if (output_sample_rate_ != kSf2FilterOutputSampleRate) {
         issues |= PlaybackIssueFilterPending;
     }
     // Both SoundFont LFOs and the modulation envelope are represented. Their
@@ -280,9 +281,15 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     }
 
     // Retain the prepared static gains for direct/legacy PlaybackZone users.
-    // SF2-generated zones additionally carry the raw note-on summing state;
-    // ZoneResolver recomputes final gains from it before Voice::start().
-    double static_gain = centibelsToLinear(native.initialAttenuationCb());
+    // SF2 initialFilterQ reduces DC gain by half its cB amount; normal SF2
+    // runtime users get the same compensation in ZoneResolver's NoteOn sum.
+    const std::int32_t static_attenuation_cb = static_cast<std::int32_t>(
+        std::clamp<std::int64_t>(
+            static_cast<std::int64_t>(native.initialAttenuationCb()) +
+                resonanceDcAttenuationCb(native.initialFilterQCb()),
+            std::numeric_limits<std::int32_t>::min(),
+            std::numeric_limits<std::int32_t>::max()));
+    double static_gain = centibelsToLinear(static_attenuation_cb);
     if (!std::isfinite(static_gain)) {
         static_gain = 0.0;
     }
