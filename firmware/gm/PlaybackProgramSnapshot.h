@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sample/ProgramSnapshot.h"
+#include "sf2/Sf2ModulationMath.h"
 #include "voice/VoiceRenderer.h"
 
 #include <array>
@@ -48,11 +49,30 @@ struct NoteOnFilterConfig {
     // The contribution is evaluated once at NoteOn before Q24 coefficients and
     // the SoundFont Q/2 gain compensation are prepared.
     std::int32_t velocity_to_resonance_cb = 0;
+    // Additional file-defined immutable NoteOn key/velocity sources targeting
+    // initialFilterFc. Source-oper carries linear/concave/convex/switch plus
+    // direction/polarity, so adding a new supported source shape no longer
+    // requires another PlaybackZone scalar field.
+    std::array<
+        sf2::Sf2NoteOnSourceRoute,
+        sf2::kSf2MaxNoteOnSourceRoutesPerDestination> additional_cutoff_routes{};
+    std::uint8_t additional_cutoff_route_count = 0;
 
     bool valid() const {
-        return !enabled ||
-            (initial_cutoff_cents >= 1500 && initial_cutoff_cents <= 13500 &&
-             resonance_cb >= 0 && resonance_cb <= 960);
+        if (!enabled) {
+            return true;
+        }
+        if (initial_cutoff_cents < 1500 || initial_cutoff_cents > 13500 ||
+            resonance_cb < 0 || resonance_cb > 960 ||
+            additional_cutoff_route_count > additional_cutoff_routes.size()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < additional_cutoff_route_count; ++index) {
+            if (!additional_cutoff_routes[index].valid()) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
@@ -117,9 +137,8 @@ struct ModEnvelopeConfig {
 };
 
 // Prepared SF2 reverb/chorus generator summing state. The runtime computes the
-// current send from the static generator plus CC91/CC93. These values are
-// carried all the way into Voice even before the actual FX processors exist so
-// controller semantics and future routing do not need another metadata change.
+// current send from the static generator plus CC91/CC93, stores it in Voice and
+// routes it through the global chorus/reverb buses at render time.
 struct EffectsSendConfig {
     bool enabled = false;
     std::int16_t reverb_sf2_units = 0;
