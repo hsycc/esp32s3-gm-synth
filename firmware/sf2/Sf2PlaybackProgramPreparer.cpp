@@ -256,6 +256,7 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     }
 
     result.required_zone_capacity = required_playback_zones;
+    result.zone_count = required_playback_zones;
     if (required_playback_zones > gm::PlaybackProgramSnapshot::kMaxZones ||
         required_playback_zones > std::numeric_limits<std::uint16_t>::max() ||
         required_playback_zones > request.playback_capacity ||
@@ -424,7 +425,6 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     }
 
     *request.snapshot = candidate;
-    result.zone_count = required_playback_zones;
     result.status = PlaybackPrepareStatus::Ok;
     return result;
 }
