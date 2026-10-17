@@ -10,6 +10,7 @@ on:
       - "tests/realtime/**"
       - "tests/voice/test_voice_realtime_fast_path.cpp"
       - "tests/voice/test_global_effects_fast_path.cpp"
+      - "tests/voice/test_effects_send_scaling.cpp"
       - ".github/workflows/m5-realtime-tests.yml"
   pull_request:
     paths:
@@ -19,6 +20,7 @@ on:
       - "tests/realtime/**"
       - "tests/voice/test_voice_realtime_fast_path.cpp"
       - "tests/voice/test_global_effects_fast_path.cpp"
+      - "tests/voice/test_effects_send_scaling.cpp"
       - ".github/workflows/m5-realtime-tests.yml"
 
 jobs:
@@ -53,9 +55,18 @@ jobs:
             firmware/voice/GlobalEffectsProcessor.cpp \
             tests/voice/test_global_effects_fast_path.cpp \
             -o build/host-tests/test_global_effects_fast_path
+
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            tests/voice/test_effects_send_scaling.cpp \
+            -o build/host-tests/test_effects_send_scaling
       - name: Run sample-accurate realtime tests
         run: ./build/host-tests/test_scheduled_audio
       - name: Run bit-exact Voice realtime fast-path tests
         run: ./build/host-tests/test_voice_realtime_fast_path
       - name: Run bit-exact global effects ring-index tests
         run: ./build/host-tests/test_global_effects_fast_path
+      - name: Run exact effects send-scaling tests
+        run: ./build/host-tests/test_effects_send_scaling
