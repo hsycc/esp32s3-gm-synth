@@ -66,23 +66,20 @@ std::int32_t divideSignedRounded(std::int64_t numerator, std::int64_t denominato
         std::numeric_limits<std::int32_t>::max()));
 }
 
-std::int32_t unipolarCurveQ15(std::uint8_t value, Sf2SourceCurve curve) {
-    const std::size_t index = std::min<std::size_t>(value, 127u);
+std::int32_t unipolarCurveQ15(std::uint8_t numerator, Sf2SourceCurve curve) {
+    const std::size_t index = std::min<std::size_t>(numerator, 127u);
     switch (curve) {
         case Sf2SourceCurve::Linear:
             return static_cast<std::int32_t>(
                 (static_cast<std::int64_t>(index) * kSourceQ15One + 64) / 128);
         case Sf2SourceCurve::Concave:
             return std::min<std::int32_t>(kConcaveQ15[index], kSource127Over128Q15);
-        case Sf2SourceCurve::Convex: {
-            const std::size_t mirror = 127u - index;
-            const std::int32_t mirrored_concave = std::min<std::int32_t>(
-                kConcaveQ15[mirror],
+        case Sf2SourceCurve::Convex:
+            return std::min<std::int32_t>(
+                kSourceQ15One - kConcaveQ15[127u - index],
                 kSource127Over128Q15);
-            return kSource127Over128Q15 - mirrored_concave;
-        }
         case Sf2SourceCurve::Switch:
-            return index >= 64u ? kSource127Over128Q15 : 0;
+            return index >= 64u ? kSourceQ15One : 0;
     }
     return 0;
 }
@@ -90,35 +87,35 @@ std::int32_t unipolarCurveQ15(std::uint8_t value, Sf2SourceCurve curve) {
 std::int32_t nonlinearSourceQ15(
     const Sf2SourceDescriptor& source,
     std::uint8_t input) {
-    const std::uint8_t clamped = static_cast<std::uint8_t>(
+    const std::int32_t clamped = static_cast<std::int32_t>(
         std::min<unsigned>(input, 127u));
     if (!source.bipolar) {
-        if (!source.negative) {
-            return unipolarCurveQ15(clamped, source.curve);
-        }
-        if (clamped == 0u) {
-            return kSourceQ15One;
-        }
-        if (clamped >= 127u) {
-            return 0;
-        }
-        const std::uint8_t reversed = static_cast<std::uint8_t>(128u - clamped);
-        return unipolarCurveQ15(reversed, source.curve);
+        const std::int32_t numerator = source.negative ? 127 - clamped : clamped;
+        return unipolarCurveQ15(static_cast<std::uint8_t>(numerator), source.curve);
     }
 
-    std::int32_t bipolar_numerator = 2 * static_cast<std::int32_t>(clamped) - 128;
-    if (source.negative) {
-        bipolar_numerator = -bipolar_numerator;
+    // SF2's bipolar mapping is asymmetric at the positive endpoint: +127/128
+    // is preserved, while the opposite endpoint can reach -1.0. Negative
+    // direction mirrors this rule around the source domain.
+    std::int32_t signed_numerator = 0;
+    if (!source.negative) {
+        signed_numerator = clamped == 127 ? 127 : 2 * clamped - 128;
+    } else {
+        signed_numerator = clamped == 0 ? 127 : 126 - 2 * clamped;
     }
+
     if (source.curve == Sf2SourceCurve::Switch) {
-        return bipolar_numerator >= 0 ? kSourceQ15One : -kSourceQ15One;
+        return signed_numerator >= 0 ? kSourceQ15One : -kSourceQ15One;
     }
 
-    const bool negative = bipolar_numerator < 0;
-    const std::int32_t magnitude = negative ? -bipolar_numerator : bipolar_numerator;
-    const std::int32_t mapped = magnitude >= 128
-        ? kSourceQ15One
-        : unipolarCurveQ15(static_cast<std::uint8_t>(magnitude), source.curve);
+    const bool negative = signed_numerator < 0;
+    const std::int32_t magnitude = negative ? -signed_numerator : signed_numerator;
+    if (negative && magnitude >= 128) {
+        return -kSourceQ15One;
+    }
+    const std::int32_t mapped = unipolarCurveQ15(
+        static_cast<std::uint8_t>(std::min<std::int32_t>(magnitude, 127)),
+        source.curve);
     return negative ? -mapped : mapped;
 }
 
@@ -154,25 +151,17 @@ std::int32_t noteOnSourceToAmount(
     const std::int32_t clamped = static_cast<std::int32_t>(
         std::min<unsigned>(input, 127u));
 
-    // Keep linear routes exactly on the same 128-step integer model already
-    // used by positiveLinearToAmount(), velocityToFilterCutoffCents() and CC10.
     if (source.curve == Sf2SourceCurve::Linear) {
-        if (source.bipolar) {
-            std::int32_t numerator = 2 * clamped - 128;
-            if (source.negative) {
-                numerator = -numerator;
-            }
-            return divideSignedRounded(
-                static_cast<std::int64_t>(amount) * numerator,
-                128);
-        }
-
-        std::int32_t factor = clamped;
-        if (source.negative) {
-            factor = clamped >= 127 ? 0 : 128 - clamped;
+        std::int32_t numerator = 0;
+        if (!source.bipolar) {
+            numerator = source.negative ? 127 - clamped : clamped;
+        } else if (!source.negative) {
+            numerator = clamped == 127 ? 127 : 2 * clamped - 128;
+        } else {
+            numerator = clamped == 0 ? 127 : 126 - 2 * clamped;
         }
         return divideSignedRounded(
-            static_cast<std::int64_t>(amount) * factor,
+            static_cast<std::int64_t>(amount) * numerator,
             128);
     }
 
