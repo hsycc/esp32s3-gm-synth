@@ -34,6 +34,7 @@ constexpr std::array<std::uint32_t, 100> kCentRatioQ20{
 
 constexpr std::uint32_t kRatioFractionBits = 20;
 constexpr std::uint64_t kRatioRounding = std::uint64_t{1} << (kRatioFractionBits - 1u);
+constexpr std::size_t kLfoTableCenter = voice::kLfoControlPointCount / 2u;
 
 std::uint64_t multiplyRatioQ20(std::uint64_t value, std::uint32_t ratio_q20) {
     if (value == 0 || ratio_q20 == 0) {
@@ -64,6 +65,14 @@ std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) 
     return zone.note_on_gain.enabled && zone.note_on_gain.fixed_velocity >= 0
         ? static_cast<std::uint8_t>(zone.note_on_gain.fixed_velocity)
         : velocity;
+}
+
+std::int32_t lfoControlPointAmount(std::int32_t depth, std::size_t index) {
+    const std::int32_t numerator =
+        static_cast<std::int32_t>(index) - static_cast<std::int32_t>(kLfoTableCenter);
+    const std::int64_t scaled = static_cast<std::int64_t>(depth) * numerator;
+    return static_cast<std::int32_t>(
+        scaled / static_cast<std::int32_t>(kLfoTableCenter));
 }
 
 std::uint32_t scaleEnvelopeFramesByTimecents(
@@ -98,6 +107,20 @@ void applyEnvelopeKeyScaling(
         static_cast<int>(zone.envelope_key_scaling.decay_timecents_per_key) * key_delta);
 }
 
+std::int32_t noteOnFilterCutoffCents(
+    const PlaybackZone& zone,
+    std::uint8_t effective_velocity) {
+    const std::int64_t summed_cutoff =
+        static_cast<std::int64_t>(zone.note_on_filter.initial_cutoff_cents) +
+        sf2::velocityToFilterCutoffCents(
+            effective_velocity,
+            zone.note_on_filter.velocity_to_cutoff_cents);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        summed_cutoff,
+        sf2::kSf2MinFilterCutoffCents,
+        sf2::kSf2MaxFilterCutoffCents));
+}
+
 void prepareNoteOnFilter(
     const PlaybackZone& zone,
     std::uint8_t effective_velocity,
@@ -105,24 +128,106 @@ void prepareNoteOnFilter(
     if (output == nullptr || !zone.note_on_filter.enabled) {
         return;
     }
-    const std::int64_t summed_cutoff =
-        static_cast<std::int64_t>(zone.note_on_filter.initial_cutoff_cents) +
-        sf2::velocityToFilterCutoffCents(
-            effective_velocity,
-            zone.note_on_filter.velocity_to_cutoff_cents);
-    const std::int32_t cutoff = static_cast<std::int32_t>(std::clamp<std::int64_t>(
-        summed_cutoff,
-        sf2::kSf2MinFilterCutoffCents,
-        sf2::kSf2MaxFilterCutoffCents));
-
     // Preview zones with non-zero Q are already explicitly marked
     // PlaybackIssueFilterPending. Apply the correct cutoff with the qualified
     // Q=0 response rather than dropping filtering altogether.
     (void)sf2::prepareLowpassQ24(
-        cutoff,
+        noteOnFilterCutoffCents(zone, effective_velocity),
         0,
         sf2::kSf2FilterOutputSampleRate,
         output);
+}
+
+void prepareModLfoFilterTable(
+    const PlaybackZone& zone,
+    std::uint8_t effective_velocity,
+    voice::LfoLowpassTable* output) {
+    if (output == nullptr) {
+        return;
+    }
+    *output = voice::LfoLowpassTable{};
+    if (!zone.note_on_filter.enabled || zone.mod_lfo.filter_depth_cents == 0) {
+        return;
+    }
+
+    const std::int32_t base_cutoff = noteOnFilterCutoffCents(zone, effective_velocity);
+    voice::LfoLowpassTable candidate{};
+    candidate.enabled = true;
+    for (std::size_t index = 0; index < candidate.points.size(); ++index) {
+        const std::int64_t cutoff =
+            static_cast<std::int64_t>(base_cutoff) +
+            lfoControlPointAmount(zone.mod_lfo.filter_depth_cents, index);
+        const std::int32_t clamped = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+            cutoff,
+            sf2::kSf2MinFilterCutoffCents,
+            sf2::kSf2MaxFilterCutoffCents));
+        if (!sf2::prepareLowpassQ24(
+                clamped,
+                0,
+                sf2::kSf2FilterOutputSampleRate,
+                &candidate.points[index])) {
+            return;
+        }
+    }
+    *output = candidate;
+}
+
+void prepareModLfoGainTable(
+    std::int32_t initial_attenuation_cb,
+    std::int32_t velocity_to_attenuation_cb,
+    std::uint8_t effective_velocity,
+    std::int32_t pan_sf2_units,
+    std::int32_t volume_depth_cb,
+    const MidiChannelState* state,
+    std::int32_t volume_to_attenuation_cb,
+    std::int32_t pan_amount,
+    std::int32_t expression_to_attenuation_cb,
+    voice::LfoGainTable* output) {
+    if (output == nullptr) {
+        return;
+    }
+    *output = voice::LfoGainTable{};
+    if (volume_depth_cb == 0) {
+        return;
+    }
+
+    voice::LfoGainTable candidate{};
+    candidate.enabled = true;
+    for (std::size_t index = 0; index < candidate.points.size(); ++index) {
+        const std::int64_t adjusted =
+            static_cast<std::int64_t>(initial_attenuation_cb) +
+            lfoControlPointAmount(volume_depth_cb, index);
+        const std::int32_t adjusted_initial = static_cast<std::int32_t>(
+            std::clamp<std::int64_t>(
+                adjusted,
+                std::numeric_limits<std::int32_t>::min(),
+                std::numeric_limits<std::int32_t>::max()));
+
+        if (state == nullptr) {
+            sf2::noteOnGainQ15(
+                adjusted_initial,
+                velocity_to_attenuation_cb,
+                effective_velocity,
+                pan_sf2_units,
+                &candidate.points[index].left,
+                &candidate.points[index].right);
+        } else {
+            sf2::channelNoteOnGainQ15(
+                adjusted_initial,
+                velocity_to_attenuation_cb,
+                effective_velocity,
+                pan_sf2_units,
+                state->volume,
+                volume_to_attenuation_cb,
+                state->pan,
+                pan_amount,
+                state->expression,
+                expression_to_attenuation_cb,
+                &candidate.points[index].left,
+                &candidate.points[index].right);
+        }
+    }
+    *output = candidate;
 }
 
 std::int32_t vibratoDepthCents(
@@ -167,6 +272,7 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     update.reverb_send_units = voice.reverbSendUnits();
     update.chorus_send_units = voice.chorusSendUnits();
     update.vibrato_pitch_depth_cents = voice.vibratoLfoConfig().pitch_depth_cents;
+    update.mod_lfo_gain_table = voice.modLfoConfig().gain_table;
 
     if (source.gain_enabled) {
         sf2::channelNoteOnGainQ15(
@@ -182,6 +288,20 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
             source.expression_to_attenuation_cb,
             &update.gain_left_q15,
             &update.gain_right_q15);
+    }
+
+    if (source.mod_lfo_gain_enabled) {
+        prepareModLfoGainTable(
+            source.initial_attenuation_cb,
+            source.velocity_to_attenuation_cb,
+            voice.velocity(),
+            source.pan_sf2_units,
+            source.mod_lfo_volume_depth_cb,
+            context->state,
+            source.volume_to_attenuation_cb,
+            source.pan_amount,
+            source.expression_to_attenuation_cb,
+            &update.mod_lfo_gain_table);
     }
 
     if (source.effects_send_enabled) {
@@ -352,6 +472,24 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.vibrato_lfo.pitch_depth_cents =
                 zone.vibrato_lfo.static_pitch_depth_cents;
         }
+        if (zone.mod_lfo.enabled) {
+            params.mod_lfo.enabled = true;
+            params.mod_lfo.delay_frames = zone.mod_lfo.delay_frames;
+            params.mod_lfo.phase_step_q32 = zone.mod_lfo.phase_step_q32;
+            params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
+            prepareModLfoGainTable(
+                zone.note_on_gain.initial_attenuation_cb,
+                zone.note_on_gain.velocity_to_attenuation_cb,
+                effective_velocity,
+                zone.note_on_gain.pan_sf2_units,
+                zone.mod_lfo.volume_depth_cb,
+                nullptr,
+                zone.note_on_gain.volume_to_attenuation_cb,
+                zone.note_on_gain.pan_amount,
+                zone.note_on_gain.expression_to_attenuation_cb,
+                &params.mod_lfo.gain_table);
+            prepareModLfoFilterTable(zone, effective_velocity, &params.mod_lfo.lowpass_table);
+        }
         batch->voices[batch->count++] = params;
     }
 
@@ -444,10 +582,30 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 zone.vibrato_lfo,
                 channel_state);
         }
+        if (zone.mod_lfo.enabled) {
+            params.mod_lfo.enabled = true;
+            params.mod_lfo.delay_frames = zone.mod_lfo.delay_frames;
+            params.mod_lfo.phase_step_q32 = zone.mod_lfo.phase_step_q32;
+            params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
+            prepareModLfoGainTable(
+                zone.note_on_gain.initial_attenuation_cb,
+                zone.note_on_gain.velocity_to_attenuation_cb,
+                effective_velocity,
+                zone.note_on_gain.pan_sf2_units,
+                zone.mod_lfo.volume_depth_cb,
+                &channel_state,
+                zone.note_on_gain.volume_to_attenuation_cb,
+                zone.note_on_gain.pan_amount,
+                zone.note_on_gain.expression_to_attenuation_cb,
+                &params.mod_lfo.gain_table);
+            prepareModLfoFilterTable(zone, effective_velocity, &params.mod_lfo.lowpass_table);
+        }
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
         params.realtime_control.vibrato_enabled = zone.vibrato_lfo.enabled;
+        params.realtime_control.mod_lfo_gain_enabled =
+            zone.mod_lfo.enabled && zone.mod_lfo.volume_depth_cb != 0;
         params.realtime_control.unbent_phase_increment_q32 = key_increment;
         params.realtime_control.initial_attenuation_cb =
             zone.note_on_gain.initial_attenuation_cb;
@@ -473,6 +631,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             zone.vibrato_lfo.channel_pressure_to_pitch_cents;
         params.realtime_control.modulation_wheel_to_vibrato_pitch_cents =
             zone.vibrato_lfo.modulation_wheel_to_pitch_cents;
+        params.realtime_control.mod_lfo_volume_depth_cb = zone.mod_lfo.volume_depth_cb;
         batch->voices[batch->count++] = params;
     }
 
