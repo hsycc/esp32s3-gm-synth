@@ -37,7 +37,8 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueInvalidRootKey = std::uint64_t{1} << 9,
     PlaybackIssueInvalidPhaseIncrement = std::uint64_t{1} << 10,
 
-    // Preserved native semantics which are not fully implemented yet.
+    // All valid SF2 scaleTuning values are represented. Keep this historical bit
+    // for malformed/out-of-range files that have to be clamped to 0..1200.
     PlaybackIssueScaleTuningPending = std::uint64_t{1} << 11,
     // Reserved historical diagnostic bits. Volume-envelope delay/hold and their
     // key scaling are implemented now; these bits are intentionally no longer
@@ -63,8 +64,8 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     // materialize(native, output) overload without per-zone modulator state.
     PlaybackIssueFixedVelocityPending = std::uint64_t{1} << 19,
 
-    // Static pan is materialized with the current lightweight linear balance
-    // law. Keep the approximation explicit until the final SF2 pan law is used.
+    // Reserved historical bit. Static pan and live CC10 now use the fixed-point
+    // SF2 equal-power law; keep the bit position stable for telemetry decoders.
     PlaybackIssuePanLawApproximation = std::uint64_t{1} << 20,
     PlaybackIssueGainAboveUnityClamped = std::uint64_t{1} << 21,
     PlaybackIssueIgnoredInvalidPresetGenerator = std::uint64_t{1} << 22,
