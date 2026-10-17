@@ -23,9 +23,22 @@ A `CORE PASS` requires:
 - all `1/4/8/12/16/18/20/24` render rows to be present;
 - the 16-Voice row to have zero deadline misses, zero clipping and max render
   time no greater than the 1451 us 64-frame budget;
-- no arena allocation or stale-reference faults;
+- zero stale residency references and valid arena/high-water accounting;
 - complete PSRAM and internal-heap snapshots before/after each phase.
 
-`CORE PASS` deliberately does **not** claim final release qualification. Physical
-I2S underruns, end-to-end real-bank mixed playback and long-running musical
-stress remain separate hardware gates.
+`M6_QUAL_MEMORY allocation_failures` is **pressure telemetry**, not an automatic
+failure condition. `SampleResidencyManager` increments it on an attempted load
+that hits `NoContiguousSpace`/`MetadataFull`; this benchmark intentionally fills
+the evictable cache until that happens, then verifies that Program Prepare can
+safely evict and retry. The report therefore preserves this counter and checks
+that it is consistent with successful `capacity_retries`, while unrecovered
+Prepare failures still fail the qualification.
+
+18/20/24 Voices remain stretch measurements. Missing rows are invalid evidence,
+but a deadline miss or clipping above the required 16-Voice target only lowers
+the observed contiguous within-deadline candidate; it does not invalidate an
+otherwise clean 16-Voice core result.
+
+`CORE PASS` deliberately does **not** claim final release qualification or
+"guaranteed polyphony". Physical I2S underruns, end-to-end real-bank mixed
+playback and long-running musical stress remain separate hardware gates.
