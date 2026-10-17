@@ -2,6 +2,7 @@
 
 #include "sf2/Sf2FilterMath.h"
 #include "sf2/Sf2ModulationMath.h"
+#include "sf2/Sf2ResonantFilterMath.h"
 #include "util/SaturatingCounter.h"
 
 #include <algorithm>
@@ -67,6 +68,18 @@ std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) 
         : velocity;
 }
 
+std::int32_t effectiveInitialAttenuationCb(const PlaybackZone& zone) {
+    const std::int64_t summed =
+        static_cast<std::int64_t>(zone.note_on_gain.initial_attenuation_cb) +
+        (zone.note_on_filter.enabled
+            ? sf2::resonanceDcAttenuationCb(zone.note_on_filter.resonance_cb)
+            : 0);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        summed,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+}
+
 std::int32_t lfoControlPointAmount(std::int32_t depth, std::size_t index) {
     const std::int32_t numerator =
         static_cast<std::int32_t>(index) - static_cast<std::int32_t>(kLfoTableCenter);
@@ -128,12 +141,9 @@ void prepareNoteOnFilter(
     if (output == nullptr || !zone.note_on_filter.enabled) {
         return;
     }
-    // Preview zones with non-zero Q are already explicitly marked
-    // PlaybackIssueFilterPending. Apply the correct cutoff with the qualified
-    // Q=0 response rather than dropping filtering altogether.
-    (void)sf2::prepareLowpassQ24(
+    (void)sf2::prepareResonantLowpassQ24(
         noteOnFilterCutoffCents(zone, effective_velocity),
-        0,
+        zone.note_on_filter.resonance_cb,
         sf2::kSf2FilterOutputSampleRate,
         output);
 }
@@ -191,9 +201,9 @@ void prepareDynamicFilterTable(
             (numerator + kSegments / 2) / kSegments;
         const std::int32_t cutoff = static_cast<std::int32_t>(
             static_cast<std::int64_t>(base_cutoff) + offset);
-        if (!sf2::prepareLowpassQ24(
+        if (!sf2::prepareResonantLowpassQ24(
                 cutoff,
-                0,
+                zone.note_on_filter.resonance_cb,
                 sf2::kSf2FilterOutputSampleRate,
                 &candidate.points[index])) {
             return;
@@ -480,6 +490,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
 
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
+        const std::int32_t initial_attenuation_cb = effectiveInitialAttenuationCb(zone);
         voice::VoiceStartParams params{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
@@ -498,7 +509,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.gain_right_q15 = zone.gain_right_q15;
         if (zone.note_on_gain.enabled) {
             sf2::noteOnGainQ15(
-                zone.note_on_gain.initial_attenuation_cb,
+                initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
                 effective_velocity,
                 zone.note_on_gain.pan_sf2_units,
@@ -526,7 +537,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
             params.mod_lfo.filter_depth_cents = zone.mod_lfo.filter_depth_cents;
             prepareModLfoGainTable(
-                zone.note_on_gain.initial_attenuation_cb,
+                initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
                 effective_velocity,
                 zone.note_on_gain.pan_sf2_units,
@@ -572,6 +583,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
 
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
+        const std::int32_t initial_attenuation_cb = effectiveInitialAttenuationCb(zone);
         voice::VoiceStartParams params{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
@@ -595,7 +607,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.gain_right_q15 = zone.gain_right_q15;
         if (zone.note_on_gain.enabled) {
             sf2::channelNoteOnGainQ15(
-                zone.note_on_gain.initial_attenuation_cb,
+                initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
                 effective_velocity,
                 zone.note_on_gain.pan_sf2_units,
@@ -638,7 +650,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
             params.mod_lfo.filter_depth_cents = zone.mod_lfo.filter_depth_cents;
             prepareModLfoGainTable(
-                zone.note_on_gain.initial_attenuation_cb,
+                initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
                 effective_velocity,
                 zone.note_on_gain.pan_sf2_units,
@@ -658,8 +670,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.realtime_control.mod_lfo_gain_enabled =
             zone.mod_lfo.enabled && zone.mod_lfo.volume_depth_cb != 0;
         params.realtime_control.unbent_phase_increment_q32 = key_increment;
-        params.realtime_control.initial_attenuation_cb =
-            zone.note_on_gain.initial_attenuation_cb;
+        params.realtime_control.initial_attenuation_cb = initial_attenuation_cb;
         params.realtime_control.velocity_to_attenuation_cb =
             zone.note_on_gain.velocity_to_attenuation_cb;
         params.realtime_control.volume_to_attenuation_cb =
