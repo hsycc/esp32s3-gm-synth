@@ -10,7 +10,7 @@
 namespace gm_synth::voice {
 namespace {
 
-constexpr std::uint8_t kVibratoControlFrames = 16;
+constexpr std::uint8_t kLfoControlFrames = 16;
 constexpr std::array<std::uint32_t, 12> kSemitoneRatioQ20{
     1048576u, 1110928u, 1176987u, 1246974u,
     1321123u, 1399681u, 1482910u, 1571089u,
@@ -123,6 +123,81 @@ std::int32_t scaleSignedQ15(std::int32_t value, std::int32_t q15) {
         return static_cast<std::int32_t>((scaled + 16383) / 32767);
     }
     return -static_cast<std::int32_t>((-scaled + 16383) / 32767);
+}
+
+struct LfoTablePosition {
+    std::size_t lower = 0;
+    std::uint32_t fraction_q16 = 0;
+};
+
+LfoTablePosition lfoTablePosition(std::int32_t level_q15) {
+    const std::int32_t clamped = std::clamp(level_q15, -kQ15Unity, kQ15Unity);
+    const std::uint64_t normalized = static_cast<std::uint64_t>(clamped + kQ15Unity);
+    constexpr std::uint64_t kSpan = static_cast<std::uint64_t>(kQ15Unity) * 2u;
+    constexpr std::uint64_t kSegments = kLfoControlPointCount - 1u;
+    const std::uint64_t position_q16 =
+        (normalized * kSegments * 65536u + kSpan / 2u) / kSpan;
+    if (position_q16 >= kSegments * 65536u) {
+        return LfoTablePosition{kLfoControlPointCount - 1u, 0};
+    }
+    return LfoTablePosition{
+        static_cast<std::size_t>(position_q16 >> 16u),
+        static_cast<std::uint32_t>(position_q16 & 0xffffu),
+    };
+}
+
+std::int32_t interpolateI32(
+    std::int32_t a,
+    std::int32_t b,
+    std::uint32_t fraction_q16) {
+    const std::int64_t delta = static_cast<std::int64_t>(b) - a;
+    const std::int64_t scaled = delta * fraction_q16;
+    const std::int64_t rounded = scaled >= 0
+        ? (scaled + 32768) >> 16u
+        : -(((-scaled) + 32768) >> 16u);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(a) + rounded,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+}
+
+StereoGainQ15 interpolateGainTable(
+    const LfoGainTable& table,
+    std::int32_t level_q15) {
+    if (!table.enabled) {
+        return StereoGainQ15{};
+    }
+    const LfoTablePosition position = lfoTablePosition(level_q15);
+    if (position.lower + 1u >= table.points.size()) {
+        return table.points.back();
+    }
+    const StereoGainQ15& a = table.points[position.lower];
+    const StereoGainQ15& b = table.points[position.lower + 1u];
+    return StereoGainQ15{
+        interpolateI32(a.left, b.left, position.fraction_q16),
+        interpolateI32(a.right, b.right, position.fraction_q16),
+    };
+}
+
+BiquadLowpassConfig interpolateLowpassTable(
+    const LfoLowpassTable& table,
+    std::int32_t level_q15) {
+    if (!table.enabled) {
+        return BiquadLowpassConfig{};
+    }
+    const LfoTablePosition position = lfoTablePosition(level_q15);
+    if (position.lower + 1u >= table.points.size()) {
+        return table.points.back();
+    }
+    const BiquadLowpassConfig& a = table.points[position.lower];
+    const BiquadLowpassConfig& b = table.points[position.lower + 1u];
+    BiquadLowpassConfig result{};
+    result.enabled = true;
+    result.a0_q24 = interpolateI32(a.a0_q24, b.a0_q24, position.fraction_q16);
+    result.a1_q24 = interpolateI32(a.a1_q24, b.a1_q24, position.fraction_q16);
+    result.b1_q24 = interpolateI32(a.b1_q24, b.b1_q24, position.fraction_q16);
+    result.b2_q24 = interpolateI32(a.b2_q24, b.b2_q24, position.fraction_q16);
+    return result;
 }
 
 std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
@@ -280,7 +355,7 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
          region_loop_end <= region_end);
     if (!descriptor_valid || !region_valid || !loop_valid ||
         params.phase_increment_q32 == 0 || !params.lowpass.valid() ||
-        !params.vibrato_lfo.valid()) {
+        !params.vibrato_lfo.valid() || !params.mod_lfo.valid()) {
         directory.release(acquired);
         return false;
     }
@@ -296,9 +371,15 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     key_ = params.key;
     phase_q32_ = static_cast<std::uint64_t>(region_start) << 32;
     current_phase_increment_q32_ = params_.phase_increment_q32;
+    current_gain_left_q15_ = params_.gain_left_q15;
+    current_gain_right_q15_ = params_.gain_right_q15;
+    current_lowpass_ = params_.lowpass;
     vibrato_phase_q32_ = 0;
     vibrato_delay_remaining_ = params_.vibrato_lfo.delay_frames;
     vibrato_control_frames_remaining_ = 0;
+    mod_lfo_phase_q32_ = 0;
+    mod_lfo_delay_remaining_ = params_.mod_lfo.delay_frames;
+    mod_lfo_control_frames_remaining_ = 0;
     lowpass_z1_q24_ = 0;
     lowpass_z2_q24_ = 0;
     key_released_ = false;
@@ -514,11 +595,11 @@ std::int32_t Voice::interpolatedSample() const {
 }
 
 std::int32_t Voice::applyLowpass(std::int32_t sample) {
-    if (!params_.lowpass.enabled) {
+    if (!current_lowpass_.enabled) {
         return sample;
     }
 
-    const BiquadLowpassConfig& filter = params_.lowpass;
+    const BiquadLowpassConfig& filter = current_lowpass_;
     const std::int64_t output_q24 =
         static_cast<std::int64_t>(sample) * filter.a0_q24 + lowpass_z1_q24_;
     const std::int32_t output = roundQ24ToInt(output_q24);
@@ -532,36 +613,81 @@ std::int32_t Voice::applyLowpass(std::int32_t sample) {
     return output;
 }
 
-void Voice::refreshVibratoPitch() {
+void Voice::refreshLfoState() {
     current_phase_increment_q32_ = params_.phase_increment_q32;
-    if (!params_.vibrato_lfo.enabled || params_.vibrato_lfo.pitch_depth_cents == 0 ||
-        vibrato_delay_remaining_ != 0) {
-        return;
+    current_gain_left_q15_ = params_.gain_left_q15;
+    current_gain_right_q15_ = params_.gain_right_q15;
+    current_lowpass_ = params_.lowpass;
+
+    std::int64_t pitch_cents = 0;
+    if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0 &&
+        params_.vibrato_lfo.pitch_depth_cents != 0) {
+        pitch_cents += scaleSignedQ15(
+            params_.vibrato_lfo.pitch_depth_cents,
+            triangleLevelQ15(vibrato_phase_q32_));
     }
 
-    const std::int32_t level_q15 = triangleLevelQ15(vibrato_phase_q32_);
-    const std::int32_t cents = scaleSignedQ15(
-        params_.vibrato_lfo.pitch_depth_cents,
-        level_q15);
-    if (cents != 0) {
+    if (params_.mod_lfo.enabled && mod_lfo_delay_remaining_ == 0) {
+        const std::int32_t level_q15 = triangleLevelQ15(mod_lfo_phase_q32_);
+        if (params_.mod_lfo.pitch_depth_cents != 0) {
+            pitch_cents += scaleSignedQ15(params_.mod_lfo.pitch_depth_cents, level_q15);
+        }
+        if (params_.mod_lfo.gain_table.enabled) {
+            const StereoGainQ15 gains = interpolateGainTable(
+                params_.mod_lfo.gain_table,
+                level_q15);
+            current_gain_left_q15_ = gains.left;
+            current_gain_right_q15_ = gains.right;
+        }
+        if (params_.mod_lfo.lowpass_table.enabled) {
+            current_lowpass_ = interpolateLowpassTable(
+                params_.mod_lfo.lowpass_table,
+                level_q15);
+        }
+    }
+
+    const std::int32_t clamped_pitch = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        pitch_cents,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+    if (clamped_pitch != 0) {
         current_phase_increment_q32_ = transposeCentsFixed(
             params_.phase_increment_q32,
-            cents);
+            clamped_pitch);
     }
 }
 
-void Voice::advanceVibrato() {
-    if (!active_ || !params_.vibrato_lfo.enabled) {
+void Voice::advanceLfos() {
+    if (!active_) {
         return;
     }
-    if (vibrato_delay_remaining_ != 0) {
-        --vibrato_delay_remaining_;
-        vibrato_control_frames_remaining_ = 0;
-        return;
+
+    if (params_.vibrato_lfo.enabled) {
+        if (vibrato_delay_remaining_ != 0) {
+            --vibrato_delay_remaining_;
+            if (vibrato_delay_remaining_ == 0) {
+                vibrato_control_frames_remaining_ = 0;
+            }
+        } else {
+            vibrato_phase_q32_ += params_.vibrato_lfo.phase_step_q32;
+            if (vibrato_control_frames_remaining_ != 0) {
+                --vibrato_control_frames_remaining_;
+            }
+        }
     }
-    vibrato_phase_q32_ += params_.vibrato_lfo.phase_step_q32;
-    if (vibrato_control_frames_remaining_ != 0) {
-        --vibrato_control_frames_remaining_;
+
+    if (params_.mod_lfo.enabled) {
+        if (mod_lfo_delay_remaining_ != 0) {
+            --mod_lfo_delay_remaining_;
+            if (mod_lfo_delay_remaining_ == 0) {
+                mod_lfo_control_frames_remaining_ = 0;
+            }
+        } else {
+            mod_lfo_phase_q32_ += params_.mod_lfo.phase_step_q32;
+            if (mod_lfo_control_frames_remaining_ != 0) {
+                --mod_lfo_control_frames_remaining_;
+            }
+        }
     }
 }
 
@@ -596,9 +722,15 @@ void Voice::finish() {
     fast_release_kind_ = FastReleaseKind::None;
     phase_q32_ = 0;
     current_phase_increment_q32_ = kPhaseOneQ32;
+    current_gain_left_q15_ = kQ15Unity;
+    current_gain_right_q15_ = kQ15Unity;
+    current_lowpass_ = BiquadLowpassConfig{};
     vibrato_phase_q32_ = 0;
     vibrato_delay_remaining_ = 0;
     vibrato_control_frames_remaining_ = 0;
+    mod_lfo_phase_q32_ = 0;
+    mod_lfo_delay_remaining_ = 0;
+    mod_lfo_control_frames_remaining_ = 0;
     lowpass_z1_q24_ = 0;
     lowpass_z2_q24_ = 0;
     envelope_stage_ = EnvelopeStage::Done;
@@ -625,9 +757,18 @@ VoiceRenderResult Voice::renderAdd(
             break;
         }
 
-        if (params_.vibrato_lfo.enabled && vibrato_control_frames_remaining_ == 0) {
-            refreshVibratoPitch();
-            vibrato_control_frames_remaining_ = kVibratoControlFrames;
+        const bool vibrato_due = params_.vibrato_lfo.enabled &&
+            vibrato_delay_remaining_ == 0 && vibrato_control_frames_remaining_ == 0;
+        const bool mod_lfo_due = params_.mod_lfo.enabled &&
+            mod_lfo_delay_remaining_ == 0 && mod_lfo_control_frames_remaining_ == 0;
+        if (vibrato_due || mod_lfo_due) {
+            refreshLfoState();
+            if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0) {
+                vibrato_control_frames_remaining_ = kLfoControlFrames;
+            }
+            if (params_.mod_lfo.enabled && mod_lfo_delay_remaining_ == 0) {
+                mod_lfo_control_frames_remaining_ = kLfoControlFrames;
+            }
         }
 
         const std::int32_t envelope = nextEnvelopeLevel();
@@ -637,15 +778,15 @@ VoiceRenderResult Voice::renderAdd(
         }
 
         const std::int32_t mono = applyLowpass(interpolatedSample());
-        const std::int32_t left_gain = multiplyQ15(params_.gain_left_q15, envelope);
-        const std::int32_t right_gain = multiplyQ15(params_.gain_right_q15, envelope);
+        const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
+        const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
         interleaved_stereo[frame * 2u] += scaleSampleQ15(mono, left_gain);
         interleaved_stereo[frame * 2u + 1u] += scaleSampleQ15(mono, right_gain);
         ++result.frames_rendered;
 
         const bool release_finishes_after_frame = envelope_stage_ == EnvelopeStage::Done;
         advancePhase();
-        advanceVibrato();
+        advanceLfos();
         if (release_finishes_after_frame && active_) {
             finish();
         }
@@ -878,7 +1019,7 @@ bool VoicePool::start(const VoiceStartParams& params) {
     // Acquire and validate the incoming SampleRef before changing the victim.
     // A rejected/missing sample must never sacrifice a currently sounding voice.
     if (!voices_[target].start(directory_, params)) {
-        util::saturatingIncrement(stats_.start_failures_rejected);
+        util::saturatingIncrement(stats_.steal_failures_rejected);
         return false;
     }
 
