@@ -3,6 +3,7 @@
 #include "gm/ZoneResolver.h"
 #include "sample/PublishedSampleDirectory.h"
 #include "sf2/Sf2ModulationMath.h"
+#include "sf2/Sf2PanMath.h"
 #include "voice/VoiceRenderer.h"
 
 #include <array>
@@ -25,9 +26,15 @@ using gm_synth::realtime::RealtimeEvent;
 using gm_synth::sample::PublishedSampleDirectory;
 using gm_synth::sf2::attenuationCbToGainQ15;
 using gm_synth::sf2::controllerToAttenuationCb;
+using gm_synth::sf2::sf2PanChannelGainQ15;
 using gm_synth::voice::VoicePool;
 using gm_synth::voice::kPhaseOneQ32;
 using gm_synth::voice::kQ15Unity;
+
+std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
+    return static_cast<std::int32_t>(
+        (static_cast<std::int64_t>(a) * b + (std::int64_t{1} << 14)) >> 15);
+}
 
 PlaybackZone controllerZone() {
     PlaybackZone zone{};
@@ -43,7 +50,7 @@ PlaybackZone controllerZone() {
     zone.note_on_gain.initial_attenuation_cb = 0;
     zone.note_on_gain.velocity_to_attenuation_cb = 0;
     zone.note_on_gain.volume_to_attenuation_cb = 960;
-    zone.note_on_gain.pan_amount = 1000;
+    zone.note_on_gain.pan_amount = 500;
     zone.note_on_gain.expression_to_attenuation_cb = 960;
     zone.note_on_gain.pan_sf2_units = 0;
     zone.note_on_gain.fixed_velocity = -1;
@@ -77,14 +84,18 @@ void testDefaultGmVolumeIsAppliedOnlyOnChannelStatePath() {
     assert(resolver.resolveNoteOn(program, state, 2, 60, 127, 2, &controlled) ==
            ZoneResolveStatus::Ok);
     assert(legacy.count == 1 && controlled.count == 1);
-    assert(legacy.voices[0].gain_left_q15 == kQ15Unity);
+    assert(legacy.voices[0].gain_left_q15 == sf2PanChannelGainQ15(0, true));
+    assert(legacy.voices[0].gain_right_q15 == sf2PanChannelGainQ15(0, false));
 
     const std::int32_t expected_attenuation = controllerToAttenuationCb(100, 960);
-    const std::int32_t expected_gain = attenuationCbToGainQ15(expected_attenuation);
+    const std::int32_t expected_amplitude = attenuationCbToGainQ15(expected_attenuation);
+    const std::int32_t expected_gain = multiplyQ15(
+        expected_amplitude,
+        sf2PanChannelGainQ15(0, true));
     assert(expected_attenuation > 0);
     assert(controlled.voices[0].gain_left_q15 == expected_gain);
     assert(controlled.voices[0].gain_right_q15 == expected_gain);
-    assert(expected_gain < kQ15Unity);
+    assert(expected_gain < sf2PanChannelGainQ15(0, true));
 }
 
 void testCc7Cc11AndCc10AffectSubsequentNoteOn() {
@@ -99,8 +110,8 @@ void testCc7Cc11AndCc10AffectSubsequentNoteOn() {
     state.applyControlChange(11, 127);
     assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 3, &batch) ==
            ZoneResolveStatus::Ok);
-    assert(batch.voices[0].gain_left_q15 == kQ15Unity);
-    assert(batch.voices[0].gain_right_q15 == kQ15Unity);
+    assert(batch.voices[0].gain_left_q15 == sf2PanChannelGainQ15(0, true));
+    assert(batch.voices[0].gain_right_q15 == sf2PanChannelGainQ15(0, false));
 
     state.applyControlChange(7, 80);
     state.applyControlChange(11, 100);
@@ -109,23 +120,26 @@ void testCc7Cc11AndCc10AffectSubsequentNoteOn() {
     const std::int32_t attenuation =
         controllerToAttenuationCb(80, 960) +
         controllerToAttenuationCb(100, 960);
-    const std::int32_t gain = attenuationCbToGainQ15(attenuation);
-    assert(batch.voices[0].gain_left_q15 == gain);
-    assert(batch.voices[0].gain_right_q15 == gain);
+    const std::int32_t amplitude = attenuationCbToGainQ15(attenuation);
+    const std::int32_t centered = multiplyQ15(amplitude, sf2PanChannelGainQ15(0, true));
+    assert(batch.voices[0].gain_left_q15 == centered);
+    assert(batch.voices[0].gain_right_q15 == centered);
 
     state.applyControlChange(7, 127);
     state.applyControlChange(11, 127);
-    state.applyControlChange(10, 32);  // SF2 default route reaches -500 here.
+    state.applyControlChange(10, 0);
     assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 5, &batch) ==
            ZoneResolveStatus::Ok);
     assert(batch.voices[0].gain_left_q15 == kQ15Unity);
     assert(batch.voices[0].gain_right_q15 == 0);
 
-    state.applyControlChange(10, 96);
+    state.applyControlChange(10, 127);
     assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 6, &batch) ==
            ZoneResolveStatus::Ok);
-    assert(batch.voices[0].gain_left_q15 == 0);
-    assert(batch.voices[0].gain_right_q15 == kQ15Unity);
+    assert(batch.voices[0].gain_left_q15 == sf2PanChannelGainQ15(492, true));
+    assert(batch.voices[0].gain_right_q15 == sf2PanChannelGainQ15(492, false));
+    assert(batch.voices[0].gain_right_q15 > 32700);
+    assert(batch.voices[0].gain_left_q15 > 0);
 }
 
 void testPitchBendUsesRpnSensitivityWithoutFloatingPoint() {
