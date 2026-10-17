@@ -194,8 +194,11 @@ void prepareModLfoGainTable(
     voice::LfoGainTable candidate{};
     candidate.enabled = true;
     for (std::size_t index = 0; index < candidate.points.size(); ++index) {
+        // SF2/FluidSynth semantics: a positive Mod-LFO volume amount increases
+        // volume during the oscillator's positive half-cycle, i.e. it subtracts
+        // from the final attenuation summing node.
         const std::int64_t adjusted =
-            static_cast<std::int64_t>(initial_attenuation_cb) +
+            static_cast<std::int64_t>(initial_attenuation_cb) -
             lfoControlPointAmount(volume_depth_cb, index);
         const std::int32_t adjusted_initial = static_cast<std::int32_t>(
             std::clamp<std::int64_t>(
