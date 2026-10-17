@@ -79,6 +79,11 @@ void test_fm_bank_inherits_mandatory_default_modulators() {
     CHECK(result.unsupported_records == 0);
     CHECK(zones[0].velocity_to_attenuation_cb == 960);
     CHECK(zones[0].velocity_to_filter_fc_cents == -2400);
+    CHECK(zones[0].velocity_positive_to_mod_env_filter_cents == 0);
+    CHECK(zones[0].velocity_negative_to_mod_env_filter_cents == 0);
+    CHECK(zones[0].velocity_to_filter_q_cb == 0);
+    CHECK(zones[0].velocity_to_mod_env_attack_timecents == 0);
+    CHECK(zones[0].velocity_to_vol_env_attack_timecents == 0);
     CHECK(zones[0].volume_to_attenuation_cb == 960);
     CHECK(zones[0].pan_amount == 500);
     CHECK(zones[0].expression_to_attenuation_cb == 960);
@@ -88,6 +93,7 @@ void test_fm_bank_inherits_mandatory_default_modulators() {
     CHECK(zones[0].chorus_send_amount == 200);
     CHECK(zones[0].supported_velocity_attenuation_records == 0);
     CHECK(zones[0].supported_velocity_filter_records == 0);
+    CHECK(zones[0].supported_velocity_dsp_records == 0);
     CHECK(zones[0].supported_channel_control_records == 0);
     CHECK(zones[0].supported_vibrato_records == 0);
     CHECK(zones[0].supported_effects_send_records == 0);
@@ -119,6 +125,10 @@ void test_generaluser_bank_exercises_supported_modulators() {
     Sf2ZoneModulatorResolver resolver;
     bool found_velocity_override = false;
     bool found_velocity_filter_override_or_cancellation = false;
+    bool found_velocity_dsp = false;
+    bool found_velocity_filter_q = false;
+    bool found_velocity_mod_env_attack = false;
+    bool found_velocity_vol_env_attack = false;
     bool found_channel_control_override = false;
     bool found_effect_send_override = false;
 
@@ -143,6 +153,14 @@ void test_generaluser_bank_exercises_supported_modulators() {
             found_velocity_filter_override_or_cancellation =
                 found_velocity_filter_override_or_cancellation ||
                 zones[index].supported_velocity_filter_records != 0;
+            found_velocity_dsp = found_velocity_dsp ||
+                zones[index].supported_velocity_dsp_records != 0;
+            found_velocity_filter_q = found_velocity_filter_q ||
+                zones[index].velocity_to_filter_q_cb != 0;
+            found_velocity_mod_env_attack = found_velocity_mod_env_attack ||
+                zones[index].velocity_to_mod_env_attack_timecents != 0;
+            found_velocity_vol_env_attack = found_velocity_vol_env_attack ||
+                zones[index].velocity_to_vol_env_attack_timecents != 0;
             found_channel_control_override = found_channel_control_override ||
                 zones[index].supported_channel_control_records != 0;
             found_effect_send_override = found_effect_send_override ||
@@ -154,10 +172,11 @@ void test_generaluser_bank_exercises_supported_modulators() {
 
     CHECK(found_velocity_override);
     CHECK(found_velocity_filter_override_or_cancellation);
+    CHECK(found_velocity_dsp);
+    CHECK(found_velocity_filter_q);
+    CHECK(found_velocity_mod_env_attack);
+    CHECK(found_velocity_vol_env_attack);
     CHECK(found_effect_send_override);
-    // Not every checked-in bank needs to redefine CC7/10/11. When one does,
-    // the new counter proves it was classified as supported rather than folded
-    // into unsupported_modulator_records.
     if (found_channel_control_override) {
         std::printf("GeneralUser exercises file-defined CC7/10/11 modulation\n");
     }
