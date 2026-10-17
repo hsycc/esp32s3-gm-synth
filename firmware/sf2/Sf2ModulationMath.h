@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace gm_synth::sf2 {
@@ -23,6 +24,81 @@ constexpr std::int32_t kSf2DefaultVibratoControllerAmountCents = 50;
 constexpr std::int32_t kSf2DefaultEffectsSendAmount = 200;
 constexpr std::int32_t kSf2MaxEffectsSend = 1000;
 constexpr std::int32_t kSf2MaxAttenuationCb = 1440;
+
+// SF2 source-operator bit layout (SoundFont 2.x section 8.2). Only the four
+// standardized curve shapes are accepted. The decoder is header-only because
+// the control-domain modulator scanner needs source classification without
+// linking the realtime modulation-math translation unit.
+enum class Sf2SourceCurve : std::uint8_t {
+    Linear = 0,
+    Concave = 1,
+    Convex = 2,
+    Switch = 3,
+};
+
+struct Sf2SourceDescriptor {
+    std::uint8_t index = 0;
+    bool midi_cc = false;
+    bool negative = false;
+    bool bipolar = false;
+    Sf2SourceCurve curve = Sf2SourceCurve::Linear;
+};
+
+inline bool decodeSf2SourceOper(
+    std::uint16_t source_oper,
+    Sf2SourceDescriptor* output) {
+    if (output == nullptr) {
+        return false;
+    }
+    const std::uint16_t type = static_cast<std::uint16_t>(source_oper >> 10u);
+    if (type > static_cast<std::uint16_t>(Sf2SourceCurve::Switch)) {
+        return false;
+    }
+
+    Sf2SourceDescriptor decoded{};
+    decoded.index = static_cast<std::uint8_t>(source_oper & 0x007Fu);
+    decoded.midi_cc = (source_oper & 0x0080u) != 0;
+    decoded.negative = (source_oper & 0x0100u) != 0;
+    decoded.bipolar = (source_oper & 0x0200u) != 0;
+    decoded.curve = static_cast<Sf2SourceCurve>(type);
+    *output = decoded;
+    return true;
+}
+
+// The first generic NoteOn evaluator deliberately covers only the two General
+// Controller sources whose value is immutable for the life of a Voice: NoteOn
+// velocity (index 2) and NoteOn key number (index 3). CC, pressure and pitch
+// sources continue through their existing live-controller paths.
+inline bool isSupportedSf2NoteOnSourceOper(std::uint16_t source_oper) {
+    Sf2SourceDescriptor source{};
+    return decodeSf2SourceOper(source_oper, &source) &&
+        !source.midi_cc && (source.index == 2u || source.index == 3u);
+}
+
+struct Sf2NoteOnSourceRoute {
+    std::uint16_t source_oper = 0;
+    std::int32_t amount = 0;
+
+    bool valid() const {
+        return isSupportedSf2NoteOnSourceOper(source_oper);
+    }
+};
+
+// Bound the immutable per-zone route payload. Real checked-in banks currently
+// need two extra initialFilterFc routes; four leaves headroom while keeping the
+// 200-zone GeneralUser snapshot compact and realtime scans deterministic.
+constexpr std::size_t kSf2MaxNoteOnSourceRoutesPerDestination = 4;
+
+// Evaluates one supported NoteOn key/velocity source using its encoded
+// direction, polarity and curve shape, then scales the signed modulator amount.
+// Linear routes preserve the engine's existing exact 128-step integer model;
+// nonlinear routes use the same fixed Q15 curve family as the default
+// attenuation path. Unsupported/invalid source operators contribute zero.
+std::int32_t noteOnSourceToAmount(
+    std::uint16_t source_oper,
+    std::uint8_t key,
+    std::uint8_t velocity,
+    std::int32_t amount);
 
 // Generic negative-unipolar concave source transform for a 7-bit MIDI value.
 // value=127 contributes zero; lower values contribute progressively more of
