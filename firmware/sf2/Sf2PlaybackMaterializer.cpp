@@ -322,6 +322,8 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         modulation.velocity_to_filter_fc_cents;
     candidate.note_on_filter.resonance_cb = static_cast<std::int16_t>(
         std::clamp<std::int32_t>(native.initialFilterQCb(), 0, 960));
+    candidate.note_on_filter.velocity_to_resonance_cb =
+        modulation.velocity_to_filter_q_cb;
 
     const std::int32_t static_vibrato_depth = native.generators.value(6, 0);
     candidate.vibrato_lfo.enabled =
@@ -360,8 +362,16 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         native.generators.value(7, 0), -12000, 12000);
     candidate.mod_envelope.filter_depth_cents = std::clamp<std::int32_t>(
         native.generators.value(11, 0), -12000, 12000);
+    candidate.mod_envelope.velocity_positive_to_filter_depth_cents =
+        modulation.velocity_positive_to_mod_env_filter_cents;
+    candidate.mod_envelope.velocity_negative_to_filter_depth_cents =
+        modulation.velocity_negative_to_mod_env_filter_cents;
+    candidate.mod_envelope.velocity_to_attack_timecents =
+        modulation.velocity_to_mod_env_attack_timecents;
     candidate.mod_envelope.enabled = candidate.mod_envelope.pitch_depth_cents != 0 ||
-        candidate.mod_envelope.filter_depth_cents != 0;
+        candidate.mod_envelope.filter_depth_cents != 0 ||
+        candidate.mod_envelope.velocity_positive_to_filter_depth_cents != 0 ||
+        candidate.mod_envelope.velocity_negative_to_filter_depth_cents != 0;
     candidate.mod_envelope.envelope.delay_frames = timecentsToFrames(
         native.generators.value(25, -12000),
         output_sample_rate_);
@@ -400,6 +410,8 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     candidate.envelope.attack_frames = timecentsToFrames(
         native.generators.value(34, -12000),
         output_sample_rate_);
+    candidate.velocity_to_vol_env_attack_timecents =
+        modulation.velocity_to_vol_env_attack_timecents;
     candidate.envelope.hold_frames = timecentsToFrames(
         native.generators.value(35, -12000),
         output_sample_rate_);
