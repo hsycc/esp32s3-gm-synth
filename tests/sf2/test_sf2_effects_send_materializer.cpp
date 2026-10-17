@@ -165,8 +165,8 @@ void testReverbSendProducesFeedbackTail() {
 }
 
 void testEffectsSendScalesWetEnergy() {
-    const std::uint64_t half = renderTailEnergy(1000, 500, false);
-    const std::uint64_t full = renderTailEnergy(1000, 1000, false);
+    const std::uint64_t half = renderTailEnergy(0, 500, false);
+    const std::uint64_t full = renderTailEnergy(0, 1000, false);
     assert(half > 0);
     assert(full > half);
 }
