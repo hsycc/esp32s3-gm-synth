@@ -219,9 +219,7 @@ struct VoiceStartParams {
     ModEnvelopeConfig mod_envelope{};
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
-    // Prepared send state in SoundFont tenths-of-a-percent units. The dry Voice
-    // renderer does not yet consume these values; a future FX bus can read them
-    // without changing the MIDI/SF2 control contract again.
+    // Prepared send state in SoundFont tenths-of-a-percent units.
     std::int16_t reverb_send_units = 0;
     std::int16_t chorus_send_units = 0;
     EnvelopeConfig envelope{};
@@ -421,6 +419,15 @@ public:
     std::size_t releaseSustain(std::uint8_t channel);
     std::size_t allNotesOff(std::uint8_t channel, bool sustain_down);
     void renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
+    // Renders each Voice once and derives independent SoundFont reverb/chorus
+    // send buses from that Voice's post-filter/post-envelope/post-pan signal.
+    // Send values are read after every sub-block boundary, so realtime CC91/93
+    // changes applied by ScheduledAudioBlockRenderer affect the next segment.
+    void renderAddWithEffects(
+        std::int32_t* interleaved_stereo,
+        std::int32_t* reverb_send_stereo,
+        std::int32_t* chorus_send_stereo,
+        std::size_t frame_count);
     void allSoundOff();
     std::size_t allSoundOff(std::uint8_t channel);
 
