@@ -1,5 +1,6 @@
 #include "Sf2ModulationMath.h"
 
+#include "Sf2PanMath.h"
 #include "../voice/VoiceRenderer.h"
 
 #include <algorithm>
@@ -49,19 +50,15 @@ void attenuationAndPanToGainQ15(
     const std::int32_t clamped_attenuation = static_cast<std::int32_t>(
         std::max<std::int64_t>(0, std::min<std::int64_t>(kSf2MaxAttenuationCb, attenuation_cb)));
     const std::int32_t amplitude_q15 = attenuationCbToGainQ15(clamped_attenuation);
-
     const std::int32_t pan = static_cast<std::int32_t>(
         std::max<std::int64_t>(-500, std::min<std::int64_t>(500, pan_sf2_units)));
-    std::int32_t left = amplitude_q15;
-    std::int32_t right = amplitude_q15;
-    if (pan < 0) {
-        right = multiplyQ15(amplitude_q15, ((500 + pan) * voice::kQ15Unity) / 500);
-    } else if (pan > 0) {
-        left = multiplyQ15(amplitude_q15, ((500 - pan) * voice::kQ15Unity) / 500);
-    }
 
-    *gain_left_q15 = left;
-    *gain_right_q15 = right;
+    *gain_left_q15 = multiplyQ15(
+        amplitude_q15,
+        sf2PanChannelGainQ15(pan, true));
+    *gain_right_q15 = multiplyQ15(
+        amplitude_q15,
+        sf2PanChannelGainQ15(pan, false));
 }
 
 }  // namespace
@@ -105,7 +102,7 @@ std::int32_t controllerToAttenuationCb(
 std::int32_t controllerToPanSf2Units(
     std::uint8_t value,
     std::int32_t amount) {
-    // Positive-bipolar linear SoundFont source: (2*v - 128) / 128.
+    // Positive-bipolar linear SoundFont source: -1 + 2*v/128.
     const std::int64_t bipolar_numerator =
         static_cast<std::int64_t>(2 * std::min<unsigned>(value, 127u)) - 128;
     const std::int64_t scaled = bipolar_numerator * amount;
