@@ -1,0 +1,62 @@
+name: gm128-full-bank
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_full_gm128_qualification.cpp"
+      - "tests/gm/test_program_change_control_service.cpp"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "scripts/run_gm128_full_bank_tests.sh"
+      - ".github/workflows/gm128-full-bank.yml"
+  pull_request:
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_full_gm128_qualification.cpp"
+      - "tests/gm/test_program_change_control_service.cpp"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "scripts/run_gm128_full_bank_tests.sh"
+      - ".github/workflows/gm128-full-bank.yml"
+
+jobs:
+  qualify-full-fm-gm128:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tracked full bank is present
+        shell: bash
+        run: |
+          test -s assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2
+          test "$(wc -c < assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2)" -gt 14000000
+      - name: Run GM128 full-bank qualification
+        shell: bash
+        run: |
+          mkdir -p build/gm128-full-bank
+          bash scripts/run_gm128_full_bank_tests.sh | tee build/gm128-full-bank/qualification-report.txt
+      - name: Publish qualification summary
+        if: always()
+        shell: bash
+        run: |
+          if test -f build/gm128-full-bank/qualification-report.txt; then
+            {
+              echo '## Full FM GM128 qualification'
+              echo '```text'
+              grep -E '^(GM128_|Full FM GM128)' build/gm128-full-bank/qualification-report.txt || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload qualification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gm128-full-bank-qualification
+          path: build/gm128-full-bank/qualification-report.txt
+          if-no-files-found: error
