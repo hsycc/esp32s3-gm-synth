@@ -12,6 +12,8 @@ on:
       - "firmware/sf2/Sf2FilterMath.*"
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/voice/VoiceRuntimeControl.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
@@ -28,6 +30,8 @@ on:
       - "firmware/sf2/Sf2FilterMath.*"
       - "firmware/voice/VoiceRenderer.*"
       - "firmware/voice/VoiceRuntimeControl.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
@@ -127,6 +131,8 @@ jobs:
             firmware/sample/ProgramSnapshot.cpp \
             firmware/voice/VoiceRenderer.cpp \
             firmware/voice/VoiceRuntimeControl.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            firmware/voice/GlobalEffectsProcessor.cpp \
             firmware/sf2/Sf2ModulationMath.cpp \
             firmware/sf2/Sf2FilterMath.cpp \
             firmware/gm/MidiChannelState.cpp \
