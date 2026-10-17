@@ -15,10 +15,15 @@ bool Voice::applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update) {
     params_.chorus_send_units = update.chorus_send_units;
     if (params_.vibrato_lfo.enabled) {
         params_.vibrato_lfo.pitch_depth_cents = update.vibrato_pitch_depth_cents;
-        vibrato_control_frames_remaining_ = 0;
-    } else {
-        current_phase_increment_q32_ = params_.phase_increment_q32;
     }
+    if (params_.mod_lfo.gain_table.enabled || update.mod_lfo_gain_table.enabled) {
+        params_.mod_lfo.gain_table = update.mod_lfo_gain_table;
+    }
+
+    // Re-evaluate the current oscillator positions immediately so Pitch Bend,
+    // CC7/10/11 and vibrato-controller events affect the next rendered frame.
+    // The expensive nonlinear Mod-LFO gain curve was already prepared by GM.
+    refreshLfoState();
     return true;
 }
 
