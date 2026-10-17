@@ -8,6 +8,20 @@ render-timing matrix and PSRAM/internal-heap snapshots. It rejects QEMU timing a
 physical evidence and treats 16 Voices as the current core target. Higher
 18/20/24-Voice rows are reported as stretch data.
 
+Physical timing must come from an ESP-IDF `PERF`-optimized image. The benchmark
+emits `physical_timing_evidence=1` only when both the physical qualification
+build flag and `CONFIG_COMPILER_OPTIMIZATION_PERF=y` are active. A DEBUG/`-Og`
+build therefore cannot accidentally qualify product polyphony.
+
+Capture a complete first-boot log with:
+
+```bash
+mkdir -p reports/local
+idf.py -B build-hwbench monitor | tee reports/local/n16r8-m6.log
+```
+
+Then render the consolidated report:
+
 ```bash
 python -m tools.n16r8_qualification.report \
   reports/local/n16r8-m6.log \
