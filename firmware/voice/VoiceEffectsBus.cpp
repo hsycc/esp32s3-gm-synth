@@ -34,11 +34,15 @@ std::int32_t scaleSampleQ15Fast(std::int32_t sample, std::int32_t gain_q15) {
         return 0;
     }
 
-    const std::int64_t product = static_cast<std::int64_t>(sample) * gain_q15;
+    // The fast path interpolates int16 PCM, so sample remains in
+    // [-32768, 32767]. gain_q15 is clamped to [0, 32767]. Their product is
+    // therefore safely inside int32; using a 64-bit multiply here only adds
+    // cost on Xtensa and does not provide extra numerical precision.
+    const std::int32_t product = sample * gain_q15;
     if (product >= 0) {
-        return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
+        return (product + (std::int32_t{1} << 14)) >> 15;
     }
-    return -static_cast<std::int32_t>(((-product) + (std::int64_t{1} << 14)) >> 15);
+    return -((-product + (std::int32_t{1} << 14)) >> 15);
 }
 
 }  // namespace
