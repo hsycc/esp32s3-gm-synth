@@ -100,6 +100,7 @@ void testSimpleZoneBecomesExplicitPreview() {
     assert(output.vibrato_lfo.static_pitch_depth_cents == 0);
     assert(output.vibrato_lfo.channel_pressure_to_pitch_cents == 50);
     assert(output.vibrato_lfo.modulation_wheel_to_pitch_cents == 50);
+    assert(!output.mod_envelope.enabled);
     assert(output.valid());
 }
 
@@ -237,14 +238,22 @@ void testVibratoGeneratorsAndControllerRoutesAreMaterialized() {
     assert(output.vibrato_lfo.modulation_wheel_to_pitch_cents == 70);
 }
 
-void testRemainingDynamicEnvelopeAndEffectsAreReported() {
+void testDynamicEnvelopeLfoAndEffectsQualification() {
     NativeResolvedZone native = baseZone();
     native.generators.set(33, 0);
     native.generators.set(35, 0);
     native.generators.set(39, 100);
     native.generators.set(8, 12000);
+    native.generators.set(7, -200);
     native.generators.set(11, 1200);
     native.generators.set(25, 0);
+    native.generators.set(26, -1200);
+    native.generators.set(27, 1200);
+    native.generators.set(28, -1200);
+    native.generators.set(29, 250);
+    native.generators.set(30, 0);
+    native.generators.set(31, 50);
+    native.generators.set(32, -50);
     native.generators.set(5, 25);
     native.generators.set(10, 600);
     native.generators.set(13, 100);
@@ -261,9 +270,20 @@ void testRemainingDynamicEnvelopeAndEffectsAreReported() {
     assert(output.envelope.delay_frames == 44100);
     assert(output.envelope.hold_frames == 44100);
     assert(output.envelope_key_scaling.hold_timecents_per_key == 100);
-    assert(result.hasIssue(PlaybackIssueFilterPending));
-    assert(result.hasIssue(PlaybackIssueModEnvelopePending));
+    assert(!result.hasIssue(PlaybackIssueFilterPending));
+    assert(!result.hasIssue(PlaybackIssueModEnvelopePending));
     assert(!result.hasIssue(PlaybackIssueLfoPending));
+    assert(output.mod_envelope.enabled);
+    assert(output.mod_envelope.pitch_depth_cents == -200);
+    assert(output.mod_envelope.filter_depth_cents == 1200);
+    assert(output.mod_envelope.envelope.delay_frames == 44100);
+    assert(output.mod_envelope.envelope.attack_frames == 22050);
+    assert(output.mod_envelope.envelope.hold_frames == 88200);
+    assert(output.mod_envelope.envelope.decay_frames == 22050);
+    assert(output.mod_envelope.envelope.sustain_q15 == 24575);
+    assert(output.mod_envelope.envelope.release_frames == 44100);
+    assert(output.mod_envelope.key_scaling.hold_timecents_per_key == 50);
+    assert(output.mod_envelope.key_scaling.decay_timecents_per_key == -50);
     assert(output.mod_lfo.enabled);
     assert(output.mod_lfo.pitch_depth_cents == 25);
     assert(output.mod_lfo.filter_depth_cents == 600);
@@ -271,6 +291,21 @@ void testRemainingDynamicEnvelopeAndEffectsAreReported() {
     assert(result.hasIssue(PlaybackIssueEffectsSendPending));
     assert(result.hasIssue(PlaybackIssueFixedVelocityPending));
     assert(result.hasIssue(PlaybackIssueCustomModulatorsPending));
+}
+
+void testResolvedControllerAmountsAreCopiedIntoPlaybackZone() {
+    NativeResolvedZone native = baseZone();
+    ResolvedZoneModulation modulation{};
+    modulation.volume_to_attenuation_cb = 700;
+    modulation.pan_amount = 800;
+    modulation.expression_to_attenuation_cb = 600;
+
+    PlaybackZone output{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
+    assert(result.playablePreview());
+    assert(output.note_on_gain.volume_to_attenuation_cb == 700);
+    assert(output.note_on_gain.pan_amount == 800);
+    assert(output.note_on_gain.expression_to_attenuation_cb == 600);
 }
 
 void testStaticPanAndGainRemainExplicitApproximations() {
@@ -371,7 +406,8 @@ int main() {
     testEnvelopeFieldsAreConvertedFromNativeSf2Units();
     testStaticFilterAndVelocityRouteAreMaterialized();
     testVibratoGeneratorsAndControllerRoutesAreMaterialized();
-    testRemainingDynamicEnvelopeAndEffectsAreReported();
+    testDynamicEnvelopeLfoAndEffectsQualification();
+    testResolvedControllerAmountsAreCopiedIntoPlaybackZone();
     testStaticPanAndGainRemainExplicitApproximations();
     testHardAddressFailureDoesNotMutateOutput();
     testHardLoopSampleModeRomAndStereoFailuresAreExplicit();
