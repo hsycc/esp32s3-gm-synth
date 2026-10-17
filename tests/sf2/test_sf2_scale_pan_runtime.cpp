@@ -59,8 +59,8 @@ void testFiftyCentsPerKeyIsAppliedOnBothResolverPaths() {
     ResolvedVoiceBatch legacy{};
     assert(resolver.resolveNoteOn(program, 2, 72, 100, 1, &legacy) == ZoneResolveStatus::Ok);
     assert(legacy.count == 1);
-    assert(legacy.voices[0].phase_increment_q32 ==
-           ZoneResolver::transposeCents(kPhaseOneQ32, 600));
+    const std::uint64_t scaled = ZoneResolver::transposeCents(kPhaseOneQ32, 600);
+    assert(legacy.voices[0].phase_increment_q32 == scaled);
 
     MidiChannelState state{};
     state.resetAll();
@@ -69,9 +69,8 @@ void testFiftyCentsPerKeyIsAppliedOnBothResolverPaths() {
     assert(resolver.resolveNoteOn(program, state, 2, 72, 100, 2, &controlled) ==
            ZoneResolveStatus::Ok);
     assert(controlled.voices[0].phase_increment_q32 ==
-           ZoneResolver::transposeCents(kPhaseOneQ32, 800));
-    assert(controlled.voices[0].realtime_control.unbent_phase_increment_q32 ==
-           ZoneResolver::transposeCents(kPhaseOneQ32, 600));
+           ZoneResolver::transposeCents(scaled, 200));
+    assert(controlled.voices[0].realtime_control.unbent_phase_increment_q32 == scaled);
 }
 
 void testFullScaleTuningRangeRemainsRepresentable() {
