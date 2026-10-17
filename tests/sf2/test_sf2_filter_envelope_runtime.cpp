@@ -2,6 +2,7 @@
 #include "../../firmware/gm/ZoneResolver.h"
 #include "../../firmware/sample/PublishedSampleDirectory.h"
 #include "../../firmware/sf2/Sf2FilterMath.h"
+#include "../../firmware/sf2/Sf2ResonantFilterMath.h"
 #include "../../firmware/voice/VoiceRenderer.h"
 
 #include <array>
@@ -21,6 +22,8 @@ using gm_synth::sample::PublishedSampleDirectory;
 using gm_synth::sample::ResidentRecord;
 using gm_synth::sample::SampleDescriptor;
 using gm_synth::sf2::prepareLowpassQ24;
+using gm_synth::sf2::prepareResonantLowpassQ24;
+using gm_synth::sf2::resonanceDcAttenuationCb;
 using gm_synth::sf2::velocityToFilterCutoffCents;
 using gm_synth::voice::BiquadLowpassConfig;
 using gm_synth::voice::Voice;
@@ -64,9 +67,31 @@ void testLowpassCoefficientPreparationIsBoundedAndExplicit() {
     assert(high.a0_q24 > low.a0_q24);
     assert(high.a1_q24 > low.a1_q24);
 
+    // The original cutoff-table helper deliberately remains the qualified Q=0
+    // primitive; SoundFont Q is layered on top by the fixed-point transform.
     BiquadLowpassConfig rejected{};
     assert(!prepareLowpassQ24(6900, 60, 44100, &rejected));
     assert(!prepareLowpassQ24(6900, 0, 48000, &rejected));
+
+    BiquadLowpassConfig resonant{};
+    assert(prepareResonantLowpassQ24(6900, 100, 44100, &resonant));
+    assert(resonant.enabled && resonant.valid());
+    assert(resonant.a0_q24 > low.a0_q24);
+    assert(resonant.a1_q24 > low.a1_q24);
+    assert(resonanceDcAttenuationCb(100) == 50);
+
+    // Exercise the full SF2 initialFilterQ range at the numerically hardest
+    // low-cutoff corner. Q24 stays non-zero because gain compensation is kept
+    // in the attenuation path rather than multiplied into tiny feed-forward terms.
+    BiquadLowpassConfig extreme{};
+    assert(prepareResonantLowpassQ24(1500, 960, 44100, &extreme));
+    assert(extreme.enabled && extreme.valid());
+    assert(extreme.a0_q24 > 0);
+    assert(extreme.a1_q24 > 0);
+    assert(resonanceDcAttenuationCb(960) == 480);
+    assert(!prepareResonantLowpassQ24(6900, -1, 44100, &rejected));
+    assert(!prepareResonantLowpassQ24(6900, 961, 44100, &rejected));
+    assert(!prepareResonantLowpassQ24(6900, 100, 48000, &rejected));
 }
 
 void testVoiceActuallyProcessesPreparedLowpass() {
@@ -153,7 +178,7 @@ PlaybackProgramSnapshot programFor(const PlaybackZone* zone) {
     return program;
 }
 
-void testResolverAppliesKeyScaledEnvelopeAndEffectiveVelocityFilter() {
+void testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance() {
     PlaybackZone zone{};
     zone.sample_id = 0;
     zone.root_key = 60;
@@ -164,7 +189,7 @@ void testResolverAppliesKeyScaledEnvelopeAndEffectiveVelocityFilter() {
     zone.note_on_filter.enabled = true;
     zone.note_on_filter.initial_cutoff_cents = 9000;
     zone.note_on_filter.velocity_to_cutoff_cents = -2400;
-    zone.note_on_filter.resonance_cb = 0;
+    zone.note_on_filter.resonance_cb = 100;
     zone.envelope.hold_frames = 100;
     zone.envelope.decay_frames = 100;
     zone.envelope_key_scaling.hold_timecents_per_key = 100;
@@ -181,9 +206,11 @@ void testResolverAppliesKeyScaledEnvelopeAndEffectiveVelocityFilter() {
     assert(batch.voices[0].envelope.hold_frames == 50);
     assert(batch.voices[0].envelope.decay_frames == 50);
     assert(batch.voices[0].lowpass.enabled);
+    assert(batch.voices[0].gain_left_q15 >= 18400 && batch.voices[0].gain_left_q15 <= 18450);
+    assert(batch.voices[0].gain_right_q15 == batch.voices[0].gain_left_q15);
 
     BiquadLowpassConfig expected{};
-    assert(prepareLowpassQ24(7800, 0, 44100, &expected));
+    assert(prepareResonantLowpassQ24(7800, 100, 44100, &expected));
     assert(batch.voices[0].lowpass.a0_q24 == expected.a0_q24);
     assert(batch.voices[0].lowpass.a1_q24 == expected.a1_q24);
     assert(batch.voices[0].lowpass.b1_q24 == expected.b1_q24);
@@ -201,7 +228,7 @@ int main() {
     testLowpassCoefficientPreparationIsBoundedAndExplicit();
     testVoiceActuallyProcessesPreparedLowpass();
     testDelayAttackHoldDecayStagesRenderInOrder();
-    testResolverAppliesKeyScaledEnvelopeAndEffectiveVelocityFilter();
+    testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance();
     std::cout << "SF2 filter/envelope runtime checks passed\n";
     return 0;
 }
