@@ -1,6 +1,7 @@
 #include "Sf2PlaybackMaterializer.h"
 
 #include "Sf2FilterMath.h"
+#include "Sf2ModulationMath.h"
 #include "Sf2ResonantFilterMath.h"
 #include "../voice/PitchMath.h"
 
@@ -192,14 +193,17 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         issues |= PlaybackIssueInvalidRootKey;
     }
 
-    const std::int32_t scale_tuning = native.scaleTuningCentsPerKey();
+    const std::int32_t raw_scale_tuning = native.scaleTuningCentsPerKey();
+    const std::int32_t scale_tuning = std::clamp<std::int32_t>(raw_scale_tuning, 0, 1200);
+    if (raw_scale_tuning != scale_tuning) {
+        // Keep the historical bit useful for malformed/out-of-range files while
+        // fully qualifying every valid SF2 scaleTuning value.
+        issues |= PlaybackIssueScaleTuningPending;
+    }
     const bool has_fixed_key = native.generators.has(46);
     const std::int32_t fixed_key = native.generators.value(46);
     if (has_fixed_key && (fixed_key < 0 || fixed_key > 127)) {
         issues |= PlaybackIssueInvalidRootKey;
-    }
-    if (!has_fixed_key && scale_tuning != 0 && scale_tuning != 100) {
-        issues |= PlaybackIssueScaleTuningPending;
     }
 
     const bool has_fixed_velocity = native.generators.has(47);
@@ -221,9 +225,6 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         modulation.reverb_send_amount != 0 || modulation.chorus_send_amount != 0) {
         issues |= PlaybackIssueEffectsSendPending;
     }
-    if (native.panSf2Units() != 0) {
-        issues |= PlaybackIssuePanLawApproximation;
-    }
 
     gm::PlaybackZone candidate{};
     candidate.sample_id = native.sample_id;
@@ -236,6 +237,7 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         ? static_cast<std::uint8_t>(root_key)
         : 60;
     candidate.loop_mode = loop_mode;
+    candidate.scale_tuning_cents_per_key = static_cast<std::uint16_t>(scale_tuning);
 
     const bool fixed_pitch = has_fixed_key || scale_tuning == 0;
     candidate.key_tracking = !fixed_pitch;
@@ -280,36 +282,29 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         }
     }
 
-    // Retain the prepared static gains for direct/legacy PlaybackZone users.
-    // SF2 initialFilterQ reduces DC gain by half its cB amount; normal SF2
-    // runtime users get the same compensation in ZoneResolver's NoteOn sum.
+    // Retain prepared static gains for direct/legacy PlaybackZone users. The
+    // same fixed-point attenuation + equal-power pan path is used by NoteOn so
+    // static and controller-driven playback cannot disagree about pan law.
     const std::int32_t static_attenuation_cb = static_cast<std::int32_t>(
         std::clamp<std::int64_t>(
             static_cast<std::int64_t>(native.initialAttenuationCb()) +
                 resonanceDcAttenuationCb(native.initialFilterQCb()),
             std::numeric_limits<std::int32_t>::min(),
             std::numeric_limits<std::int32_t>::max()));
-    double static_gain = centibelsToLinear(static_attenuation_cb);
-    if (!std::isfinite(static_gain)) {
-        static_gain = 0.0;
-    }
-    if (static_gain > 1.0) {
+    if (static_attenuation_cb < 0) {
         issues |= PlaybackIssueGainAboveUnityClamped;
-        static_gain = 1.0;
     }
 
     const std::int32_t pan_units = std::max<std::int32_t>(
         -500,
         std::min<std::int32_t>(500, native.panSf2Units()));
-    double left_gain = static_gain;
-    double right_gain = static_gain;
-    if (pan_units < 0) {
-        right_gain *= static_cast<double>(500 + pan_units) / 500.0;
-    } else if (pan_units > 0) {
-        left_gain *= static_cast<double>(500 - pan_units) / 500.0;
-    }
-    candidate.gain_left_q15 = unitGainQ15(left_gain, &issues);
-    candidate.gain_right_q15 = unitGainQ15(right_gain, &issues);
+    noteOnGainQ15(
+        static_attenuation_cb,
+        0,
+        127,
+        pan_units,
+        &candidate.gain_left_q15,
+        &candidate.gain_right_q15);
 
     candidate.note_on_gain.enabled = true;
     candidate.note_on_gain.initial_attenuation_cb = native.initialAttenuationCb();
