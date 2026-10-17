@@ -10,7 +10,11 @@ namespace gm_synth::sf2 {
 // log()/pow().
 constexpr std::int32_t kSf2DefaultVelocityAttenuationCb = 960;
 constexpr std::int32_t kSf2DefaultControllerAttenuationCb = 960;
-constexpr std::int32_t kSf2DefaultPanAmount = 1000;
+// CC10 is positive-bipolar linear. With the SF2 128-step controller domain an
+// amount of 500 maps CC0 -> -500, CC64 -> 0 and CC127 -> +492, matching the
+// default SoundFont/MIDI pan mapping without prematurely saturating the pan
+// generator summing node.
+constexpr std::int32_t kSf2DefaultPanAmount = 500;
 // SF2 default Channel Pressure and CC1 routes each add up to 50 cents to the
 // vibrato-LFO-to-pitch destination.
 constexpr std::int32_t kSf2DefaultVibratoControllerAmountCents = 50;
@@ -41,9 +45,9 @@ std::int32_t controllerToAttenuationCb(
     std::uint8_t value,
     std::int32_t amount_cb = kSf2DefaultControllerAttenuationCb);
 
-// SoundFont default CC10 route: positive-bipolar linear source, amount 1000
-// tenths of a percent. The returned contribution is added to the zone pan
-// generator before the final [-500, 500] generator clamp.
+// SoundFont default CC10 route: positive-bipolar linear source, amount 500
+// pan units. The returned contribution is added to the zone pan generator
+// before the final [-500, 500] generator clamp.
 std::int32_t controllerToPanSf2Units(
     std::uint8_t value,
     std::int32_t amount = kSf2DefaultPanAmount);
@@ -67,9 +71,8 @@ std::int32_t channelEffectsSendSf2Units(
 // above unity.
 std::int32_t attenuationCbToGainQ15(std::int32_t attenuation_cb);
 
-// Current runtime pan law remains the lightweight linear balance used by the
-// existing materializer. Keeping it here lets dynamic note-on/controller
-// attenuation be combined before pan without losing negative static offsets.
+// Final gain uses the SF2 equal-power pan law. Attenuation and pan are combined
+// after their respective generator/modulator summing nodes have been resolved.
 void noteOnGainQ15(
     std::int32_t initial_attenuation_cb,
     std::int32_t velocity_to_attenuation_cb,
