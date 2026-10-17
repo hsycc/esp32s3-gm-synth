@@ -206,7 +206,10 @@ void testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance() {
     assert(batch.voices[0].envelope.hold_frames == 50);
     assert(batch.voices[0].envelope.decay_frames == 50);
     assert(batch.voices[0].lowpass.enabled);
-    assert(batch.voices[0].gain_left_q15 >= 18400 && batch.voices[0].gain_left_q15 <= 18450);
+    // 100 cB filter resonance contributes 50 cB attenuation (Q15 ~= 18426).
+    // The SF2 center pan is equal-power, so each channel receives another
+    // sqrt(1/2) factor, yielding about 13029 per side rather than 18426.
+    assert(batch.voices[0].gain_left_q15 >= 13000 && batch.voices[0].gain_left_q15 <= 13100);
     assert(batch.voices[0].gain_right_q15 == batch.voices[0].gain_left_q15);
 
     BiquadLowpassConfig expected{};
