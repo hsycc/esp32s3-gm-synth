@@ -91,6 +91,12 @@ run_idf -B "$BUILD_DIR" build
 
 echo "== Verify M6 qualification configuration =="
 grep -q '^CONFIG_IDF_TARGET="esp32s3"$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_COMPILER_OPTIMIZATION_PERF=y$' "$SDKCONFIG_PATH"
+if grep -q '^CONFIG_COMPILER_OPTIMIZATION_DEBUG=y$' "$SDKCONFIG_PATH"; then
+    echo "Physical timing qualification must not use DEBUG/-Og optimization" >&2
+    exit 1
+fi
 grep -q '^CONFIG_ESPTOOLPY_FLASHMODE_DIO=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHFREQ_80M=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' "$SDKCONFIG_PATH"
@@ -121,6 +127,7 @@ echo
 echo "N16R8 M6 qualification image is ready."
 echo "  build dir : $BUILD_DIR"
 echo "  sdkconfig : $SDKCONFIG_PATH"
+echo "  compiler  : PERF (-O2 class), assertions enabled"
 echo "  flash     : DIO / 80 MHz / 16 MiB"
 echo "  fixture   : $fixture_bytes bytes"
 echo "  PCM arena : 4.50 MiB (4718592 bytes)"
@@ -136,7 +143,8 @@ if [[ -n "$PORT" ]]; then
     run_idf -B "$BUILD_DIR" -p "$PORT" flash
     echo
     echo "Flash complete. Start the serial monitor with:"
-    echo "  \"$IDF_PYTHON\" \"$IDF_PY\" -B build-hwbench -p '$PORT' monitor"
+    echo "  mkdir -p reports/local"
+    echo "  \"$IDF_PYTHON\" \"$IDF_PY\" -B build-hwbench -p '$PORT' monitor | tee reports/local/n16r8-m6.log"
 else
     echo
     echo "To flash later:"
