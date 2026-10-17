@@ -91,6 +91,7 @@ VoiceRenderResult Voice::renderAddRealtime(
     envelope_level_q15_ = envelope;
     const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
     const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
+    std::int32_t* output = interleaved_stereo;
 
     VoiceRenderResult result{};
     for (std::size_t frame = 0; frame < frame_count; ++frame) {
@@ -116,13 +117,23 @@ VoiceRenderResult Voice::renderAddRealtime(
             static_cast<std::int64_t>(a) +
             ((delta * static_cast<std::int64_t>(fraction)) >> 32));
 
-        interleaved_stereo[frame * 2u] += scaleSampleQ15Fast(mono, left_gain);
-        interleaved_stereo[frame * 2u + 1u] += scaleSampleQ15Fast(mono, right_gain);
+        output[0] += scaleSampleQ15Fast(mono, left_gain);
+        output[1] += scaleSampleQ15Fast(mono, right_gain);
+        output += kChannels;
         ++result.frames_rendered;
 
         phase += phase_increment;
         if (phase >= loop_end_q32) {
-            phase = loop_start_q32 + ((phase - loop_start_q32) % loop_length_q32);
+            // The normal musical case advances across at most one loop edge.
+            // Avoid 64-bit modulo there; preserve the original modulo formula
+            // as an exact fallback for extreme increments spanning 2+ loops.
+            const std::uint64_t overshoot = phase - loop_end_q32;
+            if (overshoot < loop_length_q32) {
+                phase = loop_start_q32 + overshoot;
+            } else {
+                phase = loop_start_q32 +
+                    ((phase - loop_start_q32) % loop_length_q32);
+            }
         }
     }
 
