@@ -180,21 +180,22 @@ void testOneTriangleModulatesPitchFilterAndVolumeTogether() {
     assert(base_gain > 0 && base_gain < 32767);
     assert(base_filter_a0 > 0);
 
-    // Control tick at frame 16 observes +1.0 triangle level.
+    // Control tick at frame 16 observes +1.0 triangle level. Per SF2 semantics
+    // positive modLfoToVolume raises volume, i.e. subtracts attenuation.
     std::array<std::int32_t, 34> first_quarter{};
     assert(voice.renderAdd(first_quarter.data(), 17).frames_rendered == 17);
     assert(voice.currentPhaseIncrementQ32() > base_phase);
-    assert(voice.currentGainLeftQ15() < base_gain);
-    assert(voice.currentGainRightQ15() < base_gain);
+    assert(voice.currentGainLeftQ15() > base_gain);
+    assert(voice.currentGainRightQ15() > base_gain);
     assert(voice.currentLowpassConfig().a0_q24 > base_filter_a0);
 
-    // Ticks at frame 32 and 48 move through zero to -1.0. Negative volume
-    // depth cancels the zone's static 120 cB attenuation before the final clamp.
+    // Ticks at frame 32 and 48 move through zero to -1.0. The negative half
+    // cycle adds attenuation, lowers pitch and lowers the filter cutoff.
     std::array<std::int32_t, 64> third_quarter{};
     assert(voice.renderAdd(third_quarter.data(), 32).frames_rendered == 32);
     assert(voice.currentPhaseIncrementQ32() < base_phase);
-    assert(voice.currentGainLeftQ15() > base_gain);
-    assert(voice.currentGainRightQ15() > base_gain);
+    assert(voice.currentGainLeftQ15() < base_gain);
+    assert(voice.currentGainRightQ15() < base_gain);
     assert(voice.currentLowpassConfig().a0_q24 < base_filter_a0);
 }
 
