@@ -71,9 +71,9 @@ struct VibratoLfoConfig {
     }
 };
 
-// SF2 Mod-LFO uses one triangle oscillator for three generator destinations.
-// Filter and volume nonlinearities are prepared later at NoteOn into bounded
-// Voice tables; these fields preserve the native depths and timing here.
+// SF2 Mod-LFO uses one triangle oscillator for pitch, filter cutoff and volume.
+// Nonlinear gain/filter work is prepared later at NoteOn; these fields preserve
+// the native depths and timing in immutable program state.
 struct ModLfoConfig {
     bool enabled = false;
     std::uint32_t delay_frames = 0;
@@ -84,6 +84,22 @@ struct ModLfoConfig {
 
     bool valid() const {
         return !enabled || phase_step_q32 != 0;
+    }
+};
+
+// SF2 modulation envelope is a second independent DAHDSR. It is unipolar and
+// drives pitch/filter destinations only. Hold/decay key scaling is applied at
+// NoteOn, mirroring the already-qualified volume-envelope rule around key 60.
+struct ModEnvelopeConfig {
+    bool enabled = false;
+    voice::EnvelopeConfig envelope{};
+    EnvelopeKeyScalingConfig key_scaling{};
+    std::int32_t pitch_depth_cents = 0;
+    std::int32_t filter_depth_cents = 0;
+
+    bool valid() const {
+        return !enabled ||
+            (envelope.sustain_q15 >= 0 && envelope.sustain_q15 <= voice::kQ15Unity);
     }
 };
 
@@ -137,6 +153,7 @@ struct PlaybackZone {
     NoteOnFilterConfig note_on_filter{};
     VibratoLfoConfig vibrato_lfo{};
     ModLfoConfig mod_lfo{};
+    ModEnvelopeConfig mod_envelope{};
     EffectsSendConfig effects_send{};
 
     bool valid() const {
@@ -151,7 +168,7 @@ struct PlaybackZone {
                root_key <= 127 && root_phase_increment_q32 != 0 &&
                sample_region_valid && note_on_gain.valid() &&
                note_on_filter.valid() && vibrato_lfo.valid() &&
-               mod_lfo.valid() && effects_send.valid();
+               mod_lfo.valid() && mod_envelope.valid() && effects_send.valid();
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
