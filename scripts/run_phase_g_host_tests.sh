@@ -107,6 +107,8 @@ build_and_run test_playback_zone_runtime -pthread \
   firmware/sample/ProgramSnapshot.cpp \
   firmware/voice/VoiceRenderer.cpp \
   firmware/voice/VoiceRuntimeControl.cpp \
+  firmware/voice/VoiceEffectsBus.cpp \
+  firmware/voice/GlobalEffectsProcessor.cpp \
   firmware/sf2/Sf2ModulationMath.cpp \
   firmware/sf2/Sf2FilterMath.cpp \
   firmware/gm/MidiChannelState.cpp \
@@ -247,9 +249,16 @@ build_and_run test_program_change_control_service -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/gm/test_program_change_control_service.cpp
 
-printf '\n[15/23] Build and run SF2 effects-send materializer tests\n'
-build_and_run test_sf2_effects_send_materializer \
+printf '\n[15/23] Build and run SF2 effects-send materializer/runtime tests\n'
+build_and_run test_sf2_effects_send_materializer -pthread \
+  firmware/sample/PublishedSampleDirectory.cpp \
+  firmware/sample/ProgramSnapshot.cpp \
   firmware/voice/PitchMath.cpp \
+  firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
+  firmware/voice/VoiceEffectsBus.cpp \
+  firmware/voice/GlobalEffectsProcessor.cpp \
+  firmware/voice/AudioBlockRenderer.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
   tests/sf2/test_sf2_effects_send_materializer.cpp
 
