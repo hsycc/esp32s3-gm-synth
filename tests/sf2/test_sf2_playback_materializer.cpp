@@ -1,4 +1,5 @@
 #include "../../firmware/sf2/Sf2PlaybackMaterializer.h"
+#include "../../firmware/sf2/Sf2PanMath.h"
 #include "../../firmware/voice/PitchMath.h"
 
 #include <cassert>
@@ -34,6 +35,7 @@ using gm_synth::sf2::PlaybackIssueUnsupportedSampleMode;
 using gm_synth::sf2::PlaybackMaterializationStatus;
 using gm_synth::sf2::ResolvedZoneModulation;
 using gm_synth::sf2::Sf2PlaybackMaterializer;
+using gm_synth::sf2::sf2PanChannelGainQ15;
 using gm_synth::voice::LoopMode;
 using gm_synth::voice::kPhaseOneQ32;
 using gm_synth::voice::kQ15Unity;
@@ -78,11 +80,12 @@ void testSimpleZoneBecomesExplicitPreview() {
     assert(output.velocity_high == 127);
     assert(output.root_key == 60);
     assert(output.key_tracking);
+    assert(output.scale_tuning_cents_per_key == 100);
     assert(output.root_phase_increment_q32 == kPhaseOneQ32);
     assert(output.loop_mode == LoopMode::None);
     assert(!output.sample_region.enabled);
-    assert(output.gain_left_q15 == kQ15Unity);
-    assert(output.gain_right_q15 == kQ15Unity);
+    assert(output.gain_left_q15 == sf2PanChannelGainQ15(0, true));
+    assert(output.gain_right_q15 == sf2PanChannelGainQ15(0, false));
     assert(output.envelope.delay_frames == 43);
     assert(output.envelope.attack_frames == 43);
     assert(output.envelope.hold_frames == 43);
@@ -153,6 +156,7 @@ void testFixedKeyAndScaleTuningQualification() {
     auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
     assert(result.playablePreview());
     assert(!output.key_tracking);
+    assert(output.scale_tuning_cents_per_key == 100);
     assert(output.root_phase_increment_q32 ==
            gm_synth::voice::phaseIncrementQ32(44100, 44100, 400.0));
 
@@ -161,12 +165,20 @@ void testFixedKeyAndScaleTuningQualification() {
     result = Sf2PlaybackMaterializer{}.materialize(native, &output);
     assert(result.playablePreview());
     assert(!output.key_tracking);
+    assert(output.scale_tuning_cents_per_key == 0);
     assert(!result.hasIssue(PlaybackIssueScaleTuningPending));
 
     native.generators.set(56, 50);
     result = Sf2PlaybackMaterializer{}.materialize(native, &output);
     assert(result.playablePreview());
-    assert(output.key_tracking);  // preview uses current 100-cent runtime tracking
+    assert(output.key_tracking);
+    assert(output.scale_tuning_cents_per_key == 50);
+    assert(!result.hasIssue(PlaybackIssueScaleTuningPending));
+
+    native.generators.set(56, 1300);
+    result = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(result.playablePreview());
+    assert(output.scale_tuning_cents_per_key == 1200);
     assert(result.hasIssue(PlaybackIssueScaleTuningPending));
 }
 
@@ -210,13 +222,14 @@ void testStaticFilterVelocityAndResonanceAreMaterialized() {
     assert(output.note_on_filter.resonance_cb == 0);
 
     // 100 cB = 10 dB resonance. SF2 requires half of that amount as DC
-    // attenuation, so the legacy static gain is approximately -5 dB.
+    // attenuation; the centered equal-power pan then contributes another -3 dB
+    // per output channel.
     native.generators.set(9, 100);
     const auto resonant = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
     assert(resonant.playablePreview());
     assert(!resonant.hasIssue(PlaybackIssueFilterPending));
     assert(output.note_on_filter.resonance_cb == 100);
-    assert(output.gain_left_q15 >= 18400 && output.gain_left_q15 <= 18450);
+    assert(output.gain_left_q15 >= 13000 && output.gain_left_q15 <= 13100);
     assert(output.gain_right_q15 == output.gain_left_q15);
 
     const auto other_rate = Sf2PlaybackMaterializer{48000}.materialize(native, modulation, &output);
@@ -316,7 +329,7 @@ void testResolvedControllerAmountsAreCopiedIntoPlaybackZone() {
     assert(output.note_on_gain.expression_to_attenuation_cb == 600);
 }
 
-void testStaticPanAndGainRemainExplicitApproximations() {
+void testStaticPanAndGainUseQualifiedEqualPowerLaw() {
     NativeResolvedZone native = baseZone();
     native.generators.set(17, 500);
     native.generators.set(48, 60);
@@ -324,7 +337,7 @@ void testStaticPanAndGainRemainExplicitApproximations() {
     PlaybackZone output{};
     auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
     assert(result.playablePreview());
-    assert(result.hasIssue(PlaybackIssuePanLawApproximation));
+    assert(!result.hasIssue(PlaybackIssuePanLawApproximation));
     assert(output.gain_left_q15 == 0);
     assert(output.gain_right_q15 > 16000 && output.gain_right_q15 < 17000);
 
@@ -333,8 +346,8 @@ void testStaticPanAndGainRemainExplicitApproximations() {
     result = Sf2PlaybackMaterializer{}.materialize(native, &output);
     assert(result.playablePreview());
     assert(result.hasIssue(PlaybackIssueGainAboveUnityClamped));
-    assert(output.gain_left_q15 == kQ15Unity);
-    assert(output.gain_right_q15 == kQ15Unity);
+    assert(output.gain_left_q15 == sf2PanChannelGainQ15(0, true));
+    assert(output.gain_right_q15 == sf2PanChannelGainQ15(0, false));
 }
 
 void testHardAddressFailureDoesNotMutateOutput() {
@@ -416,7 +429,7 @@ int main() {
     testVibratoGeneratorsAndControllerRoutesAreMaterialized();
     testDynamicEnvelopeLfoAndEffectsQualification();
     testResolvedControllerAmountsAreCopiedIntoPlaybackZone();
-    testStaticPanAndGainRemainExplicitApproximations();
+    testStaticPanAndGainUseQualifiedEqualPowerLaw();
     testHardAddressFailureDoesNotMutateOutput();
     testHardLoopSampleModeRomAndStereoFailuresAreExplicit();
     testMalformedPresetGeneratorWarningSurvivesMaterialization();
