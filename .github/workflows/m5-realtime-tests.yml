@@ -30,6 +30,8 @@ jobs:
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            firmware/voice/GlobalEffectsProcessor.cpp \
             firmware/realtime/RealtimeEventQueue.cpp \
             firmware/realtime/BlockEventScheduler.cpp \
             firmware/realtime/ScheduledAudioBlockRenderer.cpp \
