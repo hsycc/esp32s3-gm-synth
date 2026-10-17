@@ -24,6 +24,8 @@ constexpr std::array<std::uint16_t, 128> kConcaveQ15{{
 
 constexpr std::uint32_t kQ30One = std::uint32_t{1} << 30u;
 constexpr std::uint32_t kOneCentibelGainQ30 = 1061450803u;
+constexpr std::int32_t kSourceQ15One = 32767;
+constexpr std::int32_t kSource127Over128Q15 = 32511;
 
 std::uint32_t multiplyQ30(std::uint32_t a, std::uint32_t b) {
     const std::uint64_t product = static_cast<std::uint64_t>(a) * b;
@@ -44,6 +46,82 @@ std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
     return static_cast<std::int32_t>((product + (std::int64_t{1} << 14u)) >> 15u);
 }
 
+std::int32_t divideSignedRounded(std::int64_t numerator, std::int64_t denominator) {
+    if (denominator <= 0) {
+        return 0;
+    }
+    const bool negative = numerator < 0;
+    const std::uint64_t magnitude = negative
+        ? static_cast<std::uint64_t>(-numerator)
+        : static_cast<std::uint64_t>(numerator);
+    const std::uint64_t rounded =
+        (magnitude + static_cast<std::uint64_t>(denominator / 2)) /
+        static_cast<std::uint64_t>(denominator);
+    const std::int64_t signed_value = negative
+        ? -static_cast<std::int64_t>(rounded)
+        : static_cast<std::int64_t>(rounded);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        signed_value,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+}
+
+std::int32_t unipolarCurveQ15(std::uint8_t value, Sf2SourceCurve curve) {
+    const std::size_t index = std::min<std::size_t>(value, 127u);
+    switch (curve) {
+        case Sf2SourceCurve::Linear:
+            return static_cast<std::int32_t>(
+                (static_cast<std::int64_t>(index) * kSourceQ15One + 64) / 128);
+        case Sf2SourceCurve::Concave:
+            return std::min<std::int32_t>(kConcaveQ15[index], kSource127Over128Q15);
+        case Sf2SourceCurve::Convex: {
+            const std::size_t mirror = 127u - index;
+            const std::int32_t mirrored_concave = std::min<std::int32_t>(
+                kConcaveQ15[mirror],
+                kSource127Over128Q15);
+            return kSource127Over128Q15 - mirrored_concave;
+        }
+        case Sf2SourceCurve::Switch:
+            return index >= 64u ? kSource127Over128Q15 : 0;
+    }
+    return 0;
+}
+
+std::int32_t nonlinearSourceQ15(
+    const Sf2SourceDescriptor& source,
+    std::uint8_t input) {
+    const std::uint8_t clamped = static_cast<std::uint8_t>(
+        std::min<unsigned>(input, 127u));
+    if (!source.bipolar) {
+        if (!source.negative) {
+            return unipolarCurveQ15(clamped, source.curve);
+        }
+        if (clamped == 0u) {
+            return kSourceQ15One;
+        }
+        if (clamped >= 127u) {
+            return 0;
+        }
+        const std::uint8_t reversed = static_cast<std::uint8_t>(128u - clamped);
+        return unipolarCurveQ15(reversed, source.curve);
+    }
+
+    std::int32_t bipolar_numerator = 2 * static_cast<std::int32_t>(clamped) - 128;
+    if (source.negative) {
+        bipolar_numerator = -bipolar_numerator;
+    }
+    if (source.curve == Sf2SourceCurve::Switch) {
+        return bipolar_numerator >= 0 ? kSourceQ15One : -kSourceQ15One;
+    }
+
+    const bool negative = bipolar_numerator < 0;
+    const std::int32_t magnitude = negative ? -bipolar_numerator : bipolar_numerator;
+    const std::int32_t mapped = magnitude >= 128
+        ? kSourceQ15One
+        : unipolarCurveQ15(static_cast<std::uint8_t>(magnitude), source.curve);
+    return negative ? -mapped : mapped;
+}
+
 void attenuationAndPanToGainQ15(
     std::int64_t attenuation_cb,
     std::int64_t pan_sf2_units,
@@ -60,6 +138,48 @@ void attenuationAndPanToGainQ15(
 }
 
 }  // namespace
+
+std::int32_t noteOnSourceToAmount(
+    std::uint16_t source_oper,
+    std::uint8_t key,
+    std::uint8_t velocity,
+    std::int32_t amount) {
+    Sf2SourceDescriptor source{};
+    if (!isSupportedSf2NoteOnSourceOper(source_oper) ||
+        !decodeSf2SourceOper(source_oper, &source) || amount == 0) {
+        return 0;
+    }
+
+    const std::uint8_t input = source.index == 2u ? velocity : key;
+    const std::int32_t clamped = static_cast<std::int32_t>(
+        std::min<unsigned>(input, 127u));
+
+    // Keep linear routes exactly on the same 128-step integer model already
+    // used by positiveLinearToAmount(), velocityToFilterCutoffCents() and CC10.
+    if (source.curve == Sf2SourceCurve::Linear) {
+        if (source.bipolar) {
+            std::int32_t numerator = 2 * clamped - 128;
+            if (source.negative) {
+                numerator = -numerator;
+            }
+            return divideSignedRounded(
+                static_cast<std::int64_t>(amount) * numerator,
+                128);
+        }
+
+        std::int32_t factor = clamped;
+        if (source.negative) {
+            factor = clamped >= 127 ? 0 : 128 - clamped;
+        }
+        return divideSignedRounded(
+            static_cast<std::int64_t>(amount) * factor,
+            128);
+    }
+
+    return divideSignedRounded(
+        static_cast<std::int64_t>(amount) * nonlinearSourceQ15(source, input),
+        kSourceQ15One);
+}
 
 std::int32_t negativeConcaveToAmount(std::uint8_t value, std::int32_t amount) {
     const unsigned clamped = std::min<unsigned>(value, 127u);
