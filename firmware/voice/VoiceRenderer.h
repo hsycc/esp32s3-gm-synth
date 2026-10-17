@@ -12,6 +12,7 @@ constexpr std::int32_t kQ15Unity = 32767;
 constexpr std::uint64_t kPhaseOneQ32 = std::uint64_t{1} << 32;
 constexpr std::int32_t kMaxEffectsSendUnits = 1000;
 constexpr std::uint32_t kFilterCoefficientFractionBits = 24;
+constexpr std::size_t kLfoControlPointCount = 9;
 
 struct BiquadLowpassConfig {
     bool enabled = false;
@@ -27,6 +28,55 @@ struct BiquadLowpassConfig {
     }
 };
 
+struct StereoGainQ15 {
+    std::int32_t left = kQ15Unity;
+    std::int32_t right = kQ15Unity;
+
+    bool valid() const {
+        return left >= 0 && left <= kQ15Unity && right >= 0 && right <= kQ15Unity;
+    }
+};
+
+// Nine uniformly-spaced points cover LFO source levels -1.0 .. +1.0. The GM
+// layer prepares the exact attenuation/pan result at those points; Voice only
+// performs bounded linear interpolation at the control tick.
+struct LfoGainTable {
+    bool enabled = false;
+    std::array<StereoGainQ15, kLfoControlPointCount> points{};
+
+    bool valid() const {
+        if (!enabled) {
+            return true;
+        }
+        for (const auto& point : points) {
+            if (!point.valid()) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+// Same strategy for dynamic filter cutoff: NoteOn prepares nine Q24 coefficient
+// sets, so the render path never calls tan(), pow() or integer division-heavy
+// coefficient generation while audio is running.
+struct LfoLowpassTable {
+    bool enabled = false;
+    std::array<BiquadLowpassConfig, kLfoControlPointCount> points{};
+
+    bool valid() const {
+        if (!enabled) {
+            return true;
+        }
+        for (const auto& point : points) {
+            if (!point.valid() || !point.enabled) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
 // Fixed-point triangle LFO prepared entirely outside the per-frame hot path.
 // phase_step_q32 is cycles-per-output-frame in Q0.32. pitch_depth_cents is the
 // current peak pitch depth; channel controllers may update it while sounding.
@@ -38,6 +88,23 @@ struct PitchLfoConfig {
 
     bool valid() const {
         return !enabled || phase_step_q32 != 0;
+    }
+};
+
+// SoundFont Mod-LFO has one oscillator and may target pitch, filter cutoff and
+// volume simultaneously. Filter/gain nonlinearities are already baked into the
+// two nine-point tables before Voice::start().
+struct ModLfoConfig {
+    bool enabled = false;
+    std::uint32_t delay_frames = 0;
+    std::uint32_t phase_step_q32 = 0;
+    std::int32_t pitch_depth_cents = 0;
+    LfoGainTable gain_table{};
+    LfoLowpassTable lowpass_table{};
+
+    bool valid() const {
+        return !enabled ||
+            (phase_step_q32 != 0 && gain_table.valid() && lowpass_table.valid());
     }
 };
 
@@ -78,6 +145,7 @@ struct VoiceRealtimeControlConfig {
     bool gain_enabled = false;
     bool effects_send_enabled = false;
     bool vibrato_enabled = false;
+    bool mod_lfo_gain_enabled = false;
     std::uint64_t unbent_phase_increment_q32 = kPhaseOneQ32;
     std::int32_t initial_attenuation_cb = 0;
     std::int32_t velocity_to_attenuation_cb = 0;
@@ -92,6 +160,7 @@ struct VoiceRealtimeControlConfig {
     std::int32_t static_vibrato_pitch_depth_cents = 0;
     std::int32_t channel_pressure_to_vibrato_pitch_cents = 0;
     std::int32_t modulation_wheel_to_vibrato_pitch_cents = 0;
+    std::int32_t mod_lfo_volume_depth_cb = 0;
 };
 
 struct VoiceRuntimeControlUpdate {
@@ -101,9 +170,10 @@ struct VoiceRuntimeControlUpdate {
     std::int16_t reverb_send_units = 0;
     std::int16_t chorus_send_units = 0;
     std::int32_t vibrato_pitch_depth_cents = 0;
+    LfoGainTable mod_lfo_gain_table{};
 
     bool valid() const {
-        return phase_increment_q32 != 0 &&
+        return phase_increment_q32 != 0 && mod_lfo_gain_table.valid() &&
             reverb_send_units >= 0 && reverb_send_units <= kMaxEffectsSendUnits &&
             chorus_send_units >= 0 && chorus_send_units <= kMaxEffectsSendUnits;
     }
@@ -125,6 +195,7 @@ struct VoiceStartParams {
     SampleRegion sample_region{};
     BiquadLowpassConfig lowpass{};
     PitchLfoConfig vibrato_lfo{};
+    ModLfoConfig mod_lfo{};
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
     // Prepared send state in SoundFont tenths-of-a-percent units. The dry Voice
@@ -218,12 +289,16 @@ public:
     std::uint64_t currentPhaseIncrementQ32() const { return current_phase_increment_q32_; }
     std::int32_t gainLeftQ15() const { return params_.gain_left_q15; }
     std::int32_t gainRightQ15() const { return params_.gain_right_q15; }
+    std::int32_t currentGainLeftQ15() const { return current_gain_left_q15_; }
+    std::int32_t currentGainRightQ15() const { return current_gain_right_q15_; }
     std::int16_t reverbSendUnits() const { return params_.reverb_send_units; }
     std::int16_t chorusSendUnits() const { return params_.chorus_send_units; }
     std::int32_t envelopeLevelQ15() const { return envelope_level_q15_; }
-    bool lowpassEnabled() const { return params_.lowpass.enabled; }
+    bool lowpassEnabled() const { return current_lowpass_.enabled; }
     const BiquadLowpassConfig& lowpassConfig() const { return params_.lowpass; }
+    const BiquadLowpassConfig& currentLowpassConfig() const { return current_lowpass_; }
     const PitchLfoConfig& vibratoLfoConfig() const { return params_.vibrato_lfo; }
+    const ModLfoConfig& modLfoConfig() const { return params_.mod_lfo; }
     const VoiceRealtimeControlConfig& realtimeControl() const {
         return params_.realtime_control;
     }
@@ -257,8 +332,8 @@ private:
     std::int32_t nextEnvelopeLevel();
     std::int32_t interpolatedSample() const;
     std::int32_t applyLowpass(std::int32_t sample);
-    void refreshVibratoPitch();
-    void advanceVibrato();
+    void refreshLfoState();
+    void advanceLfos();
     void advancePhase();
     void beginRelease(std::uint32_t release_frames, FastReleaseKind fast_release_kind);
     void finish();
@@ -274,9 +349,15 @@ private:
     std::uint8_t key_ = 0;
     std::uint64_t phase_q32_ = 0;
     std::uint64_t current_phase_increment_q32_ = kPhaseOneQ32;
+    std::int32_t current_gain_left_q15_ = kQ15Unity;
+    std::int32_t current_gain_right_q15_ = kQ15Unity;
+    BiquadLowpassConfig current_lowpass_{};
     std::uint32_t vibrato_phase_q32_ = 0;
     std::uint32_t vibrato_delay_remaining_ = 0;
     std::uint8_t vibrato_control_frames_remaining_ = 0;
+    std::uint32_t mod_lfo_phase_q32_ = 0;
+    std::uint32_t mod_lfo_delay_remaining_ = 0;
+    std::uint8_t mod_lfo_control_frames_remaining_ = 0;
     std::int64_t lowpass_z1_q24_ = 0;
     std::int64_t lowpass_z2_q24_ = 0;
     EnvelopeStage envelope_stage_ = EnvelopeStage::Done;
