@@ -69,9 +69,6 @@ decode_qemu_backtrace_if_present() {
 }
 
 stage "verify real SF2 fixture"
-# Pin the real fixture before copying it into the generated FATFS staging
-# directory. This prevents a stale/corrupted test asset from silently becoming
-# the emulator reference bank.
 grep 'assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2$' \
     assets/sf2/manifests/subset-sha256.txt | sha256sum -c -
 
@@ -89,8 +86,6 @@ fi
 echo "Staged real SF2 fixture: $FIXTURE_TARGET ($fixture_bytes bytes)"
 
 stage "configure dedicated ESP32-S3 QEMU-SF2 build"
-# Build a dedicated emulator image. Production/default sdkconfig and partition
-# layout stay untouched; this build layers QEMU-only FATFS/benchmark defaults.
 idf.py -B "$BUILD_DIR" \
     -D "SDKCONFIG=$SDKCONFIG_PATH" \
     -D "SDKCONFIG_DEFAULTS=$ROOT_DIR/sdkconfig.defaults;$ROOT_DIR/sdkconfig.qemu.defaults" \
@@ -108,6 +103,10 @@ grep -q '^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"$' "$SDKCO
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
+if grep -q '^CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y$' "$SDKCONFIG_PATH"; then
+    echo "QEMU build must not be marked as physical qualification evidence" >&2
+    exit 1
+fi
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
 grep -q "^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=${QEMU_BENCHMARK_BYTES}$" "$SDKCONFIG_PATH"
@@ -129,7 +128,6 @@ if [[ -f "$BUILD_DIR/flash_args" ]]; then
 fi
 
 stage "locate Espressif QEMU"
-# Reuse/install the Espressif-pinned QEMU package from the active IDF checkout.
 python "$IDF_PATH/tools/idf_tools.py" install qemu-xtensa
 QEMU_BIN="$(find "$TOOLS_ROOT/tools/qemu-xtensa" -type f -name qemu-system-xtensa -perm -u+x -print 2>/dev/null | sort | tail -n 1)"
 if [[ -z "$QEMU_BIN" || ! -x "$QEMU_BIN" ]]; then
@@ -148,9 +146,6 @@ fi
 echo "Merged flash image: $FLASH_IMAGE ($(stat -c '%s' "$FLASH_IMAGE") bytes)"
 
 stage "launch ESP32-S3 QEMU"
-# The firmware intentionally stays alive after app_main. A timeout is therefore
-# the normal stop condition. Temporarily remove the ERR trap as well as `-e` so
-# expected timeout statuses (124/143) do not abort before log verification.
 set +e
 trap - ERR
 timeout --signal=TERM "${TIMEOUT_SECONDS}s" \
@@ -187,7 +182,7 @@ require_log() {
 }
 
 require_log "Detected physical PSRAM: 8388608 bytes (8.00 MiB)"
-require_log "QEMU FATFS mounted: base=/sf2 partition=qemu_sf2"
+require_log "Benchmark FATFS mounted: base=/sf2 partition=qemu_sf2"
 require_log "Storage benchmark VFS open: path=/sf2/test.sf2 file_bytes=5898214"
 require_log "Storage benchmark parser metadata: static_bytes="
 require_log "Storage benchmark SF2 parsed: playable_samples=67"
@@ -200,8 +195,6 @@ require_log "chunk=32768 bytes=${QEMU_BENCHMARK_BYTES}"
 require_log "chunk=65536 bytes=${QEMU_BENCHMARK_BYTES}"
 require_log "Residency ready: capacity=4194304 used=0"
 
-# M3 Program Prepare functional gate. QEMU elapsed times are intentionally not
-# asserted; only the state/ownership/storage behavior is part of this gate.
 require_log "prepare_bench: case=cold_initial ok=1"
 require_log "prepare_bench: case=warm_same_program ok=1"
 require_log "prepare_bench: case=warm_commit_retire commit_ok=1 ack_ok=1"
@@ -211,16 +204,17 @@ require_log "prepare_bench: case=eviction_commit_retire commit_ok=1 ack_ok=1"
 require_log "release_tail_survived=1 release_ok=1"
 require_log "prepare_bench: PASS"
 
-# M6 deterministic render-path gate. The exact emulator timings are not
-# asserted, but every fixed-Voice workload and final lifetime marker must exist.
+# QEMU timing remains regression-only, but every fixed Voice workload and final
+# lifetime marker must exist. The physical-evidence marker must remain disabled.
 require_log "render_bench: START frames_per_block=64 sample_rate=44100"
-for voices in 4 8 12 16 20 24; do
+require_log "timing_scope=qemu_regression physical_timing_evidence=0"
+for voices in 1 4 8 12 16 18 20 24; do
     require_log "render_bench: case voices=${voices} blocks=128"
 done
-require_log "render_bench: PASS cases=6 final_refs=0"
+require_log "render_bench: PASS cases=8 final_refs=0"
 require_log "M6 bring-up core linked successfully"
 
-if grep -Eq "QEMU FATFS mount failed|VFS path cannot be opened|SF2 parse failed|fixture sample-count mismatch|One or more storage benchmark chunk-size passes failed|Program Prepare hardware benchmark FAILED|prepare_bench: .*ok=0|Render timing benchmark FAILED|render_bench: .*failed|render_bench: stale refs|render_bench: active/ref mismatch|render_bench: invalid telemetry|render_bench: leaked voice refs|Guru Meditation|assert failed|abort\(\)|panic'ed" "$REPORT_PATH"; then
+if grep -Eq "Benchmark FATFS mount failed|VFS path cannot be opened|SF2 parse failed|fixture sample-count mismatch|One or more storage benchmark chunk-size passes failed|Program Prepare hardware benchmark FAILED|prepare_bench: .*ok=0|Render timing benchmark FAILED|render_bench: .*failed|render_bench: stale refs|render_bench: active/ref mismatch|render_bench: invalid telemetry|render_bench: leaked voice refs|Guru Meditation|assert failed|abort\(\)|panic'ed" "$REPORT_PATH"; then
     echo "QEMU SF2/render integration log contains a failure/panic signature" >&2
     tail -n 200 "$REPORT_PATH" >&2 || true
     exit 1
