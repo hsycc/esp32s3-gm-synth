@@ -75,6 +75,8 @@ jobs:
           grep -q '^CONFIG_IDF_TARGET="esp32s3"$' sdkconfig
           grep -q '^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y$' sdkconfig
           grep -q '^CONFIG_COMPILER_OPTIMIZATION_PERF=y$' sdkconfig
+          grep -q '^CONFIG_COMPILER_LTO_LINKTIME=y$' sdkconfig
+          grep -q '^CONFIG_COMPILER_LTO_COMPILETIME=y$' sdkconfig
           if grep -q '^CONFIG_COMPILER_OPTIMIZATION_DEBUG=y$' sdkconfig; then
             echo "Production/default firmware must not use DEBUG/-Og optimization" >&2
             exit 1
