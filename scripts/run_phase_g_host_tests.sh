@@ -29,7 +29,7 @@ printf 'Phase G host validation\n'
 printf '  compiler: %s\n' "${CXX}"
 printf '  output:   %s\n' "${BUILD_DIR}"
 
-printf '\n[1/19] Validate analyzed realtime zone bounds\n'
+printf '\n[1/20] Validate analyzed realtime zone bounds\n'
 python3 - <<'PY'
 import glob
 import json
@@ -101,7 +101,7 @@ print(
 )
 PY
 
-printf '\n[2/19] Build and run playback-zone runtime tests\n'
+printf '\n[2/20] Build and run playback-zone runtime tests\n'
 build_and_run test_playback_zone_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -117,35 +117,35 @@ build_and_run test_playback_zone_runtime -pthread \
   firmware/realtime/ScheduledAudioBlockRenderer.cpp \
   tests/gm/test_playback_zone_runtime.cpp
 
-printf '\n[3/19] Build and run random-access PDTA reader tests\n'
+printf '\n[3/20] Build and run random-access PDTA reader tests\n'
 build_and_run test_sf2_pdta_reader \
   firmware/sf2/Sf2PdtaReader.cpp \
   tests/sf2/test_sf2_pdta_reader.cpp
 
-printf '\n[4/19] Build and run native resolved-zone tests\n'
+printf '\n[4/20] Build and run native resolved-zone tests\n'
 build_and_run test_sf2_resolved_zone \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
   tests/sf2/test_sf2_resolved_zone.cpp
 
-printf '\n[5/19] Build and run fixed-point modulation-math tests\n'
+printf '\n[5/20] Build and run fixed-point modulation-math tests\n'
 build_and_run test_sf2_modulation_math \
   firmware/sf2/Sf2ModulationMath.cpp \
   tests/sf2/test_sf2_modulation_math.cpp
 
-printf '\n[6/19] Build and run per-zone modulator resolver tests\n'
+printf '\n[6/20] Build and run per-zone modulator resolver tests\n'
 build_and_run test_sf2_zone_modulator_resolver \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ZoneModulatorResolver.cpp \
   tests/sf2/test_sf2_zone_modulator_resolver.cpp
 
-printf '\n[7/19] Build and run playback materializer tests\n'
+printf '\n[7/20] Build and run playback materializer tests\n'
 build_and_run test_sf2_playback_materializer \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
   tests/sf2/test_sf2_playback_materializer.cpp
 
-printf '\n[8/19] Build and run SF2 note-on modulation runtime tests\n'
+printf '\n[8/20] Build and run SF2 note-on modulation runtime tests\n'
 build_and_run test_sf2_note_on_modulation_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -160,7 +160,7 @@ build_and_run test_sf2_note_on_modulation_runtime -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/sf2/test_sf2_note_on_modulation_runtime.cpp
 
-printf '\n[9/19] Build and run playback program prepare tests\n'
+printf '\n[9/20] Build and run playback program prepare tests\n'
 build_and_run test_sf2_playback_program_preparer \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -170,12 +170,12 @@ build_and_run test_sf2_playback_program_preparer \
   firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
   tests/sf2/test_sf2_playback_program_preparer.cpp
 
-printf '\n[10/19] Build and run GM MIDI channel-state tests\n'
+printf '\n[10/20] Build and run GM MIDI channel-state tests\n'
 build_and_run test_midi_channel_state \
   firmware/gm/MidiChannelState.cpp \
   tests/gm/test_midi_channel_state.cpp
 
-printf '\n[11/19] Build and run channel-state NoteOn runtime tests\n'
+printf '\n[11/20] Build and run channel-state NoteOn runtime tests\n'
 build_and_run test_midi_channel_note_on -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -189,7 +189,7 @@ build_and_run test_midi_channel_note_on -pthread \
   firmware/realtime/RealtimeEventQueue.cpp \
   tests/gm/test_midi_channel_note_on.cpp
 
-printf '\n[12/19] Build and run active-voice controller/sustain/effects tests\n'
+printf '\n[12/20] Build and run active-voice controller/sustain/effects tests\n'
 build_and_run test_midi_channel_active_voice -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -202,7 +202,7 @@ build_and_run test_midi_channel_active_voice -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/gm/test_midi_channel_active_voice.cpp
 
-printf '\n[13/19] Build and run realtime Program Change handoff tests\n'
+printf '\n[13/20] Build and run realtime Program Change handoff tests\n'
 build_and_run test_realtime_program_change_handoff -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -218,7 +218,7 @@ build_and_run test_realtime_program_change_handoff -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/gm/test_realtime_program_change_handoff.cpp
 
-printf '\n[14/19] Build and run real-bank Program Change control-service tests\n'
+printf '\n[14/20] Build and run real-bank Program Change control-service tests\n'
 build_and_run test_program_change_control_service -pthread \
   firmware/sample/SampleResidencyManager.cpp \
   firmware/sample/SampleResidencySourceLoad.cpp \
@@ -247,13 +247,13 @@ build_and_run test_program_change_control_service -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/gm/test_program_change_control_service.cpp
 
-printf '\n[15/19] Build and run SF2 effects-send materializer tests\n'
+printf '\n[15/20] Build and run SF2 effects-send materializer tests\n'
 build_and_run test_sf2_effects_send_materializer \
   firmware/voice/PitchMath.cpp \
   firmware/sf2/Sf2PlaybackMaterializer.cpp \
   tests/sf2/test_sf2_effects_send_materializer.cpp
 
-printf '\n[16/19] Build and run GM reset/percussion routing tests\n'
+printf '\n[16/20] Build and run GM reset/percussion routing tests\n'
 build_and_run test_gm_system_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -269,7 +269,7 @@ build_and_run test_gm_system_runtime -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/gm/test_gm_system_runtime.cpp
 
-printf '\n[17/19] Build and run real-bank missing-percussion transaction tests\n'
+printf '\n[17/20] Build and run real-bank missing-percussion transaction tests\n'
 build_and_run test_gm_missing_percussion -pthread \
   firmware/sample/SampleResidencyManager.cpp \
   firmware/sample/SampleResidencySourceLoad.cpp \
@@ -290,7 +290,7 @@ build_and_run test_gm_missing_percussion -pthread \
   firmware/gm/PlaybackProgramSnapshot.cpp \
   tests/gm/test_gm_missing_percussion.cpp
 
-printf '\n[18/19] Build and run SF2 filter/envelope runtime tests\n'
+printf '\n[18/20] Build and run SF2 filter/envelope runtime tests\n'
 build_and_run test_sf2_filter_envelope_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -303,7 +303,7 @@ build_and_run test_sf2_filter_envelope_runtime -pthread \
   firmware/gm/ZoneResolver.cpp \
   tests/sf2/test_sf2_filter_envelope_runtime.cpp
 
-printf '\n[19/19] Build and run SF2 vibrato-LFO runtime tests\n'
+printf '\n[19/20] Build and run SF2 vibrato-LFO runtime tests\n'
 build_and_run test_sf2_vibrato_runtime -pthread \
   firmware/sample/PublishedSampleDirectory.cpp \
   firmware/sample/ProgramSnapshot.cpp \
@@ -317,5 +317,20 @@ build_and_run test_sf2_vibrato_runtime -pthread \
   firmware/gm/PlaybackProgramSnapshot.cpp \
   firmware/gm/ZoneResolver.cpp \
   tests/sf2/test_sf2_vibrato_runtime.cpp
+
+printf '\n[20/20] Build and run SF2 Mod-LFO runtime tests\n'
+build_and_run test_sf2_mod_lfo_runtime -pthread \
+  firmware/sample/PublishedSampleDirectory.cpp \
+  firmware/sample/ProgramSnapshot.cpp \
+  firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
+  firmware/voice/PitchMath.cpp \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  firmware/sf2/Sf2FilterMath.cpp \
+  firmware/sf2/Sf2PlaybackMaterializer.cpp \
+  firmware/gm/MidiChannelState.cpp \
+  firmware/gm/PlaybackProgramSnapshot.cpp \
+  firmware/gm/ZoneResolver.cpp \
+  tests/sf2/test_sf2_mod_lfo_runtime.cpp
 
 printf '\nPhase G host validation passed.\n'
