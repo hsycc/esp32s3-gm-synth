@@ -10,6 +10,10 @@
 
 namespace gm_synth::gm {
 
+// Compact parameters whose final value depends on the incoming NoteOn and the
+// current MIDI channel controller state. Keeping the raw SoundFont attenuation
+// summing node here is important: a negative preset initialAttenuation may
+// cancel part of velocity/controller attenuation before the final clamp.
 struct NoteOnGainConfig {
     bool enabled = false;
     std::int32_t initial_attenuation_cb = 0;
@@ -17,7 +21,13 @@ struct NoteOnGainConfig {
     std::int32_t volume_to_attenuation_cb = 960;
     std::int32_t pan_amount = 500;
     std::int32_t expression_to_attenuation_cb = 960;
+    // Mono zones stay in the native -500..500 range. Expanded stereo layers
+    // add their -500/+500 channel base before live CC10, so retaining one extra
+    // pan-width of headroom prevents an early clamp from changing controller
+    // behavior when the channel later pans back toward center.
     std::int16_t pan_sf2_units = 0;
+    // -1 means use the incoming NoteOn velocity. SF2 generator 47 may replace
+    // the velocity used by note-on modulators without changing zone selection.
     std::int16_t fixed_velocity = -1;
 
     bool valid() const {
@@ -27,6 +37,8 @@ struct NoteOnGainConfig {
     }
 };
 
+// Static initialFilterFc plus velocity/LFO/envelope cutoff movement and the
+// full SF2 initialFilterQ range are represented by the prepared Q24 biquad path.
 struct NoteOnFilterConfig {
     bool enabled = false;
     std::int32_t initial_cutoff_cents = 13500;
@@ -49,6 +61,9 @@ struct EnvelopeKeyScalingConfig {
     std::int16_t decay_timecents_per_key = 0;
 };
 
+// Prepared SF2 vibrato-LFO state. delay/frequency are converted in the control
+// domain; the realtime side only advances a fixed-point triangle oscillator.
+// Static gen6 depth is summed with the live Channel Pressure and CC1 routes.
 struct VibratoLfoConfig {
     bool enabled = false;
     std::uint32_t delay_frames = 0;
@@ -62,6 +77,9 @@ struct VibratoLfoConfig {
     }
 };
 
+// SF2 Mod-LFO uses one triangle oscillator for pitch, filter cutoff and volume.
+// Nonlinear gain/filter work is prepared later at NoteOn; these fields preserve
+// the native depths and timing in immutable program state.
 struct ModLfoConfig {
     bool enabled = false;
     std::uint32_t delay_frames = 0;
@@ -75,15 +93,19 @@ struct ModLfoConfig {
     }
 };
 
+// SF2 modulation envelope is a second independent DAHDSR. It is unipolar and
+// drives pitch/filter destinations only. Hold/decay key scaling is applied at
+// NoteOn, mirroring the already-qualified volume-envelope rule around key 60.
 struct ModEnvelopeConfig {
     bool enabled = false;
     voice::EnvelopeConfig envelope{};
     EnvelopeKeyScalingConfig key_scaling{};
     std::int32_t pitch_depth_cents = 0;
     std::int32_t filter_depth_cents = 0;
-    // SoundFont custom velocity routes encountered in real GM banks. Positive
-    // and negative-unipolar source identities are kept separate because they
-    // are distinct modulators and may independently survive hierarchy merging.
+    // Real GM banks also use NoteOn velocity to alter ModEnv filter depth and
+    // attack time. Positive/negative source identities stay separate because
+    // they are distinct modulators and may independently survive hierarchy
+    // replacement/addition before the final NoteOn sum.
     std::int32_t velocity_positive_to_filter_depth_cents = 0;
     std::int32_t velocity_negative_to_filter_depth_cents = 0;
     std::int32_t velocity_to_attack_timecents = 0;
@@ -94,6 +116,10 @@ struct ModEnvelopeConfig {
     }
 };
 
+// Prepared SF2 reverb/chorus generator summing state. The runtime computes the
+// current send from the static generator plus CC91/CC93. These values are
+// carried all the way into Voice even before the actual FX processors exist so
+// controller semantics and future routing do not need another metadata change.
 struct EffectsSendConfig {
     bool enabled = false;
     std::int16_t reverb_sf2_units = 0;
@@ -108,6 +134,10 @@ struct EffectsSendConfig {
     }
 };
 
+// Immutable, control-domain-prepared playback metadata for one SF2 zone.
+// Expensive SF2 generator/modulator merging belongs before publication. The
+// audio domain only performs bounded key/velocity matching and copies these
+// already-resolved values into VoiceStartParams.
 struct PlaybackZone {
     sample::SampleId sample_id = 0;
     std::uint8_t key_low = 0;
@@ -116,20 +146,27 @@ struct PlaybackZone {
     std::uint8_t velocity_high = 127;
     std::uint16_t exclusive_class = 0;
 
+    // root_phase_increment_q32 already includes source/output sample-rate,
+    // coarse/fine tuning and sample pitch-correction terms for root_key.
+    // scale_tuning_cents_per_key is SF2 generator 56. Runtime NoteOn applies
+    // (key-root_key)*scaleTuning using fixed-point cents transposition only.
+    // key_tracking=false is used by fixed-key and zero-scale zones.
     std::uint8_t root_key = 60;
     bool key_tracking = true;
     std::uint16_t scale_tuning_cents_per_key = 100;
     std::uint64_t root_phase_increment_q32 = voice::kPhaseOneQ32;
 
+    // SoundFont address generators are resolved relative to the resident shdr
+    // sample. Disabled means use the entire sample-global SampleDescriptor.
     voice::SampleRegion sample_region{};
     voice::LoopMode loop_mode = voice::LoopMode::None;
     std::int32_t gain_left_q15 = voice::kQ15Unity;
     std::int32_t gain_right_q15 = voice::kQ15Unity;
     voice::EnvelopeConfig envelope{};
     EnvelopeKeyScalingConfig envelope_key_scaling{};
-    // Negative-linear NoteOn velocity -> attackVolEnv amount in timecents.
-    // Applying the delta to already-converted attack frames is equivalent to
-    // adding timecents before conversion, apart from bounded frame rounding.
+    // Negative-linear NoteOn velocity -> attackVolEnv amount in timecents. The
+    // realtime resolver scales already-converted frame counts with fixed-point
+    // 2^(timecents/1200), avoiding libm in the audio-domain NoteOn path.
     std::int32_t velocity_to_vol_env_attack_timecents = 0;
     NoteOnGainConfig note_on_gain{};
     NoteOnFilterConfig note_on_filter{};
@@ -161,6 +198,10 @@ struct PlaybackZone {
 };
 
 struct PlaybackProgramSnapshot {
+    // This is a realtime scan bound, not an inline-storage size. The checked-in
+    // SF2 analysis manifests are validated against it in CI. GeneralUser's
+    // largest currently resolved program has 200 zones, so 256 leaves bounded
+    // headroom without inflating every per-channel snapshot object.
     static constexpr std::size_t kMaxZones = 256;
 
     std::uint8_t channel = 0;
@@ -168,6 +209,10 @@ struct PlaybackProgramSnapshot {
     std::uint8_t program = 0;
     std::uint32_t token = 0;
     std::uint32_t bank_generation = 0;
+
+    // Caller-owned immutable storage. The pointed-to zone array must remain
+    // alive and unchanged from READY publication until the snapshot is retired
+    // and acknowledged by the control domain.
     const PlaybackZone* zones = nullptr;
     std::uint16_t zone_count = 0;
 
@@ -199,6 +244,9 @@ struct PlaybackProgramExchangeStats {
     std::uint64_t commit_acks = 0;
 };
 
+// Playback counterpart to sample::ProgramSnapshotExchange. It intentionally
+// contains pointers only; zone arrays and snapshots are caller-owned immutable
+// objects prepared outside the realtime domain.
 class PlaybackProgramSnapshotExchange {
 public:
     static constexpr std::size_t kMidiChannels = 16;
@@ -237,6 +285,10 @@ private:
     std::atomic<std::uint64_t> commit_acks_{0};
 };
 
+// Audio-boundary bridge while residency and playback metadata remain separate
+// ownership concepts. Control must publish matching READY snapshots to both
+// exchanges. Under the existing single-control-owner contract, the preflight
+// makes the two pointer commits a non-interleaved block-boundary transaction.
 class ProgramRuntimeCommitCoordinator {
 public:
     ProgramRuntimeCommitCoordinator(
