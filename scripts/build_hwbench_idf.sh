@@ -93,6 +93,8 @@ echo "== Verify M6 qualification configuration =="
 grep -q '^CONFIG_IDF_TARGET="esp32s3"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_COMPILER_OPTIMIZATION_PERF=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_COMPILER_LTO_LINKTIME=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_COMPILER_LTO_COMPILETIME=y$' "$SDKCONFIG_PATH"
 if grep -q '^CONFIG_COMPILER_OPTIMIZATION_DEBUG=y$' "$SDKCONFIG_PATH"; then
     echo "Physical timing qualification must not use DEBUG/-Og optimization" >&2
     exit 1
@@ -127,7 +129,7 @@ echo
 echo "N16R8 M6 qualification image is ready."
 echo "  build dir : $BUILD_DIR"
 echo "  sdkconfig : $SDKCONFIG_PATH"
-echo "  compiler  : PERF (-O2 class), assertions enabled"
+echo "  compiler  : PERF (-O2 base), O3 realtime hot files, compile/link LTO, assertions enabled"
 echo "  flash     : DIO / 80 MHz / 16 MiB"
 echo "  fixture   : $fixture_bytes bytes"
 echo "  PCM arena : 4.50 MiB (4718592 bytes)"
