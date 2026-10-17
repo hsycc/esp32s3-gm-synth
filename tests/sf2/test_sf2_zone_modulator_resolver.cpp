@@ -84,6 +84,7 @@ void test_fm_bank_inherits_mandatory_default_modulators() {
     CHECK(zones[0].velocity_to_filter_q_cb == 0);
     CHECK(zones[0].velocity_to_mod_env_attack_timecents == 0);
     CHECK(zones[0].velocity_to_vol_env_attack_timecents == 0);
+    CHECK(zones[0].initial_filter_fc_note_on_route_count == 0);
     CHECK(zones[0].volume_to_attenuation_cb == 960);
     CHECK(zones[0].pan_amount == 500);
     CHECK(zones[0].expression_to_attenuation_cb == 960);
@@ -94,6 +95,7 @@ void test_fm_bank_inherits_mandatory_default_modulators() {
     CHECK(zones[0].supported_velocity_attenuation_records == 0);
     CHECK(zones[0].supported_velocity_filter_records == 0);
     CHECK(zones[0].supported_velocity_dsp_records == 0);
+    CHECK(zones[0].supported_note_on_source_records == 0);
     CHECK(zones[0].supported_channel_control_records == 0);
     CHECK(zones[0].supported_vibrato_records == 0);
     CHECK(zones[0].supported_effects_send_records == 0);
@@ -126,6 +128,8 @@ void test_generaluser_bank_exercises_supported_modulators() {
     bool found_velocity_override = false;
     bool found_velocity_filter_override_or_cancellation = false;
     bool found_velocity_dsp = false;
+    bool found_key_bipolar_filter_route = false;
+    bool found_velocity_convex_filter_route = false;
     bool found_channel_control_override = false;
     bool found_effect_send_override = false;
 
@@ -158,16 +162,32 @@ void test_generaluser_bank_exercises_supported_modulators() {
                 zones[index].supported_effects_send_records != 0 ||
                 zones[index].reverb_send_amount != 200 ||
                 zones[index].chorus_send_amount != 200;
+
+            CHECK(zones[index].initial_filter_fc_note_on_route_count <=
+                  zones[index].initial_filter_fc_note_on_routes.size());
+            for (std::size_t route_index = 0;
+                 route_index < zones[index].initial_filter_fc_note_on_route_count;
+                 ++route_index) {
+                const auto& route = zones[index].initial_filter_fc_note_on_routes[route_index];
+                CHECK(route.valid());
+                found_key_bipolar_filter_route = found_key_bipolar_filter_route ||
+                    route.source_oper == 0x0203u;
+                found_velocity_convex_filter_route = found_velocity_convex_filter_route ||
+                    route.source_oper == 0x0902u;
+            }
         }
     }
 
     CHECK(found_velocity_override);
     CHECK(found_velocity_filter_override_or_cancellation);
-    // Keep the real-bank gate broad: the checked-in subset only needs to prove
-    // that at least one of the newly supported velocity-DSP route families is
-    // present. The synthetic NoteOn runtime test covers Q, ModEnv depth, and
-    // both attack destinations explicitly without overfitting this fixture.
+    // Keep the real-bank gate broad for the older dedicated velocity-DSP
+    // families. Their exact destination coverage is tested synthetically.
     CHECK(found_velocity_dsp);
+    // These are the two previously-unsupported immutable NoteOn source
+    // identities found in the checked-in GeneralUser subset. Requiring both
+    // makes this gate prove the new generic path is exercised by real bank data.
+    CHECK(found_key_bipolar_filter_route);
+    CHECK(found_velocity_convex_filter_route);
     CHECK(found_effect_send_override);
     if (found_channel_control_override) {
         std::printf("GeneralUser exercises file-defined CC7/10/11 modulation\n");
