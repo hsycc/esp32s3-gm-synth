@@ -76,16 +76,15 @@ double centibelsToLinear(std::int32_t centibels) {
     return std::pow(10.0, -static_cast<double>(centibels) / 200.0);
 }
 
-bool differs(const NativeResolvedZone& zone, std::uint16_t oper, std::int32_t expected) {
-    return zone.generators.value(oper, expected) != expected;
+std::int32_t modulationEnvelopeSustainQ15(std::int32_t sustain_units) {
+    const std::int32_t clamped = std::clamp<std::int32_t>(sustain_units, 0, 1000);
+    const std::int64_t numerator =
+        static_cast<std::int64_t>(1000 - clamped) * voice::kQ15Unity + 500;
+    return static_cast<std::int32_t>(numerator / 1000);
 }
 
-bool modEnvelopeNeedsDsp(const NativeResolvedZone& zone) {
-    return differs(zone, 7, 0) || differs(zone, 11, 0) ||
-           differs(zone, 25, -12000) || differs(zone, 26, -12000) ||
-           differs(zone, 27, -12000) || differs(zone, 28, -12000) ||
-           differs(zone, 29, 0) || differs(zone, 30, -12000) ||
-           differs(zone, 31, 0) || differs(zone, 32, 0);
+bool differs(const NativeResolvedZone& zone, std::uint16_t oper, std::int32_t expected) {
+    return zone.generators.value(oper, expected) != expected;
 }
 
 voice::LoopMode loopModeFor(std::int32_t sample_modes, bool* supported) {
@@ -208,19 +207,15 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         issues |= PlaybackIssueInvalidFixedVelocity;
     }
 
-    // Static cutoff, velocity and Mod-LFO cutoff movement are represented now.
-    // Non-zero resonance and modulation-envelope cutoff movement remain explicit.
-    if (output_sample_rate_ != kSf2FilterOutputSampleRate ||
-        native.initialFilterQCb() != 0 || differs(native, 11, 0)) {
+    // Static cutoff, velocity, Mod-LFO and Mod-Envelope cutoff movement are
+    // represented. Resonance remains explicit until Q/gain behavior is qualified.
+    if (output_sample_rate_ != kSf2FilterOutputSampleRate || native.initialFilterQCb() != 0) {
         issues |= PlaybackIssueFilterPending;
     }
-    if (modEnvelopeNeedsDsp(native)) {
-        issues |= PlaybackIssueModEnvelopePending;
-    }
-    // Both SF2 oscillators are represented. Retain the historical LFO issue bit
-    // only as a stable telemetry position; it is no longer emitted here.
-    // The send generators/controller routes are now fully preserved and
-    // updated at runtime, but no reverb/chorus processor consumes the sends yet.
+    // Both SoundFont LFOs and the modulation envelope are represented. Their
+    // historical issue bits remain reserved for telemetry compatibility only.
+    // The send generators/controller routes are preserved and updated at runtime,
+    // but no reverb/chorus processor consumes the sends yet.
     if (differs(native, 15, 0) || differs(native, 16, 0) ||
         modulation.reverb_send_amount != 0 || modulation.chorus_send_amount != 0) {
         issues |= PlaybackIssueEffectsSendPending;
@@ -311,8 +306,11 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
 
     candidate.note_on_gain.enabled = true;
     candidate.note_on_gain.initial_attenuation_cb = native.initialAttenuationCb();
-    candidate.note_on_gain.velocity_to_attenuation_cb =
-        modulation.velocity_to_attenuation_cb;
+    candidate.note_on_gain.velocity_to_attenuation_cb = modulation.velocity_to_attenuation_cb;
+    candidate.note_on_gain.volume_to_attenuation_cb = modulation.volume_to_attenuation_cb;
+    candidate.note_on_gain.pan_amount = modulation.pan_amount;
+    candidate.note_on_gain.expression_to_attenuation_cb =
+        modulation.expression_to_attenuation_cb;
     candidate.note_on_gain.pan_sf2_units = static_cast<std::int16_t>(pan_units);
     candidate.note_on_gain.fixed_velocity = has_fixed_velocity &&
             fixed_velocity >= 0 && fixed_velocity <= 127
@@ -361,6 +359,36 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     candidate.mod_lfo.phase_step_q32 = lfoFrequencyCentsToPhaseStepQ32(
         native.generators.value(22, 0),
         output_sample_rate_);
+
+    candidate.mod_envelope.pitch_depth_cents = std::clamp<std::int32_t>(
+        native.generators.value(7, 0), -12000, 12000);
+    candidate.mod_envelope.filter_depth_cents = std::clamp<std::int32_t>(
+        native.generators.value(11, 0), -12000, 12000);
+    candidate.mod_envelope.enabled = candidate.mod_envelope.pitch_depth_cents != 0 ||
+        candidate.mod_envelope.filter_depth_cents != 0;
+    candidate.mod_envelope.envelope.delay_frames = timecentsToFrames(
+        native.generators.value(25, -12000),
+        output_sample_rate_);
+    candidate.mod_envelope.envelope.attack_frames = timecentsToFrames(
+        native.generators.value(26, -12000),
+        output_sample_rate_);
+    candidate.mod_envelope.envelope.hold_frames = timecentsToFrames(
+        native.generators.value(27, -12000),
+        output_sample_rate_);
+    candidate.mod_envelope.envelope.decay_frames = timecentsToFrames(
+        native.generators.value(28, -12000),
+        output_sample_rate_);
+    candidate.mod_envelope.envelope.sustain_q15 = modulationEnvelopeSustainQ15(
+        native.generators.value(29, 0));
+    candidate.mod_envelope.envelope.release_frames = timecentsToFrames(
+        native.generators.value(30, -12000),
+        output_sample_rate_);
+    candidate.mod_envelope.key_scaling.hold_timecents_per_key =
+        static_cast<std::int16_t>(std::clamp<std::int32_t>(
+            native.generators.value(31, 0), -1200, 1200));
+    candidate.mod_envelope.key_scaling.decay_timecents_per_key =
+        static_cast<std::int16_t>(std::clamp<std::int32_t>(
+            native.generators.value(32, 0), -1200, 1200));
 
     candidate.effects_send.enabled = true;
     candidate.effects_send.reverb_sf2_units = static_cast<std::int16_t>(
