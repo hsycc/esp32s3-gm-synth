@@ -169,7 +169,7 @@ void testOneTriangleModulatesPitchFilterAndVolumeTogether() {
     assert(batch.count == 1);
     assert(batch.voices[0].mod_lfo.enabled);
     assert(batch.voices[0].mod_lfo.gain_table.enabled);
-    assert(batch.voices[0].mod_lfo.lowpass_table.enabled);
+    assert(batch.voices[0].dynamic_lowpass_table.enabled);
 
     Voice voice;
     assert(voice.start(fixture.directory, batch.voices[0]));
