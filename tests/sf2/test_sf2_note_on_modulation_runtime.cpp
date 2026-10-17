@@ -21,16 +21,26 @@ using gm_synth::sf2::NativeResolvedZone;
 using gm_synth::sf2::PlaybackIssueCustomModulatorsPending;
 using gm_synth::sf2::PlaybackIssueFixedVelocityPending;
 using gm_synth::sf2::ResolvedZoneModulation;
+using gm_synth::sf2::Sf2NoteOnSourceRoute;
 using gm_synth::sf2::Sf2PlaybackMaterializer;
 using gm_synth::sf2::attenuationCbToGainQ15;
 using gm_synth::sf2::sf2PanChannelGainQ15;
 using gm_synth::sf2::velocityToAttenuationCb;
+using gm_synth::voice::BiquadLowpassConfig;
 using gm_synth::voice::kPhaseOneQ32;
 using gm_synth::voice::kQ15Unity;
 
 std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
     return static_cast<std::int32_t>(
         (static_cast<std::int64_t>(a) * b + (std::int64_t{1} << 14)) >> 15);
+}
+
+bool sameFilter(const BiquadLowpassConfig& a, const BiquadLowpassConfig& b) {
+    return a.enabled == b.enabled &&
+        a.a0_q24 == b.a0_q24 &&
+        a.a1_q24 == b.a1_q24 &&
+        a.b1_q24 == b.b1_q24 &&
+        a.b2_q24 == b.b2_q24;
 }
 
 NativeResolvedZone baseNativeZone() {
@@ -166,6 +176,85 @@ void testFixedVelocityIsAppliedAfterZoneSelection() {
     assert(batch.count == 0);
 }
 
+void testGenericNoteOnFilterSourcesMaterializeAndRun() {
+    NativeResolvedZone native = baseNativeZone();
+    native.generators.set(8, 8000);  // initialFilterFc
+
+    ResolvedZoneModulation modulation{};
+    // Isolate the generic routes from the mandatory default velocity route.
+    modulation.velocity_to_filter_fc_cents = 0;
+    modulation.initial_filter_fc_note_on_routes[0] =
+        Sf2NoteOnSourceRoute{0x0203u, 1200};  // key, +bipolar linear
+    modulation.initial_filter_fc_note_on_routes[1] =
+        Sf2NoteOnSourceRoute{0x0902u, 1200};  // velocity, -unipolar convex
+    modulation.initial_filter_fc_note_on_route_count = 2;
+    modulation.supported_note_on_source_records = 2;
+
+    PlaybackZone zone{};
+    const auto materialized = Sf2PlaybackMaterializer{}.materialize(native, modulation, &zone);
+    assert(materialized.playablePreview());
+    assert(!materialized.hasIssue(PlaybackIssueCustomModulatorsPending));
+    assert(zone.note_on_filter.enabled);
+    assert(zone.note_on_filter.initial_cutoff_cents == 8000);
+    assert(zone.note_on_filter.additional_cutoff_route_count == 2);
+    assert(zone.note_on_filter.additional_cutoff_routes[0].source_oper == 0x0203u);
+    assert(zone.note_on_filter.additional_cutoff_routes[1].source_oper == 0x0902u);
+    assert(zone.valid());
+
+    const PlaybackProgramSnapshot program = programFor(&zone);
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+
+    // key64 is the bipolar-linear zero point and velocity127 is the zero point
+    // of the negative convex route, so this is the 8000-cent baseline.
+    assert(resolver.resolveNoteOn(program, 2, 64, 127, 20, &batch) == ZoneResolveStatus::Ok);
+    const BiquadLowpassConfig baseline = batch.voices[0].lowpass;
+    assert(baseline.enabled);
+
+    // Key movement changes only the 0x0203 route here.
+    assert(resolver.resolveNoteOn(program, 2, 96, 127, 21, &batch) == ZoneResolveStatus::Ok);
+    const BiquadLowpassConfig key_shifted = batch.voices[0].lowpass;
+    assert(key_shifted.enabled);
+    assert(!sameFilter(key_shifted, baseline));
+    assert(key_shifted.a0_q24 > baseline.a0_q24);
+
+    // Velocity movement changes only the 0x0902 convex route at key64.
+    assert(resolver.resolveNoteOn(program, 2, 64, 64, 22, &batch) == ZoneResolveStatus::Ok);
+    const BiquadLowpassConfig velocity_shifted = batch.voices[0].lowpass;
+    assert(velocity_shifted.enabled);
+    assert(!sameFilter(velocity_shifted, baseline));
+    assert(velocity_shifted.a0_q24 > baseline.a0_q24);
+
+    // Generator 47 replaces the velocity used by velocity modulators after
+    // zone selection. It must not replace the actual NoteOn key source.
+    PlaybackZone fixed_velocity_zone = zone;
+    fixed_velocity_zone.note_on_gain.fixed_velocity = 64;
+    const PlaybackProgramSnapshot fixed_program = programFor(&fixed_velocity_zone);
+    assert(resolver.resolveNoteOn(fixed_program, 2, 64, 127, 23, &batch) == ZoneResolveStatus::Ok);
+    assert(batch.voices[0].velocity == 64);
+    assert(sameFilter(batch.voices[0].lowpass, velocity_shifted));
+
+    assert(resolver.resolveNoteOn(fixed_program, 2, 96, 127, 24, &batch) == ZoneResolveStatus::Ok);
+    assert(batch.voices[0].velocity == 64);
+    assert(!sameFilter(batch.voices[0].lowpass, velocity_shifted));
+    assert(batch.voices[0].lowpass.a0_q24 > velocity_shifted.a0_q24);
+}
+
+void testInvalidGenericRouteRemainsSoftCompatibilityIssue() {
+    NativeResolvedZone native = baseNativeZone();
+    ResolvedZoneModulation modulation{};
+    modulation.initial_filter_fc_note_on_routes[0] =
+        Sf2NoteOnSourceRoute{0x028Au, 500};  // CC10 is live, not a NoteOn source.
+    modulation.initial_filter_fc_note_on_route_count = 1;
+
+    PlaybackZone zone{};
+    const auto result = Sf2PlaybackMaterializer{}.materialize(native, modulation, &zone);
+    assert(result.playablePreview());
+    assert(result.hasIssue(PlaybackIssueCustomModulatorsPending));
+    assert(zone.note_on_filter.additional_cutoff_route_count == 0);
+    assert(zone.valid());
+}
+
 void testLegacyPlaybackZoneKeepsPreparedStaticGain() {
     PlaybackZone zone{};
     zone.sample_id = 1;
@@ -189,6 +278,8 @@ int main() {
     testMaterializerCarriesResolvedVelocityRouteAndFixedVelocity();
     testResolverAppliesVelocityAttenuationAtNoteOn();
     testFixedVelocityIsAppliedAfterZoneSelection();
+    testGenericNoteOnFilterSourcesMaterializeAndRun();
+    testInvalidGenericRouteRemainsSoftCompatibilityIssue();
     testLegacyPlaybackZoneKeepsPreparedStaticGain();
     std::cout << "SF2 note-on modulation runtime checks passed\n";
     return 0;
