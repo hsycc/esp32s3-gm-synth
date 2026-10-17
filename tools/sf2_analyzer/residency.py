@@ -77,12 +77,20 @@ def exact_worst_active_ready_pair(
 
 
 def gm_programs_for_transition_pressure(programs: Sequence[dict]) -> list[dict]:
-    """Return the GM transition domain: bank-0 0..127 + standard drum preset."""
-    melodic_by_program = {
-        int(program["program"]): program
-        for program in programs
-        if int(program["bank"]) == 0 and 0 <= int(program["program"]) <= 127
-    }
+    """Return the GM transition domain: bank-0 0..127 + standard drum preset.
+
+    SoundFont PHDR ordering is authoritative for duplicate bank/program
+    identities, so preserve the first occurrence exactly as the firmware
+    resolvers do rather than allowing a later duplicate to replace it.
+    """
+    melodic_by_program: dict[int, dict] = {}
+    for program in programs:
+        if int(program["bank"]) != 0:
+            continue
+        program_number = int(program["program"])
+        if 0 <= program_number <= 127:
+            melodic_by_program.setdefault(program_number, program)
+
     melodic = [melodic_by_program[index] for index in sorted(melodic_by_program)]
     standard_drum = next(
         (
