@@ -72,7 +72,7 @@ void testSimpleZoneBecomesExplicitPreview() {
     assert(result.status == PlaybackMaterializationStatus::Preview);
     assert(result.playablePreview());
     assert(!result.hasIssue(PlaybackIssueDefaultModulatorsPending));
-    assert(result.hasIssue(PlaybackIssueEffectsSendPending));
+    assert(!result.hasIssue(PlaybackIssueEffectsSendPending));
     assert(output.sample_id == 1);
     assert(output.key_low == 12);
     assert(output.key_high == 100);
@@ -309,7 +309,7 @@ void testDynamicEnvelopeLfoAndEffectsQualification() {
     assert(output.mod_lfo.pitch_depth_cents == 25);
     assert(output.mod_lfo.filter_depth_cents == 600);
     assert(output.mod_lfo.volume_depth_cb == 100);
-    assert(result.hasIssue(PlaybackIssueEffectsSendPending));
+    assert(!result.hasIssue(PlaybackIssueEffectsSendPending));
     assert(result.hasIssue(PlaybackIssueFixedVelocityPending));
     assert(result.hasIssue(PlaybackIssueCustomModulatorsPending));
 }
