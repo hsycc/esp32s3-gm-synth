@@ -26,6 +26,7 @@ idf_component_register(
         "gm/ZoneResolver.cpp"
         "voice/PitchMath.cpp"
         "voice/VoiceRenderer.cpp"
+        "voice/VoiceRealtimeFastPath.cpp"
         "voice/VoiceRuntimeControl.cpp"
         "voice/VoiceEffectsBus.cpp"
         "voice/GlobalEffectsProcessor.cpp"
@@ -53,6 +54,7 @@ target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
 # allows the compiler to inline across these translation-unit boundaries.
 set_source_files_properties(
     "voice/VoiceRenderer.cpp"
+    "voice/VoiceRealtimeFastPath.cpp"
     "voice/VoiceEffectsBus.cpp"
     "voice/GlobalEffectsProcessor.cpp"
     "realtime/ScheduledAudioBlockRenderer.cpp"
