@@ -194,7 +194,7 @@ void testEnvelopeFieldsAreConvertedFromNativeSf2Units() {
     assert(output.envelope_key_scaling.decay_timecents_per_key == -50);
 }
 
-void testStaticFilterAndVelocityRouteAreMaterialized() {
+void testStaticFilterVelocityAndResonanceAreMaterialized() {
     NativeResolvedZone native = baseZone();
     native.generators.set(8, 9600);
     ResolvedZoneModulation modulation{};
@@ -209,11 +209,19 @@ void testStaticFilterAndVelocityRouteAreMaterialized() {
     assert(output.note_on_filter.velocity_to_cutoff_cents == -1200);
     assert(output.note_on_filter.resonance_cb == 0);
 
-    native.generators.set(9, 60);
+    // 100 cB = 10 dB resonance. SF2 requires half of that amount as DC
+    // attenuation, so the legacy static gain is approximately -5 dB.
+    native.generators.set(9, 100);
     const auto resonant = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
     assert(resonant.playablePreview());
-    assert(resonant.hasIssue(PlaybackIssueFilterPending));
-    assert(output.note_on_filter.resonance_cb == 60);
+    assert(!resonant.hasIssue(PlaybackIssueFilterPending));
+    assert(output.note_on_filter.resonance_cb == 100);
+    assert(output.gain_left_q15 >= 18400 && output.gain_left_q15 <= 18450);
+    assert(output.gain_right_q15 == output.gain_left_q15);
+
+    const auto other_rate = Sf2PlaybackMaterializer{48000}.materialize(native, modulation, &output);
+    assert(other_rate.playablePreview());
+    assert(other_rate.hasIssue(PlaybackIssueFilterPending));
 }
 
 void testVibratoGeneratorsAndControllerRoutesAreMaterialized() {
@@ -404,7 +412,7 @@ int main() {
     testPitchMaterializationIncludesRateTuneAndCorrection();
     testFixedKeyAndScaleTuningQualification();
     testEnvelopeFieldsAreConvertedFromNativeSf2Units();
-    testStaticFilterAndVelocityRouteAreMaterialized();
+    testStaticFilterVelocityAndResonanceAreMaterialized();
     testVibratoGeneratorsAndControllerRoutesAreMaterialized();
     testDynamicEnvelopeLfoAndEffectsQualification();
     testResolvedControllerAmountsAreCopiedIntoPlaybackZone();
