@@ -18,6 +18,34 @@ COMMON_FLAGS=(
   -Ifirmware
 )
 
+RUNTIME_SOURCES=(
+  firmware/sample/SampleResidencyManager.cpp
+  firmware/sample/SampleResidencySourceLoad.cpp
+  firmware/sample/SampleResidencyView.cpp
+  firmware/sample/PublishedSampleDirectory.cpp
+  firmware/sample/ProgramSnapshot.cpp
+  firmware/sample/ProgramPrepareController.cpp
+  firmware/voice/PitchMath.cpp
+  firmware/voice/VoiceRenderer.cpp
+  firmware/voice/VoiceRuntimeControl.cpp
+  firmware/sf2/Sf2SampleSource.cpp
+  firmware/sf2/Sf2PdtaReader.cpp
+  firmware/sf2/Sf2ResolvedZone.cpp
+  firmware/sf2/Sf2ModulationMath.cpp
+  firmware/sf2/Sf2FilterMath.cpp
+  firmware/sf2/Sf2ZoneModulatorResolver.cpp
+  firmware/sf2/Sf2PlaybackMaterializer.cpp
+  firmware/sf2/Sf2PlaybackProgramPreparer.cpp
+  firmware/gm/ProgramChangeMailbox.cpp
+  firmware/gm/RealtimeProgramChangeHandoff.cpp
+  firmware/gm/RealtimeProgramChangeRouter.cpp
+  firmware/gm/ProgramChangeControlService.cpp
+  firmware/gm/ProgramRuntimeAudioBlock.cpp
+  firmware/gm/MidiChannelState.cpp
+  firmware/gm/PlaybackProgramSnapshot.cpp
+  firmware/gm/ZoneResolver.cpp
+)
+
 build_and_run() {
   local output="$1"
   shift
@@ -29,7 +57,7 @@ printf 'GM128 full-bank qualification\n'
 printf '  compiler: %s\n' "${CXX}"
 printf '  output:   %s\n' "${BUILD_DIR}"
 
-printf '\n[1/2] Build and run full-bank structure / StrictQualified report\n'
+printf '\n[1/3] Build and run full-bank structure / StrictQualified report\n'
 build_and_run test_full_gm128_qualification \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -40,33 +68,14 @@ build_and_run test_full_gm128_qualification \
   firmware/sf2/Sf2SampleSource.cpp \
   tests/gm/test_full_gm128_qualification.cpp
 
-printf '\n[2/2] Build and run full-bank runtime-control transactions\n'
+printf '\n[2/3] Build and run full-bank runtime-control transactions\n'
 build_and_run test_full_gm128_runtime -pthread \
-  firmware/sample/SampleResidencyManager.cpp \
-  firmware/sample/SampleResidencySourceLoad.cpp \
-  firmware/sample/SampleResidencyView.cpp \
-  firmware/sample/PublishedSampleDirectory.cpp \
-  firmware/sample/ProgramSnapshot.cpp \
-  firmware/sample/ProgramPrepareController.cpp \
-  firmware/voice/PitchMath.cpp \
-  firmware/voice/VoiceRenderer.cpp \
-  firmware/voice/VoiceRuntimeControl.cpp \
-  firmware/sf2/Sf2SampleSource.cpp \
-  firmware/sf2/Sf2PdtaReader.cpp \
-  firmware/sf2/Sf2ResolvedZone.cpp \
-  firmware/sf2/Sf2ModulationMath.cpp \
-  firmware/sf2/Sf2FilterMath.cpp \
-  firmware/sf2/Sf2ZoneModulatorResolver.cpp \
-  firmware/sf2/Sf2PlaybackMaterializer.cpp \
-  firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
-  firmware/gm/ProgramChangeMailbox.cpp \
-  firmware/gm/RealtimeProgramChangeHandoff.cpp \
-  firmware/gm/RealtimeProgramChangeRouter.cpp \
-  firmware/gm/ProgramChangeControlService.cpp \
-  firmware/gm/ProgramRuntimeAudioBlock.cpp \
-  firmware/gm/MidiChannelState.cpp \
-  firmware/gm/PlaybackProgramSnapshot.cpp \
-  firmware/gm/ZoneResolver.cpp \
+  "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_program_change_control_service.cpp
+
+printf '\n[3/3] Build and run full-bank 4 MiB / 16-channel stress qualification\n'
+build_and_run test_full_gm128_stress -pthread \
+  "${RUNTIME_SOURCES[@]}" \
+  tests/gm/test_full_gm128_stress.cpp
 
 printf '\nGM128 full-bank qualification passed.\n'

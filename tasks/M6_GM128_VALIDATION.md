@@ -6,20 +6,24 @@ Qualify the fixed GM bank and firmware as a repeatable embedded sound-module bas
 ## Automated host semantic gate
 
 The tracked full FM/GM baseline at
-`assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2` is part of the consolidated
-Phase G host validation. The gate exercises the real C++
+`assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2` is validated by the dedicated
+`gm128-full-bank` host workflow. The normal Phase G lane keeps the 6 MiB fixtures
+as its fast regression baseline so ordinary commits do not repeatedly pay for a
+14+ MB full-bank scan.
+
+The full-bank gate exercises the real C++
 `Sf2PdtaReader -> ResolvedZone -> ModulatorResolver -> PlaybackMaterializer -> ProgramPrepare`
 path rather than relying only on analyzer metadata.
 
 Required host checks:
 - bank 0 programs 0–127 all StrictQualified Program Prepare successfully;
 - every melodic program publishes a valid non-empty Playback snapshot;
-- representative low/mid/high keys (0/60/127 at velocity 96) resolve to a playable zone;
+- representative low/mid/high keys and low/mid/high velocities resolve to playable zones;
 - every program reports zero unsupported modulator records and zero Preview zones;
 - bank 128 / program 0 StrictQualified Program Prepare succeeds on MIDI channel 10 (zero-based channel 9);
 - standard drum notes 35–81 are all covered by prepared zones;
 - each required drum note has a prepared fixed-pitch zone (`scaleTuning == 0`, no key tracking);
-- full-bank changes retrigger the Phase G workflow.
+- full-bank changes retrigger the dedicated GM128 workflow.
 
 Passing this host gate establishes parser/resolver/materializer/control-domain semantics for the checked-in GM bank. It does **not** by itself prove audible quality, physical realtime margin, storage timing, or guaranteed polyphony.
 
@@ -36,7 +40,28 @@ Required runtime-control checks:
 - after the GM Reset commit, every channel can independently start a NoteOn using its active snapshot, with Channel 10 using the bank-128 drum snapshot;
 - no missing-active-program, percussion-fallback, residency-prepare, playback-prepare, or paired-publication invariant failure is accepted.
 
-The host integration arena is intentionally oversized (16 MiB) so this gate isolates transaction/lifetime correctness from product-capacity admission. It is **not** a change to the N16R8 product target. The 4 MiB initial PCM arena must still be qualified separately for real full-bank active+READY transitions and cache/eviction pressure.
+The canonical runtime-control test keeps an intentionally oversized 16 MiB host
+arena so it isolates transaction/lifetime correctness from product-capacity
+admission.
+
+## Product-sized residency and stress gate
+
+The dedicated full-bank lane separately exercises a **4 MiB sample arena** so
+capacity/eviction behavior is not hidden by the oversized transaction fixture.
+
+Required checks:
+- bank 0 programs 0–127 complete sequential real Program Change transactions in 4 MiB;
+- bank 128 programs 0–127 complete sequential real Program Change transactions in 4 MiB;
+- Active + READY pinning never evicts protected samples;
+- cache pressure uses only reclaimable samples and produces no stale references or publication conflicts;
+- real CC0/CC32 Bank Select feeds a full-bank Program Change request;
+- a burst of 128 Program Changes is coalesced to the latest request before control-domain Prepare;
+- a representative 15-melodic-plus-drum workload can be prepared simultaneously in the oversized host functional arena and start all 16 MIDI channels without sample-acquire faults;
+- dense piano, sustain/release, repeated same-note retrigger and GM drum bursts remain bounded by the VoicePool and do not create invalid sample accesses.
+
+This gate reports sample-arena high-water, cache eviction/retry metrics, peak
+voices, start failures and publication acquire misses. It is a host semantic and
+capacity baseline, not a claim about ESP32-S3 render timing.
 
 ## Functional matrix
 Test all required paths:
@@ -64,17 +89,21 @@ For every program collect or automate checks for:
 - obvious pitch/root-key errors
 - missing/corrupt sample references
 
-The host semantic gate covers structural Program Prepare and representative key reachability. Audio-render/reference-listening coverage and velocity/loop/release behavior remain separate qualification evidence.
+The host semantic gate covers structural Program Prepare and representative key/velocity reachability. Audio-render/reference-listening coverage and exhaustive loop/release behavior remain separate qualification evidence.
 
 ## Stress suite
+Automate or measure:
 - dense sustained piano
 - repeated same-note retrigger
 - drum bursts
 - pad/release-tail accumulation
 - rapid Program Change
 - mixed 16-channel MIDI
-- worst layered/zone-heavy programs from M1
+- worst layered/zone-heavy programs from full-bank qualification
 - long-running playback
+
+Host coverage is appropriate for semantic/lifetime/boundedness failures. Physical
+render-margin claims remain N16R8-only.
 
 ## Required telemetry in reports
 - active/max/admission voice count
@@ -92,7 +121,9 @@ The host semantic gate covers structural Program Prepare and representative key 
 A polyphony value is considered guaranteed only when it survives the relevant stress suite with zero unrecovered realtime failures and adequate measured deadline margin.
 
 ## Exit criteria
-- GM128 matrix completed
+- GM128 functional matrix completed
 - known unsupported SF2/GM behaviors documented
-- stable guaranteed voice count stated from hardware evidence
+- host 4 MiB residency/eviction stress gate green
+- host mixed-16-channel semantic stress gate green
+- stable guaranteed voice count stated from N16R8 hardware evidence
 - release benchmark report committed to `benchmarks/`

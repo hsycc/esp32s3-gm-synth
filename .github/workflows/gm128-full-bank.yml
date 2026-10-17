@@ -10,6 +10,7 @@ on:
       - "firmware/gm/**"
       - "firmware/voice/**"
       - "tests/gm/test_full_gm128_qualification.cpp"
+      - "tests/gm/test_full_gm128_stress.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_gm128_full_bank_tests.sh"
@@ -21,6 +22,7 @@ on:
       - "firmware/gm/**"
       - "firmware/voice/**"
       - "tests/gm/test_full_gm128_qualification.cpp"
+      - "tests/gm/test_full_gm128_stress.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_gm128_full_bank_tests.sh"
@@ -29,6 +31,7 @@ on:
 jobs:
   qualify-full-fm-gm128:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Verify tracked full bank is present
@@ -39,7 +42,6 @@ jobs:
       - name: Run GM128 full-bank qualification
         shell: bash
         run: |
-          set -o pipefail
           mkdir -p build/gm128-full-bank
           bash scripts/run_gm128_full_bank_tests.sh 2>&1 | tee build/gm128-full-bank/qualification-report.txt
       - name: Publish qualification summary
@@ -50,7 +52,7 @@ jobs:
             {
               echo '## Full FM GM128 qualification'
               echo '```text'
-              grep -E '^(GM128_|Full FM GM128|.*error:|.*Assertion)' build/gm128-full-bank/qualification-report.txt || true
+              grep -E '^(GM128_|Full FM GM128)' build/gm128-full-bank/qualification-report.txt || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi

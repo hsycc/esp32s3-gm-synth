@@ -28,7 +28,7 @@ checked-in fixtures remain the normal semantic/regression baseline.
 bash scripts/run_gm128_full_bank_tests.sh
 ```
 
-The lane has two gates:
+The dedicated lane has three gates:
 
 1. `test_full_gm128_qualification` scans the actual full bank and runs every
    tracked preset through `PlaybackPreparePolicy::StrictQualified`.
@@ -36,6 +36,14 @@ The lane has two gates:
    exercises the production residency/publication/READY/commit/ACK/NoteOn path,
    including full-FM Program Change, channel-10 percussion and 16-channel GM
    Reset.
+3. `test_full_gm128_stress` exercises product-sized 4 MiB residency pressure
+   and the full-bank functional stress baseline. It sweeps all 128 bank-0
+   melodic programs and all 128 bank-128 percussion programs through real
+   Program Change transactions, verifies safe cache eviction, exercises real
+   Bank Select and latest-wins Program Change coalescing, then runs a
+   representative 15-melodic-plus-drum 16-channel voice workload with dense
+   piano, sustain/release, repeated retrigger, drum bursts and live controller
+   changes.
 
 The qualification report is uploaded as the
 `gm128-full-bank-qualification` Actions artifact and the `GM128_*` lines are
@@ -43,7 +51,8 @@ also copied to the workflow summary.
 
 ## Reported metrics
 
-The report records the bank topology and the runtime-facing resource bounds:
+The structure report records the bank topology and runtime-facing resource
+bounds:
 
 - total presets and exact bank/program coverage,
 - melodic and percussion preset counts,
@@ -58,10 +67,25 @@ The report records the bank topology and the runtime-facing resource bounds:
 - non-zero `pmod` / `imod` source-destination identity tuples,
 - preview-zone count.
 
-The gate additionally requires all bank-0 programs 0-127, the standard
-bank-128/program-0 drum kit, representative key/velocity coverage, GM drum keys
-35-81, zero unsupported modulators and zero preview zones.
+The stress report adds:
 
-These host metrics are semantic/resource qualification data only. They do not
-replace N16R8 measurements for storage latency, PSRAM pressure, DSP CPU, I2S
-deadline misses, underruns or stable polyphony.
+- 4 MiB melodic/drum Program Change transition counts,
+- 4 MiB sample-arena high-water marks,
+- safe cache eviction/retry counts and evicted bytes,
+- real full-bank Bank Select and rapid Program Change coalescing coverage,
+- representative 16-channel resident bytes/high-water data,
+- peak active voice count and total starts,
+- voice-start failures,
+- exclusive-class choke activity,
+- published-sample acquire misses.
+
+The semantic gate requires all bank-0 programs 0-127, the standard
+bank-128/program-0 drum kit, representative key/velocity coverage, GM drum keys
+35-81, zero unsupported modulators and zero preview zones. The stress gate
+requires complete single-channel 128-program melodic and percussion sweeps in a
+4 MiB sample arena with no prepare/publication invariant failures.
+
+These host metrics establish semantic, residency and bounded voice-behavior
+coverage. They do **not** replace N16R8 measurements for storage latency, PSRAM
+headroom outside the sample arena, DSP CPU, I2S deadline misses, underruns or
+stable guaranteed polyphony.
