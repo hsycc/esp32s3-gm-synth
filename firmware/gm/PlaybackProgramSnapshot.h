@@ -71,6 +71,22 @@ struct VibratoLfoConfig {
     }
 };
 
+// SF2 Mod-LFO uses one triangle oscillator for three generator destinations.
+// Filter and volume nonlinearities are prepared later at NoteOn into bounded
+// Voice tables; these fields preserve the native depths and timing here.
+struct ModLfoConfig {
+    bool enabled = false;
+    std::uint32_t delay_frames = 0;
+    std::uint32_t phase_step_q32 = 0;
+    std::int32_t pitch_depth_cents = 0;
+    std::int32_t filter_depth_cents = 0;
+    std::int32_t volume_depth_cb = 0;
+
+    bool valid() const {
+        return !enabled || phase_step_q32 != 0;
+    }
+};
+
 // Prepared SF2 reverb/chorus generator summing state. The runtime computes the
 // current send from the static generator plus CC91/CC93. These values are
 // carried all the way into Voice even before the actual FX processors exist so
@@ -120,6 +136,7 @@ struct PlaybackZone {
     NoteOnGainConfig note_on_gain{};
     NoteOnFilterConfig note_on_filter{};
     VibratoLfoConfig vibrato_lfo{};
+    ModLfoConfig mod_lfo{};
     EffectsSendConfig effects_send{};
 
     bool valid() const {
@@ -133,7 +150,8 @@ struct PlaybackZone {
                velocity_low <= velocity_high && velocity_high <= 127 &&
                root_key <= 127 && root_phase_increment_q32 != 0 &&
                sample_region_valid && note_on_gain.valid() &&
-               note_on_filter.valid() && vibrato_lfo.valid() && effects_send.valid();
+               note_on_filter.valid() && vibrato_lfo.valid() &&
+               mod_lfo.valid() && effects_send.valid();
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
