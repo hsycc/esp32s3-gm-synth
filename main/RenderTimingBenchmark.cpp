@@ -18,9 +18,11 @@
 #include "voice/AdaptivePolyphony.h"
 #include "voice/VoiceRenderer.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace gm_synth::bringup {
 namespace {
@@ -33,6 +35,9 @@ constexpr std::uint32_t kBlockBudgetUs = 1451;
 constexpr std::size_t kWarmupBlocks = 16;
 constexpr std::size_t kMeasuredBlocks = realtime::RenderDeadlineMonitor::kWindowSize;
 constexpr std::array<std::size_t, 8> kVoiceCounts{{1, 4, 8, 12, 16, 18, 20, 24}};
+constexpr std::size_t kDiagnosticVoices = 16;
+constexpr std::int16_t kDiagnosticReverbSendUnits = 500;
+constexpr std::int16_t kDiagnosticChorusSendUnits = 500;
 
 #if defined(CONFIG_COMPILER_OPTIMIZATION_PERF)
 constexpr char kCompilerOptimization[] = "perf";
@@ -49,6 +54,16 @@ constexpr unsigned kPhysicalTimingEvidence = kPerformanceOptimizedBuild ? 1u : 0
 constexpr char kTimingScope[] = "qemu_regression";
 constexpr unsigned kPhysicalTimingEvidence = 0;
 #endif
+
+struct DiagnosticTimingSnapshot {
+    std::uint32_t min_us = 0;
+    std::uint32_t avg_us = 0;
+    std::uint32_t p50_us = 0;
+    std::uint32_t p95_us = 0;
+    std::uint32_t p99_us = 0;
+    std::uint32_t max_us = 0;
+    std::uint32_t deadline_misses = 0;
+};
 
 voice::AdaptivePolyphonyConfig fixedBenchmarkPolicy() {
     voice::AdaptivePolyphonyConfig config{};
@@ -74,7 +89,7 @@ void initializePcm(std::array<std::int16_t, kPcmFrames>& pcm) {
     }
 }
 
-voice::VoiceStartParams voiceParams(std::size_t index) {
+voice::VoiceStartParams voiceParams(std::size_t index, bool effects_send = false) {
     voice::VoiceStartParams params{};
     params.sample_id = kBenchmarkSampleId;
     params.channel = static_cast<std::uint8_t>(index % 16u);
@@ -93,6 +108,10 @@ voice::VoiceStartParams voiceParams(std::size_t index) {
     params.envelope.decay_frames = 0;
     params.envelope.sustain_q15 = voice::kQ15Unity;
     params.envelope.release_frames = 0;
+    if (effects_send) {
+        params.reverb_send_units = kDiagnosticReverbSendUnits;
+        params.chorus_send_units = kDiagnosticChorusSendUnits;
+    }
     return params;
 }
 
@@ -112,11 +131,74 @@ std::uint64_t updateChecksum(
     return checksum;
 }
 
+std::uint64_t updateWideChecksum(
+    std::uint64_t checksum,
+    const std::array<std::int32_t, realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock>& output) {
+    constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+    for (const std::int32_t sample_value : output) {
+        checksum ^= static_cast<std::uint32_t>(sample_value);
+        checksum *= kFnvPrime;
+    }
+    return checksum;
+}
+
+std::uint32_t elapsedUs(std::uint64_t start_us, std::uint64_t end_us) {
+    if (end_us < start_us) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        end_us - start_us,
+        std::numeric_limits<std::uint32_t>::max()));
+}
+
+DiagnosticTimingSnapshot summarizeDiagnosticTiming(
+    const std::array<std::uint32_t, kMeasuredBlocks>& samples) {
+    std::array<std::uint32_t, kMeasuredBlocks> sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+
+    std::uint64_t sum = 0;
+    std::uint32_t deadline_misses = 0;
+    for (const std::uint32_t sample : samples) {
+        sum += sample;
+        if (sample > kBlockBudgetUs) {
+            ++deadline_misses;
+        }
+    }
+
+    const auto percentile = [&sorted](std::size_t percent) {
+        const std::size_t rank = (sorted.size() * percent + 99u) / 100u;
+        return sorted[std::min<std::size_t>(
+            rank == 0u ? 0u : rank - 1u,
+            sorted.size() - 1u)];
+    };
+
+    DiagnosticTimingSnapshot result{};
+    result.min_us = sorted.front();
+    result.avg_us = static_cast<std::uint32_t>(sum / samples.size());
+    result.p50_us = percentile(50u);
+    result.p95_us = percentile(95u);
+    result.p99_us = percentile(99u);
+    result.max_us = sorted.back();
+    result.deadline_misses = deadline_misses;
+    return result;
+}
+
 void yieldToIdleTask() {
     // This qualification runs from app_main without the real I2S task blocking
     // cadence. Yield between measured cases so the IDLE0 watchdog can run. The
     // delay sits completely outside warmup/measured render intervals.
     vTaskDelay(1);
+}
+
+bool startDiagnosticVoices(voice::VoicePool& voices, std::size_t count, bool effects_send) {
+    voices.allSoundOff();
+    for (std::size_t index = 0; index < count; ++index) {
+        if (!voices.start(voiceParams(index, effects_send))) {
+            voices.allSoundOff();
+            return false;
+        }
+    }
+    return voices.activeVoiceCount() == count;
 }
 
 }  // namespace
@@ -262,6 +344,113 @@ bool runOptionalRenderTimingBenchmark() {
         yieldToIdleTask();
     }
 
+#ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
+    // One physical run should also tell us where any remaining deadline cost
+    // lives. These diagnostics do not change the primary dry 1..24 Voice gate.
+    static std::array<
+        std::int32_t,
+        realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock> diagnostic_mix{};
+    static std::array<
+        std::int32_t,
+        realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock> diagnostic_reverb{};
+    static std::array<
+        std::int32_t,
+        realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock> diagnostic_chorus{};
+    static std::array<std::uint32_t, kMeasuredBlocks> diagnostic_samples{};
+
+    yieldToIdleTask();
+    if (!startDiagnosticVoices(voices, kDiagnosticVoices, false)) {
+        ESP_LOGE(kTag, "render_diag: voice_only start failed");
+        return false;
+    }
+    for (std::size_t block = 0; block < kWarmupBlocks; ++block) {
+        diagnostic_mix.fill(0);
+        diagnostic_reverb.fill(0);
+        diagnostic_chorus.fill(0);
+        voices.renderAddWithEffects(
+            diagnostic_mix.data(),
+            diagnostic_reverb.data(),
+            diagnostic_chorus.data(),
+            realtime::ScheduledAudioBlockRenderer::kFramesPerBlock);
+    }
+    std::uint64_t voice_only_checksum = 1469598103934665603ull;
+    for (std::size_t block = 0; block < kMeasuredBlocks; ++block) {
+        diagnostic_mix.fill(0);
+        diagnostic_reverb.fill(0);
+        diagnostic_chorus.fill(0);
+        const std::uint64_t start_us = platform::espRealtimeNowUs();
+        voices.renderAddWithEffects(
+            diagnostic_mix.data(),
+            diagnostic_reverb.data(),
+            diagnostic_chorus.data(),
+            realtime::ScheduledAudioBlockRenderer::kFramesPerBlock);
+        const std::uint64_t end_us = platform::espRealtimeNowUs();
+        diagnostic_samples[block] = elapsedUs(start_us, end_us);
+        voice_only_checksum = updateWideChecksum(voice_only_checksum, diagnostic_mix);
+    }
+    const DiagnosticTimingSnapshot voice_only = summarizeDiagnosticTiming(diagnostic_samples);
+    ESP_LOGI(
+        kTag,
+        "render_diag: stage=voice_only voices=%u blocks=%u min_us=%u avg_us=%u p50_us=%u p95_us=%u p99_us=%u max_us=%u deadline_misses=%u checksum=%016llx",
+        static_cast<unsigned>(kDiagnosticVoices),
+        static_cast<unsigned>(kMeasuredBlocks),
+        static_cast<unsigned>(voice_only.min_us),
+        static_cast<unsigned>(voice_only.avg_us),
+        static_cast<unsigned>(voice_only.p50_us),
+        static_cast<unsigned>(voice_only.p95_us),
+        static_cast<unsigned>(voice_only.p99_us),
+        static_cast<unsigned>(voice_only.max_us),
+        static_cast<unsigned>(voice_only.deadline_misses),
+        static_cast<unsigned long long>(voice_only_checksum));
+    voices.allSoundOff();
+
+    yieldToIdleTask();
+    if (!startDiagnosticVoices(voices, kDiagnosticVoices, true)) {
+        ESP_LOGE(kTag, "render_diag: full_fx start failed");
+        return false;
+    }
+    for (std::size_t block = 0; block < kWarmupBlocks; ++block) {
+        renderer.render(block_start_frame, output.data());
+        block_start_frame += realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
+    }
+    const std::uint64_t fx_clipped_before = renderer.stats().clipped_samples;
+    std::uint64_t fx_checksum = 1469598103934665603ull;
+    std::uint64_t fx_nonzero_samples = 0;
+    for (std::size_t block = 0; block < kMeasuredBlocks; ++block) {
+        const std::uint64_t start_us = platform::espRealtimeNowUs();
+        renderer.render(block_start_frame, output.data());
+        const std::uint64_t end_us = platform::espRealtimeNowUs();
+        block_start_frame += realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
+        diagnostic_samples[block] = elapsedUs(start_us, end_us);
+        fx_checksum = updateChecksum(fx_checksum, output, &fx_nonzero_samples);
+    }
+    const DiagnosticTimingSnapshot full_fx = summarizeDiagnosticTiming(diagnostic_samples);
+    const std::uint64_t fx_clipped = renderer.stats().clipped_samples - fx_clipped_before;
+    ESP_LOGI(
+        kTag,
+        "render_diag: stage=full_fx voices=%u blocks=%u reverb_send=%d chorus_send=%d min_us=%u avg_us=%u p50_us=%u p95_us=%u p99_us=%u max_us=%u deadline_misses=%u clipped_samples=%llu checksum=%016llx",
+        static_cast<unsigned>(kDiagnosticVoices),
+        static_cast<unsigned>(kMeasuredBlocks),
+        static_cast<int>(kDiagnosticReverbSendUnits),
+        static_cast<int>(kDiagnosticChorusSendUnits),
+        static_cast<unsigned>(full_fx.min_us),
+        static_cast<unsigned>(full_fx.avg_us),
+        static_cast<unsigned>(full_fx.p50_us),
+        static_cast<unsigned>(full_fx.p95_us),
+        static_cast<unsigned>(full_fx.p99_us),
+        static_cast<unsigned>(full_fx.max_us),
+        static_cast<unsigned>(full_fx.deadline_misses),
+        static_cast<unsigned long long>(fx_clipped),
+        static_cast<unsigned long long>(fx_checksum));
+    if (fx_nonzero_samples == 0u) {
+        ESP_LOGE(kTag, "render_diag: full_fx produced only silence");
+        voices.allSoundOff();
+        return false;
+    }
+    voices.allSoundOff();
+    yieldToIdleTask();
+#endif
+
     voices.allSoundOff();
     const auto publication = directory.stats();
     if (publication.live_voice_refs != 0u) {
@@ -271,6 +460,10 @@ bool runOptionalRenderTimingBenchmark() {
             static_cast<unsigned>(publication.live_voice_refs));
         return false;
     }
+
+#ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
+    ESP_LOGI(kTag, "render_diag: PASS final_refs=0");
+#endif
 
     ESP_LOGI(
         kTag,
