@@ -56,9 +56,9 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     // Reserved historical diagnostic bit. Vibrato LFO and Mod-LFO pitch/filter/
     // volume destinations are implemented now; keep this bit stable but unused.
     PlaybackIssueLfoPending = std::uint64_t{1} << 17,
-    // Reverb/chorus generator + CC91/93 send values are preserved and updated
-    // sample-accurately in Voice state; this bit means the actual FX bus/DSP
-    // processor that consumes those sends is still pending.
+    // Reserved historical diagnostic bit. Reverb/chorus generators and CC91/93
+    // now feed per-Voice send buses consumed by the global chorus/reverb DSP.
+    // Keep the bit position stable for old telemetry decoders, but do not emit it.
     PlaybackIssueEffectsSendPending = std::uint64_t{1} << 18,
     // Retained as a diagnostics bit for callers using the conservative legacy
     // materialize(native, output) overload without per-zone modulator state.
