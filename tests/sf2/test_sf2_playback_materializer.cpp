@@ -64,12 +64,12 @@ NativeResolvedZone baseZone() {
     return zone;
 }
 
-void testSimpleZoneBecomesExplicitPreview() {
+void testSimpleZoneBecomesQualified() {
     Sf2PlaybackMaterializer materializer;
     PlaybackZone output{};
     const auto result = materializer.materialize(baseZone(), &output);
 
-    assert(result.status == PlaybackMaterializationStatus::Preview);
+    assert(result.status == PlaybackMaterializationStatus::Qualified);
     assert(result.playablePreview());
     assert(!result.hasIssue(PlaybackIssueDefaultModulatorsPending));
     assert(!result.hasIssue(PlaybackIssueEffectsSendPending));
@@ -117,7 +117,7 @@ void testResolvedAddressWindowAndLoopAreRelativeToResidentSample() {
 
     PlaybackZone output{};
     const auto result = Sf2PlaybackMaterializer{}.materialize(native, &output);
-    assert(result.status == PlaybackMaterializationStatus::Preview);
+    assert(result.status == PlaybackMaterializationStatus::Qualified);
     assert(output.loop_mode == LoopMode::Continuous);
     assert(output.sample_region.enabled);
     assert(output.sample_region.start_frame == 10);
@@ -420,7 +420,7 @@ void testInvalidArgumentsAreTransactional() {
 }  // namespace
 
 int main() {
-    testSimpleZoneBecomesExplicitPreview();
+    testSimpleZoneBecomesQualified();
     testResolvedAddressWindowAndLoopAreRelativeToResidentSample();
     testPitchMaterializationIncludesRateTuneAndCorrection();
     testFixedKeyAndScaleTuningQualification();
