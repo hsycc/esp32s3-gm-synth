@@ -73,6 +73,7 @@ void test_fm_bank_inherits_mandatory_default_modulators() {
     Sf2ZoneModulatorResolver resolver;
     CHECK(resolver.resolveProgram(pdta, 0, 0, zones.data(), zones.size(), &result) ==
           ZoneModulatorResolveStatus::Ok);
+    CHECK(result.fullySupported());
     CHECK(result.zone_count == 1);
     CHECK(result.required_capacity == 1);
     CHECK(result.supported_records == 0);
@@ -113,6 +114,7 @@ void test_generaluser_program_zero_matches_native_zone_count() {
     Sf2ZoneModulatorResolver resolver;
     CHECK(resolver.resolveProgram(pdta, 0, 0, zones.data(), zones.size(), &result) ==
           ZoneModulatorResolveStatus::Ok);
+    CHECK(result.fullySupported());
     CHECK(result.zone_count == 200);
     CHECK(result.required_capacity == 200);
 }
@@ -132,7 +134,9 @@ void test_generaluser_bank_exercises_supported_modulators() {
     bool found_velocity_convex_filter_route = false;
     bool found_channel_control_override = false;
     bool found_effect_send_override = false;
+    std::uint32_t supported_records = 0;
 
+    CHECK(pdta.presetCount() == 35);
     for (std::size_t preset_index = 0; preset_index < pdta.presetCount(); ++preset_index) {
         Sf2PdtaReader::PresetHeader preset{};
         CHECK(pdta.presetHeader(preset_index, &preset));
@@ -145,10 +149,14 @@ void test_generaluser_bank_exercises_supported_modulators() {
             zones.size(),
             &result);
         CHECK(status == ZoneModulatorResolveStatus::Ok);
+        CHECK(result.fullySupported());
+        CHECK(result.unsupported_records == 0);
         if (status != ZoneModulatorResolveStatus::Ok) {
             continue;
         }
+        supported_records += result.supported_records;
         for (std::size_t index = 0; index < result.zone_count; ++index) {
+            CHECK(!zones[index].hasUnsupportedModulators());
             found_velocity_override = found_velocity_override ||
                 zones[index].supported_velocity_attenuation_records != 0;
             found_velocity_filter_override_or_cancellation =
@@ -178,19 +186,75 @@ void test_generaluser_bank_exercises_supported_modulators() {
         }
     }
 
+    CHECK(supported_records != 0);
     CHECK(found_velocity_override);
     CHECK(found_velocity_filter_override_or_cancellation);
     // Keep the real-bank gate broad for the older dedicated velocity-DSP
     // families. Their exact destination coverage is tested synthetically.
     CHECK(found_velocity_dsp);
-    // These are the two previously-unsupported immutable NoteOn source
+    // These are the two formerly-unsupported immutable NoteOn source
     // identities found in the checked-in GeneralUser subset. Requiring both
-    // makes this gate prove the new generic path is exercised by real bank data.
+    // makes this gate prove the generic path is exercised by real bank data.
     CHECK(found_key_bipolar_filter_route);
     CHECK(found_velocity_convex_filter_route);
     CHECK(found_effect_send_override);
     if (found_channel_control_override) {
         std::printf("GeneralUser exercises file-defined CC7/10/11 modulation\n");
+    }
+}
+
+void test_fm_and_fluidr3_banks_have_no_unsupported_modulators() {
+    struct BankCase {
+        const char* path;
+        std::size_t expected_presets;
+        bool expect_supported_records;
+    };
+    constexpr BankCase cases[] = {
+        {"assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2", 67, false},
+        {"assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2", 23, true},
+    };
+
+    for (const BankCase& bank : cases) {
+        FileReader reader(bank.path);
+        CHECK(reader.valid());
+        Sf2PdtaReader pdta;
+        CHECK(pdta.begin(reader));
+        CHECK(pdta.presetCount() == bank.expected_presets);
+
+        std::array<ResolvedZoneModulation, 256> zones{};
+        Sf2ZoneModulatorResolver resolver;
+        std::uint32_t supported_records = 0;
+        for (std::size_t preset_index = 0; preset_index < pdta.presetCount(); ++preset_index) {
+            Sf2PdtaReader::PresetHeader preset{};
+            CHECK(pdta.presetHeader(preset_index, &preset));
+            ZoneModulatorResolveResult result{};
+            const auto status = resolver.resolveProgram(
+                pdta,
+                preset.bank,
+                preset.program,
+                zones.data(),
+                zones.size(),
+                &result);
+            CHECK(status == ZoneModulatorResolveStatus::Ok);
+            CHECK(result.fullySupported());
+            CHECK(result.unsupported_records == 0);
+            if (status != ZoneModulatorResolveStatus::Ok) {
+                continue;
+            }
+            supported_records += result.supported_records;
+            for (std::size_t zone_index = 0; zone_index < result.zone_count; ++zone_index) {
+                CHECK(!zones[zone_index].hasUnsupportedModulators());
+            }
+        }
+
+        if (bank.expect_supported_records) {
+            // The checked-in FluidR3 subset carries only the recognized SF2
+            // 2.01 velocity/filter cancellation pattern. It must be classified
+            // as supported rather than silently falling into the unknown bucket.
+            CHECK(supported_records != 0);
+        } else {
+            CHECK(supported_records == 0);
+        }
     }
 }
 
@@ -204,6 +268,7 @@ void test_count_pass_is_transactional() {
     Sf2ZoneModulatorResolver resolver;
     CHECK(resolver.resolveProgram(pdta, 0, 0, nullptr, 0, &result) ==
           ZoneModulatorResolveStatus::OutputTooSmall);
+    CHECK(!result.fullySupported());
     CHECK(result.zone_count == 0);
     CHECK(result.required_capacity == 200);
 }
@@ -219,6 +284,7 @@ void test_missing_program_is_explicit() {
     Sf2ZoneModulatorResolver resolver;
     CHECK(resolver.resolveProgram(pdta, 0, 127, zones.data(), zones.size(), &result) ==
           ZoneModulatorResolveStatus::PresetNotFound);
+    CHECK(!result.fullySupported());
 }
 
 }  // namespace
@@ -227,6 +293,7 @@ int main() {
     test_fm_bank_inherits_mandatory_default_modulators();
     test_generaluser_program_zero_matches_native_zone_count();
     test_generaluser_bank_exercises_supported_modulators();
+    test_fm_and_fluidr3_banks_have_no_unsupported_modulators();
     test_count_pass_is_transactional();
     test_missing_program_is_explicit();
 
