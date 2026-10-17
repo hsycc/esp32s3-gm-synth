@@ -75,6 +75,15 @@ std::int32_t unitGainQ15(double gain, std::uint64_t* issues) {
 }
 
 std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
+    if (a <= 0 || b <= 0) {
+        return 0;
+    }
+    if (a >= voice::kQ15Unity) {
+        return std::min<std::int32_t>(b, voice::kQ15Unity);
+    }
+    if (b >= voice::kQ15Unity) {
+        return std::min<std::int32_t>(a, voice::kQ15Unity);
+    }
     const std::int64_t product = static_cast<std::int64_t>(a) * b;
     return static_cast<std::int32_t>(
         (product + (std::int64_t{1} << 14)) >> 15);
@@ -278,8 +287,9 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
                 resonanceDcAttenuationCb(native.initialFilterQCb()),
             std::numeric_limits<std::int32_t>::min(),
             std::numeric_limits<std::int32_t>::max()));
-    double static_gain = centibelsToLinear(static_attenuation_cb);
-    const std::int32_t static_gain_q15 = unitGainQ15(static_gain, &issues);
+    const std::int32_t static_gain_q15 = unitGainQ15(
+        centibelsToLinear(static_attenuation_cb),
+        &issues);
     const std::int32_t pan_units = std::max<std::int32_t>(
         -500,
         std::min<std::int32_t>(500, native.panSf2Units()));
