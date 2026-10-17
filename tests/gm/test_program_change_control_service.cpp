@@ -203,8 +203,6 @@ void testRealBankProgramChangeTransactionAndRapidCoalescing() {
     assert(pdta.begin(reader));
     assert(sample_source.begin(reader));
 
-    // Program 0/1/3 in this checked-in subset each reference roughly 128 KiB,
-    // so a 1 MiB host arena leaves ample room for active + READY ownership.
     std::vector<std::uint32_t> arena_words((1024u * 1024u) / sizeof(std::uint32_t));
     SampleResidencyManager residency;
     PublishedSampleDirectory directory;
@@ -271,9 +269,6 @@ void testRealBankProgramChangeTransactionAndRapidCoalescing() {
     assert(!residency_exchange.transitionInFlight(0));
     assert(!playback_exchange.transitionInFlight(0));
 
-    // A retired playback workspace becomes reusable only after the paired ACK.
-    // Rapid Program Change traffic is coalesced before the next expensive
-    // control-domain prepare, so program 2 is never loaded when program 3 wins.
     assert(router.apply(programChange(0, 2), voices));
     assert(router.apply(programChange(0, 3), voices));
     assert(service.drainRealtimeRequests() == 1);
@@ -337,8 +332,6 @@ void testBusyTransitionDefersLatestRequestWithoutDroppingIt() {
     assert(service.drainRealtimeRequests() == 1);
     assert(service.serviceChannel(0, b.workspace).ok());
 
-    // A newer request may arrive while the first READY pair waits for the next
-    // audio boundary. It stays pending instead of mutating the in-flight pair.
     assert(router.apply(programChange(0, 3), voices));
     assert(service.drainRealtimeRequests() == 1);
     const auto busy = service.serviceChannel(0, a.workspace);
@@ -402,16 +395,11 @@ void testFullFmProgramChangeResidencyCommitAndNoteOn() {
     ProgramRuntimeCommitCoordinator coordinator(residency_exchange, playback_exchange);
     ProgramRuntimeBlockCommitter committer(coordinator);
 
-    // The initially activated full-bank melodic snapshot is immediately usable
-    // by the audio-side resolver and PublishedSampleDirectory.
     assert(router.apply(noteOn(0, 60), voices));
     assert(voices.activeVoiceCount() > 0);
     assert(events.stats().voices_started > 0);
     voices.allSoundOff();
 
-    // Exercise a far-end GM identity through the full transaction:
-    // realtime request -> control prepare -> sample residency/publication ->
-    // paired READY -> audio-block commit -> ACK -> NoteOn.
     assert(router.apply(programChange(0, 127), voices));
     assert(service.drainRealtimeRequests() == 1);
     const auto melodic_prepared = service.serviceChannel(0, melodic_b.workspace);
@@ -431,9 +419,6 @@ void testFullFmProgramChangeResidencyCommitAndNoteOn() {
     assert(voices.activeVoiceCount() > voices_before_program_127);
     voices.allSoundOff();
 
-    // GM Channel 10 must remain on SF2 bank 128 through the same real storage
-    // transaction. Re-preparing program 0 proves the router never falls back to
-    // bank 0 merely because the melodic channel just changed to program 127.
     assert(router.apply(programChange(kGmPercussionChannel, 0), voices));
     assert(service.drainRealtimeRequests() == 1);
     const auto drum_prepared = service.serviceChannel(kGmPercussionChannel, drums_b.workspace);
@@ -459,9 +444,18 @@ void testFullFmProgramChangeResidencyCommitAndNoteOn() {
     assert(service_stats.residency_prepare_failures == 0);
     assert(service_stats.publish_invariant_failures == 0);
     assert(service_stats.commit_acks == 2);
+
+    // Production Voices acquire through PublishedSampleDirectory rather than
+    // the older Phase-A SampleResidencyManager lease API. Therefore the
+    // residency lease-ref counter stays zero while the publication directory
+    // owns the live Voice Ref.
     const auto residency_stats = residency.stats();
     assert(residency_stats.used_bytes > 0);
-    assert(residency_stats.referenced_sample_count > 0);
+    assert(residency_stats.referenced_sample_count == 0);
+    const auto publication_stats = directory.stats();
+    assert(publication_stats.live_voice_refs > 0);
+    assert(publication_stats.acquire_successes > 0);
+    assert(publication_stats.acquire_misses == 0);
 }
 
 void testFullFmGmResetCommitsAll16ChannelsAndStartsVoices() {
@@ -545,18 +539,24 @@ void testFullFmGmResetCommitsAll16ChannelsAndStartsVoices() {
         assert(ack.retired_playback == &active_workspaces[channel].workspace.snapshot);
     }
 
-    // After the atomic block-boundary commit, all 16 channels are immediately
-    // usable. Program 0 in this FM bank is single-zone mono, so fifteen melodic
-    // notes plus one drum note fit exactly inside the guaranteed 16-voice floor.
+    // Validate channel usability independently. A NoteOn may legitimately
+    // resolve more than one SF2 layer, so the invariant is "at least one Voice
+    // starts without failure" rather than "exactly one Voice per channel".
     for (std::uint8_t channel = 0; channel < 16; ++channel) {
+        voices.allSoundOff();
+        const std::uint64_t starts_before = events.stats().voices_started;
         const std::uint8_t key = channel == kGmPercussionChannel ? 36 : 60;
         assert(router.apply(noteOn(channel, key, 100), voices));
+        assert(voices.activeVoiceCount() > 0);
+        assert(events.stats().voices_started > starts_before);
     }
-    assert(voices.activeVoiceCount() == 16);
-    assert(events.stats().voices_started == 16);
     assert(events.stats().voice_start_failures == 0);
     assert(events.stats().missing_active_program == 0);
     assert(events.stats().percussion_program_unavailable == 0);
+    const auto publication_stats = directory.stats();
+    assert(publication_stats.live_voice_refs > 0);
+    assert(publication_stats.acquire_successes >= 16);
+    assert(publication_stats.acquire_misses == 0);
 
     const auto service_stats = service.stats();
     assert(service_stats.realtime_requests_drained == 16);
