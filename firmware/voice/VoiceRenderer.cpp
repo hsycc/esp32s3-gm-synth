@@ -1019,7 +1019,7 @@ bool VoicePool::start(const VoiceStartParams& params) {
     // Acquire and validate the incoming SampleRef before changing the victim.
     // A rejected/missing sample must never sacrifice a currently sounding voice.
     if (!voices_[target].start(directory_, params)) {
-        util::saturatingIncrement(stats_.steal_failures_rejected);
+        util::saturatingIncrement(stats_.start_failures_rejected);
         return false;
     }
 
