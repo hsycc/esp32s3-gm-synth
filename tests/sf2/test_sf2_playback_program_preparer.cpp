@@ -249,6 +249,7 @@ void testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones() {
         expected_supported += modulation[index].supported_velocity_attenuation_records;
         expected_supported += modulation[index].supported_velocity_filter_records;
         expected_supported += modulation[index].supported_velocity_dsp_records;
+        expected_supported += modulation[index].supported_note_on_source_records;
         expected_supported += modulation[index].supported_channel_control_records;
         expected_supported += modulation[index].supported_vibrato_records;
         expected_supported += modulation[index].supported_effects_send_records;
