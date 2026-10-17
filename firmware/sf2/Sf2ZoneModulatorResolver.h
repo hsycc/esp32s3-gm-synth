@@ -69,6 +69,10 @@ struct ZoneModulatorResolveResult {
     std::uint16_t preset_index = 0;
     std::uint32_t supported_records = 0;
     std::uint32_t unsupported_records = 0;
+
+    bool fullySupported() const {
+        return status == ZoneModulatorResolveStatus::Ok && unsupported_records == 0;
+    }
 };
 
 class Sf2ZoneModulatorResolver {
