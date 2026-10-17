@@ -1,6 +1,7 @@
 #include "Sf2ZoneModulatorResolver.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 
@@ -46,6 +47,11 @@ struct RouteValue {
     std::int32_t amount = 0;
 };
 
+struct NoteOnRouteSet {
+    std::array<Sf2NoteOnSourceRoute, kSf2MaxNoteOnSourceRoutesPerDestination> routes{};
+    std::uint8_t count = 0;
+};
+
 struct ModulatorScan {
     RouteValue velocity_attenuation{};
     RouteValue velocity_filter{};
@@ -54,6 +60,7 @@ struct ModulatorScan {
     RouteValue velocity_filter_q{};
     RouteValue velocity_mod_env_attack{};
     RouteValue velocity_vol_env_attack{};
+    NoteOnRouteSet initial_filter_fc_note_on{};
     RouteValue channel_volume{};
     RouteValue channel_pan{};
     RouteValue channel_expression{};
@@ -65,6 +72,7 @@ struct ModulatorScan {
     std::uint32_t supported_velocity_records = 0;
     std::uint32_t supported_velocity_filter_records = 0;
     std::uint32_t supported_velocity_dsp_records = 0;
+    std::uint32_t supported_note_on_source_records = 0;
     std::uint32_t supported_channel_control_records = 0;
     std::uint32_t supported_vibrato_records = 0;
     std::uint32_t supported_effects_send_records = 0;
@@ -229,6 +237,13 @@ bool exactRoute(
            modulator.transform_oper == 0;
 }
 
+bool isGenericNoteOnFilterFcRoute(const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.destination_oper == kInitialFilterFcDestination &&
+        modulator.amount_source_oper == 0 &&
+        modulator.transform_oper == 0 &&
+        isSupportedSf2NoteOnSourceOper(modulator.source_oper);
+}
+
 bool isIgnoredSf201VelocityFilterCancellation(
     const Sf2PdtaReader::Modulator& modulator) {
     return modulator.source_oper == kVelocityNegativeLinearSourceOper &&
@@ -241,6 +256,113 @@ bool isIgnoredSf201VelocityFilterCancellation(
 void remember(RouteValue* route, const Sf2PdtaReader::Modulator& modulator) {
     route->found = true;
     route->amount = modulator.amount;
+}
+
+bool replaceNoteOnRoute(
+    NoteOnRouteSet* routes,
+    std::uint16_t source_oper,
+    std::int32_t amount) {
+    if (routes == nullptr) {
+        return false;
+    }
+    for (std::size_t index = 0; index < routes->count; ++index) {
+        if (routes->routes[index].source_oper == source_oper) {
+            routes->routes[index].amount = amount;
+            return true;
+        }
+    }
+    if (routes->count >= routes->routes.size()) {
+        return false;
+    }
+    routes->routes[routes->count++] = Sf2NoteOnSourceRoute{source_oper, amount};
+    return true;
+}
+
+bool addNoteOnRoute(
+    NoteOnRouteSet* routes,
+    const Sf2NoteOnSourceRoute& route) {
+    if (routes == nullptr || !route.valid()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < routes->count; ++index) {
+        if (routes->routes[index].source_oper == route.source_oper) {
+            routes->routes[index].amount = saturatingAddI32(
+                routes->routes[index].amount,
+                route.amount);
+            return true;
+        }
+    }
+    if (routes->count >= routes->routes.size()) {
+        return false;
+    }
+    routes->routes[routes->count++] = route;
+    return true;
+}
+
+void mergeNoteOnRouteLevel(
+    const NoteOnRouteSet& global,
+    const NoteOnRouteSet& local,
+    NoteOnRouteSet* output,
+    std::uint32_t* overflow_records) {
+    if (output == nullptr || overflow_records == nullptr) {
+        return;
+    }
+    *output = NoteOnRouteSet{};
+    for (std::size_t index = 0; index < global.count; ++index) {
+        if (!replaceNoteOnRoute(
+                output,
+                global.routes[index].source_oper,
+                global.routes[index].amount)) {
+            *overflow_records = saturatingAdd32(*overflow_records, 1u);
+        }
+    }
+    for (std::size_t index = 0; index < local.count; ++index) {
+        if (!replaceNoteOnRoute(
+                output,
+                local.routes[index].source_oper,
+                local.routes[index].amount)) {
+            *overflow_records = saturatingAdd32(*overflow_records, 1u);
+        }
+    }
+}
+
+NoteOnRouteSet combineNoteOnRoutes(
+    const NoteOnRouteSet& preset_global,
+    const NoteOnRouteSet& preset_local,
+    const NoteOnRouteSet& instrument_global,
+    const NoteOnRouteSet& instrument_local,
+    std::uint32_t* overflow_records) {
+    NoteOnRouteSet instrument{};
+    NoteOnRouteSet preset{};
+    NoteOnRouteSet combined{};
+    mergeNoteOnRouteLevel(
+        instrument_global,
+        instrument_local,
+        &instrument,
+        overflow_records);
+    mergeNoteOnRouteLevel(
+        preset_global,
+        preset_local,
+        &preset,
+        overflow_records);
+
+    for (std::size_t index = 0; index < instrument.count; ++index) {
+        if (!replaceNoteOnRoute(
+                &combined,
+                instrument.routes[index].source_oper,
+                instrument.routes[index].amount)) {
+            *overflow_records = saturatingAdd32(*overflow_records, 1u);
+        }
+    }
+    // Preset modulators are additive to the surviving instrument/default
+    // modulation. Matching identities therefore add amounts here rather than
+    // replacing the instrument contribution.
+    for (std::size_t index = 0; index < preset.count; ++index) {
+        if (!addNoteOnRoute(&combined, preset.routes[index])) {
+            *overflow_records = saturatingAdd32(*overflow_records, 1u);
+        }
+    }
+    return combined;
 }
 
 bool scanModulators(
@@ -287,6 +409,15 @@ bool scanModulators(
         } else if (exactRoute(modulator, kVelocityNegativeLinearSourceOper, kAttackVolEnvDestination)) {
             remember(&scan.velocity_vol_env_attack, modulator);
             ++scan.supported_velocity_dsp_records;
+        } else if (isGenericNoteOnFilterFcRoute(modulator)) {
+            if (replaceNoteOnRoute(
+                    &scan.initial_filter_fc_note_on,
+                    modulator.source_oper,
+                    modulator.amount)) {
+                ++scan.supported_note_on_source_records;
+            } else {
+                ++scan.unsupported_records;
+            }
         } else if (exactRoute(modulator, kChannelVolumeSourceOper, kInitialAttenuationDestination)) {
             remember(&scan.channel_volume, modulator);
             ++scan.supported_channel_control_records;
@@ -400,6 +531,19 @@ ResolvedZoneModulation combine(
         preset_local.velocity_vol_env_attack,
         instrument_global.velocity_vol_env_attack,
         instrument_local.velocity_vol_env_attack);
+
+    std::uint32_t route_overflow_records = 0;
+    const NoteOnRouteSet note_on_filter_routes = combineNoteOnRoutes(
+        preset_global.initial_filter_fc_note_on,
+        preset_local.initial_filter_fc_note_on,
+        instrument_global.initial_filter_fc_note_on,
+        instrument_local.initial_filter_fc_note_on,
+        &route_overflow_records);
+    resolved.initial_filter_fc_note_on_route_count = note_on_filter_routes.count;
+    for (std::size_t index = 0; index < note_on_filter_routes.count; ++index) {
+        resolved.initial_filter_fc_note_on_routes[index] = note_on_filter_routes.routes[index];
+    }
+
     resolved.volume_to_attenuation_cb = combinedRoute(
         kSf2DefaultControllerAttenuationCb,
         preset_global.channel_volume,
@@ -452,6 +596,9 @@ ResolvedZoneModulation combine(
     resolved.supported_velocity_dsp_records = clampU16(sumCategory(
         &ModulatorScan::supported_velocity_dsp_records,
         preset_global, preset_local, instrument_global, instrument_local));
+    resolved.supported_note_on_source_records = clampU16(sumCategory(
+        &ModulatorScan::supported_note_on_source_records,
+        preset_global, preset_local, instrument_global, instrument_local));
     resolved.supported_channel_control_records = clampU16(sumCategory(
         &ModulatorScan::supported_channel_control_records,
         preset_global, preset_local, instrument_global, instrument_local));
@@ -461,9 +608,11 @@ ResolvedZoneModulation combine(
     resolved.supported_effects_send_records = clampU16(sumCategory(
         &ModulatorScan::supported_effects_send_records,
         preset_global, preset_local, instrument_global, instrument_local));
-    resolved.unsupported_modulator_records = clampU16(sumCategory(
-        &ModulatorScan::unsupported_records,
-        preset_global, preset_local, instrument_global, instrument_local));
+    resolved.unsupported_modulator_records = clampU16(saturatingAdd32(
+        sumCategory(
+            &ModulatorScan::unsupported_records,
+            preset_global, preset_local, instrument_global, instrument_local),
+        route_overflow_records));
     return resolved;
 }
 
@@ -673,10 +822,12 @@ ZoneModulatorResolveStatus Sf2ZoneModulatorResolver::resolveProgram(
                     resolved.supported_velocity_filter_records),
                 resolved.supported_velocity_dsp_records);
             const std::uint32_t other_supported = saturatingAdd32(
-                resolved.supported_channel_control_records,
+                resolved.supported_note_on_source_records,
                 saturatingAdd32(
-                    resolved.supported_vibrato_records,
-                    resolved.supported_effects_send_records));
+                    resolved.supported_channel_control_records,
+                    saturatingAdd32(
+                        resolved.supported_vibrato_records,
+                        resolved.supported_effects_send_records)));
             result->supported_records = saturatingAdd32(
                 result->supported_records,
                 saturatingAdd32(velocity_supported, other_supported));
