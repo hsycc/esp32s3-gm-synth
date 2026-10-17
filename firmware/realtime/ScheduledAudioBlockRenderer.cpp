@@ -32,11 +32,22 @@ void ScheduledAudioBlockRenderer::renderSegment(
     if (frame_count == 0) {
         return;
     }
-    voices_.renderAdd(mix_.data() + (start_frame * kChannels), frame_count);
+    const std::size_t sample_offset = start_frame * kChannels;
+    voices_.renderAddWithEffects(
+        mix_.data() + sample_offset,
+        reverb_send_.data() + sample_offset,
+        chorus_send_.data() + sample_offset,
+        frame_count);
     util::saturatingIncrement(stats_.render_segments);
 }
 
 void ScheduledAudioBlockRenderer::finalize(std::int16_t* interleaved_stereo) {
+    effects_.processAdd(
+        chorus_send_.data(),
+        reverb_send_.data(),
+        mix_.data(),
+        kFramesPerBlock);
+
     for (std::size_t index = 0; index < mix_.size(); ++index) {
         const std::int32_t value = mix_[index];
         const std::int64_t magnitude = value >= 0
@@ -64,6 +75,8 @@ void ScheduledAudioBlockRenderer::render(
     }
 
     mix_.fill(0);
+    reverb_send_.fill(0);
+    chorus_send_.fill(0);
     const BlockEventBatch& batch = scheduler_.prepareBlock(
         block_start_frame,
         static_cast<std::uint16_t>(kFramesPerBlock));
