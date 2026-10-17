@@ -10,6 +10,7 @@
 #include "storage/RandomAccessReader.h"
 #include "voice/VoiceRenderer.h"
 
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +30,8 @@ using gm_synth::gm::ProgramRuntimeCommitCoordinator;
 using gm_synth::gm::RealtimeProgramChangeHandoff;
 using gm_synth::gm::RealtimeProgramChangeRouter;
 using gm_synth::gm::RealtimeProgramEventApplier;
+using gm_synth::gm::kGmPercussionChannel;
+using gm_synth::gm::kSf2PercussionBank;
 using gm_synth::realtime::EventType;
 using gm_synth::realtime::RealtimeEvent;
 using gm_synth::sample::ProgramPrepareController;
@@ -109,20 +112,37 @@ RealtimeEvent programChange(std::uint8_t channel, std::uint8_t program) {
     return event;
 }
 
-void prepareInitialProgram(
+RealtimeEvent noteOn(
+    std::uint8_t channel,
+    std::uint8_t key,
+    std::uint8_t velocity = 96) {
+    RealtimeEvent event{};
+    event.type = EventType::NoteOn;
+    event.channel = channel;
+    event.data1 = key;
+    event.data2 = velocity;
+    return event;
+}
+
+void prepareInitialProgramIdentity(
     Sf2PdtaReader& pdta,
     Sf2PlaybackProgramPreparer& playback_preparer,
     ProgramPrepareController& residency_preparer,
     PublishedSampleDirectory& directory,
     PlaybackProgramSnapshotExchange& playback_exchange,
-    WorkspaceStorage& storage) {
+    WorkspaceStorage& storage,
+    std::uint8_t channel,
+    std::uint16_t bank,
+    std::uint8_t program,
+    std::uint32_t token,
+    PlaybackPreparePolicy policy = PlaybackPreparePolicy::StrictQualified) {
     PlaybackPrepareRequest request{};
-    request.channel = 0;
-    request.bank = 0;
-    request.program = 0;
-    request.token = 100;
+    request.channel = channel;
+    request.bank = bank;
+    request.program = program;
+    request.token = token;
     request.bank_generation = directory.bankGeneration();
-    request.policy = PlaybackPreparePolicy::AllowPreview;
+    request.policy = policy;
     request.native_scratch = storage.workspace.native_scratch;
     request.native_capacity = storage.workspace.native_capacity;
     request.modulation_scratch = storage.workspace.modulation_scratch;
@@ -135,16 +155,43 @@ void prepareInitialProgram(
 
     const auto playback = playback_preparer.prepare(pdta, request);
     assert(playback.ok());
-    assert(playback.zone_count == 1);
-    assert(playback.dependency_count == 1);
+    assert(playback.zone_count > 0);
+    assert(playback.dependency_count > 0);
+    assert(playback.unsupported_modulator_records == 0);
+    assert(playback.preview_zone_count == 0);
     assert(residency_preparer.activateInitialProgram(
+        channel,
+        bank,
+        program,
+        token,
+        storage.workspace.dependencies,
+        playback.dependency_count));
+    assert(playback_exchange.setInitialActive(&storage.workspace.snapshot));
+    assert(playback_exchange.active(channel) == &storage.workspace.snapshot);
+    assert(playback_exchange.active(channel)->bank == bank);
+    assert(playback_exchange.active(channel)->program == program);
+}
+
+void prepareInitialProgram(
+    Sf2PdtaReader& pdta,
+    Sf2PlaybackProgramPreparer& playback_preparer,
+    ProgramPrepareController& residency_preparer,
+    PublishedSampleDirectory& directory,
+    PlaybackProgramSnapshotExchange& playback_exchange,
+    WorkspaceStorage& storage) {
+    prepareInitialProgramIdentity(
+        pdta,
+        playback_preparer,
+        residency_preparer,
+        directory,
+        playback_exchange,
+        storage,
         0,
         0,
         0,
         100,
-        storage.workspace.dependencies,
-        playback.dependency_count));
-    assert(playback_exchange.setInitialActive(&storage.workspace.snapshot));
+        PlaybackPreparePolicy::AllowPreview);
+    assert(storage.workspace.snapshot.zone_count == 1);
 }
 
 void testRealBankProgramChangeTransactionAndRapidCoalescing() {
@@ -309,11 +356,224 @@ void testBusyTransitionDefersLatestRequestWithoutDroppingIt() {
     assert(mailbox.hasPending(0) == false);
 }
 
+void testFullFmProgramChangeResidencyCommitAndNoteOn() {
+    FileReader reader("assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2");
+    assert(reader.valid());
+    Sf2PdtaReader pdta;
+    Sf2SampleSource sample_source;
+    assert(pdta.begin(reader));
+    assert(sample_source.begin(reader));
+
+    constexpr std::size_t kArenaBytes = 16u * 1024u * 1024u;
+    std::vector<std::uint32_t> arena_words(kArenaBytes / sizeof(std::uint32_t));
+    SampleResidencyManager residency;
+    PublishedSampleDirectory directory;
+    ProgramSnapshotExchange residency_exchange;
+    PlaybackProgramSnapshotExchange playback_exchange;
+    assert(residency.begin(arena_words.data(), arena_words.size() * sizeof(std::uint32_t)));
+
+    ProgramPrepareController residency_preparer(
+        residency, directory, residency_exchange, &sample_source);
+    Sf2PlaybackProgramPreparer playback_preparer(44100);
+    WorkspaceStorage melodic_a;
+    WorkspaceStorage melodic_b;
+    WorkspaceStorage drums_a;
+    WorkspaceStorage drums_b;
+    melodic_a.workspace.policy = PlaybackPreparePolicy::StrictQualified;
+    melodic_b.workspace.policy = PlaybackPreparePolicy::StrictQualified;
+    drums_a.workspace.policy = PlaybackPreparePolicy::StrictQualified;
+    drums_b.workspace.policy = PlaybackPreparePolicy::StrictQualified;
+
+    prepareInitialProgramIdentity(
+        pdta, playback_preparer, residency_preparer, directory, playback_exchange,
+        melodic_a, 0, 0, 0, 1000);
+    prepareInitialProgramIdentity(
+        pdta, playback_preparer, residency_preparer, directory, playback_exchange,
+        drums_a, kGmPercussionChannel, kSf2PercussionBank, 0, 2000);
+
+    RealtimeProgramChangeHandoff handoff;
+    ProgramChangeMailbox mailbox;
+    ProgramChangeControlService service(
+        handoff, mailbox, pdta, playback_preparer, residency_preparer,
+        residency_exchange, playback_exchange);
+    RealtimeProgramEventApplier events(playback_exchange);
+    RealtimeProgramChangeRouter router(events, handoff);
+    VoicePool voices(directory);
+    ProgramRuntimeCommitCoordinator coordinator(residency_exchange, playback_exchange);
+    ProgramRuntimeBlockCommitter committer(coordinator);
+
+    // The initially activated full-bank melodic snapshot is immediately usable
+    // by the audio-side resolver and PublishedSampleDirectory.
+    assert(router.apply(noteOn(0, 60), voices));
+    assert(voices.activeVoiceCount() > 0);
+    assert(events.stats().voices_started > 0);
+    voices.allSoundOff();
+
+    // Exercise a far-end GM identity through the full transaction:
+    // realtime request -> control prepare -> sample residency/publication ->
+    // paired READY -> audio-block commit -> ACK -> NoteOn.
+    assert(router.apply(programChange(0, 127), voices));
+    assert(service.drainRealtimeRequests() == 1);
+    const auto melodic_prepared = service.serviceChannel(0, melodic_b.workspace);
+    assert(melodic_prepared.ok());
+    assert(melodic_prepared.request.bank == 0);
+    assert(melodic_prepared.request.program == 127);
+    assert(melodic_prepared.playback_prepare.unsupported_modulator_records == 0);
+    assert(melodic_prepared.playback_prepare.preview_zone_count == 0);
+    assert(coordinator.readyCompatible(0));
+    assert(committer.commitReadyAtBlockBoundary() == 1);
+    assert(playback_exchange.active(0)->program == 127);
+    assert(residency_exchange.active(0)->program == 127);
+    assert(service.acknowledgeCommitted(0).ok());
+
+    const std::size_t voices_before_program_127 = voices.activeVoiceCount();
+    assert(router.apply(noteOn(0, 60), voices));
+    assert(voices.activeVoiceCount() > voices_before_program_127);
+    voices.allSoundOff();
+
+    // GM Channel 10 must remain on SF2 bank 128 through the same real storage
+    // transaction. Re-preparing program 0 proves the router never falls back to
+    // bank 0 merely because the melodic channel just changed to program 127.
+    assert(router.apply(programChange(kGmPercussionChannel, 0), voices));
+    assert(service.drainRealtimeRequests() == 1);
+    const auto drum_prepared = service.serviceChannel(kGmPercussionChannel, drums_b.workspace);
+    assert(drum_prepared.ok());
+    assert(drum_prepared.request.bank == kSf2PercussionBank);
+    assert(drum_prepared.request.program == 0);
+    assert(drum_prepared.playback_prepare.unsupported_modulator_records == 0);
+    assert(drum_prepared.playback_prepare.preview_zone_count == 0);
+    assert(coordinator.readyCompatible(kGmPercussionChannel));
+    assert(committer.commitReadyAtBlockBoundary() == 1);
+    assert(playback_exchange.active(kGmPercussionChannel)->bank == kSf2PercussionBank);
+    assert(residency_exchange.active(kGmPercussionChannel)->bank == kSf2PercussionBank);
+    assert(service.acknowledgeCommitted(kGmPercussionChannel).ok());
+
+    const std::size_t voices_before_drum = voices.activeVoiceCount();
+    assert(router.apply(noteOn(kGmPercussionChannel, 36, 110), voices));
+    assert(voices.activeVoiceCount() > voices_before_drum);
+    assert(events.stats().percussion_program_unavailable == 0);
+
+    const auto service_stats = service.stats();
+    assert(service_stats.service_successes == 2);
+    assert(service_stats.playback_prepare_failures == 0);
+    assert(service_stats.residency_prepare_failures == 0);
+    assert(service_stats.publish_invariant_failures == 0);
+    assert(service_stats.commit_acks == 2);
+    const auto residency_stats = residency.stats();
+    assert(residency_stats.used_bytes > 0);
+    assert(residency_stats.referenced_sample_count > 0);
+}
+
+void testFullFmGmResetCommitsAll16ChannelsAndStartsVoices() {
+    FileReader reader("assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2");
+    assert(reader.valid());
+    Sf2PdtaReader pdta;
+    Sf2SampleSource sample_source;
+    assert(pdta.begin(reader));
+    assert(sample_source.begin(reader));
+
+    constexpr std::size_t kArenaBytes = 16u * 1024u * 1024u;
+    std::vector<std::uint32_t> arena_words(kArenaBytes / sizeof(std::uint32_t));
+    SampleResidencyManager residency;
+    PublishedSampleDirectory directory;
+    ProgramSnapshotExchange residency_exchange;
+    PlaybackProgramSnapshotExchange playback_exchange;
+    assert(residency.begin(arena_words.data(), arena_words.size() * sizeof(std::uint32_t)));
+    ProgramPrepareController residency_preparer(
+        residency, directory, residency_exchange, &sample_source);
+    Sf2PlaybackProgramPreparer playback_preparer(44100);
+
+    std::array<WorkspaceStorage, 16> active_workspaces{};
+    std::array<WorkspaceStorage, 16> ready_workspaces{};
+    for (std::uint8_t channel = 0; channel < 16; ++channel) {
+        active_workspaces[channel].workspace.policy = PlaybackPreparePolicy::StrictQualified;
+        ready_workspaces[channel].workspace.policy = PlaybackPreparePolicy::StrictQualified;
+        const bool percussion = channel == kGmPercussionChannel;
+        prepareInitialProgramIdentity(
+            pdta,
+            playback_preparer,
+            residency_preparer,
+            directory,
+            playback_exchange,
+            active_workspaces[channel],
+            channel,
+            percussion ? kSf2PercussionBank : 0,
+            percussion ? 0 : 1,
+            static_cast<std::uint32_t>(3000u + channel));
+    }
+
+    RealtimeProgramChangeHandoff handoff;
+    ProgramChangeMailbox mailbox;
+    ProgramChangeControlService service(
+        handoff, mailbox, pdta, playback_preparer, residency_preparer,
+        residency_exchange, playback_exchange);
+    RealtimeProgramEventApplier events(playback_exchange);
+    RealtimeProgramChangeRouter router(events, handoff);
+    VoicePool voices(directory);
+
+    RealtimeEvent reset{};
+    reset.type = EventType::GmReset;
+    reset.channel = 0;
+    assert(router.apply(reset, voices));
+    assert(service.drainRealtimeRequests() == 16);
+
+    for (std::uint8_t channel = 0; channel < 16; ++channel) {
+        const auto prepared = service.serviceChannel(channel, ready_workspaces[channel].workspace);
+        assert(prepared.ok());
+        assert(prepared.request.channel == channel);
+        assert(prepared.request.program == 0);
+        assert(prepared.request.bank ==
+               (channel == kGmPercussionChannel ? kSf2PercussionBank : 0));
+        assert(prepared.playback_prepare.unsupported_modulator_records == 0);
+        assert(prepared.playback_prepare.preview_zone_count == 0);
+    }
+
+    ProgramRuntimeCommitCoordinator coordinator(residency_exchange, playback_exchange);
+    ProgramRuntimeBlockCommitter committer(coordinator);
+    assert(committer.commitReadyAtBlockBoundary() == 16);
+
+    for (std::uint8_t channel = 0; channel < 16; ++channel) {
+        const std::uint16_t expected_bank =
+            channel == kGmPercussionChannel ? kSf2PercussionBank : 0;
+        assert(playback_exchange.active(channel) == &ready_workspaces[channel].workspace.snapshot);
+        assert(playback_exchange.active(channel)->bank == expected_bank);
+        assert(playback_exchange.active(channel)->program == 0);
+        assert(residency_exchange.active(channel)->bank == expected_bank);
+        assert(residency_exchange.active(channel)->program == 0);
+        const auto ack = service.acknowledgeCommitted(channel);
+        assert(ack.ok());
+        assert(ack.retired_playback == &active_workspaces[channel].workspace.snapshot);
+    }
+
+    // After the atomic block-boundary commit, all 16 channels are immediately
+    // usable. Program 0 in this FM bank is single-zone mono, so fifteen melodic
+    // notes plus one drum note fit exactly inside the guaranteed 16-voice floor.
+    for (std::uint8_t channel = 0; channel < 16; ++channel) {
+        const std::uint8_t key = channel == kGmPercussionChannel ? 36 : 60;
+        assert(router.apply(noteOn(channel, key, 100), voices));
+    }
+    assert(voices.activeVoiceCount() == 16);
+    assert(events.stats().voices_started == 16);
+    assert(events.stats().voice_start_failures == 0);
+    assert(events.stats().missing_active_program == 0);
+    assert(events.stats().percussion_program_unavailable == 0);
+
+    const auto service_stats = service.stats();
+    assert(service_stats.realtime_requests_drained == 16);
+    assert(service_stats.service_successes == 16);
+    assert(service_stats.playback_prepare_failures == 0);
+    assert(service_stats.residency_prepare_failures == 0);
+    assert(service_stats.publish_invariant_failures == 0);
+    assert(service_stats.commit_acks == 16);
+}
+
 }  // namespace
 
 int main() {
     testRealBankProgramChangeTransactionAndRapidCoalescing();
     testBusyTransitionDefersLatestRequestWithoutDroppingIt();
+    testFullFmProgramChangeResidencyCommitAndNoteOn();
+    testFullFmGmResetCommitsAll16ChannelsAndStartsVoices();
     std::cout << "Program Change control-service integration checks passed\n";
     return 0;
 }
