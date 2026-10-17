@@ -10,9 +10,13 @@ namespace {
 constexpr std::size_t kNoZone = std::numeric_limits<std::size_t>::max();
 constexpr std::uint16_t kVelocityAttenuationSourceOper = 0x0502u;
 constexpr std::uint16_t kVelocityFilterSourceOper = 0x0102u;
+constexpr std::uint16_t kChannelVolumeSourceOper = 0x0587u;
+constexpr std::uint16_t kChannelPanSourceOper = 0x028Au;
+constexpr std::uint16_t kChannelExpressionSourceOper = 0x058Bu;
 constexpr std::uint16_t kChannelPressureSourceOper = 0x000Du;
 constexpr std::uint16_t kModulationWheelSourceOper = 0x0081u;
 constexpr std::uint16_t kInitialAttenuationDestination = 48u;
+constexpr std::uint16_t kPanDestination = 17u;
 constexpr std::uint16_t kInitialFilterFcDestination = 8u;
 constexpr std::uint16_t kVibratoLfoToPitchDestination = 6u;
 constexpr std::uint16_t kReverbSourceOper = 0x00DBu;
@@ -37,6 +41,12 @@ struct ModulatorScan {
     std::int32_t velocity_attenuation_amount = 0;
     bool velocity_filter_found = false;
     std::int32_t velocity_filter_amount = 0;
+    bool channel_volume_found = false;
+    std::int32_t channel_volume_amount = 0;
+    bool channel_pan_found = false;
+    std::int32_t channel_pan_amount = 0;
+    bool channel_expression_found = false;
+    std::int32_t channel_expression_amount = 0;
     bool channel_pressure_vibrato_found = false;
     std::int32_t channel_pressure_vibrato_amount = 0;
     bool modulation_wheel_vibrato_found = false;
@@ -47,6 +57,7 @@ struct ModulatorScan {
     std::int32_t chorus_send_amount = 0;
     std::uint32_t supported_velocity_records = 0;
     std::uint32_t supported_velocity_filter_records = 0;
+    std::uint32_t supported_channel_control_records = 0;
     std::uint32_t supported_vibrato_records = 0;
     std::uint32_t supported_effects_send_records = 0;
     std::uint32_t supported_records = 0;
@@ -235,6 +246,24 @@ bool isIgnoredSf201VelocityFilterCancellation(
            modulator.transform_oper == 0 && modulator.amount == 0;
 }
 
+bool isSupportedChannelVolumeRoute(const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.source_oper == kChannelVolumeSourceOper &&
+           modulator.destination_oper == kInitialAttenuationDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
+bool isSupportedChannelPanRoute(const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.source_oper == kChannelPanSourceOper &&
+           modulator.destination_oper == kPanDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
+bool isSupportedChannelExpressionRoute(const Sf2PdtaReader::Modulator& modulator) {
+    return modulator.source_oper == kChannelExpressionSourceOper &&
+           modulator.destination_oper == kInitialAttenuationDestination &&
+           modulator.amount_source_oper == 0 && modulator.transform_oper == 0;
+}
+
 bool isSupportedChannelPressureVibratoRoute(
     const Sf2PdtaReader::Modulator& modulator) {
     return modulator.source_oper == kChannelPressureSourceOper &&
@@ -296,6 +325,24 @@ bool scanModulators(
             scan.supported_velocity_filter_records = saturatingAdd32(
                 scan.supported_velocity_filter_records, 1);
             scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedChannelVolumeRoute(modulator)) {
+            scan.channel_volume_found = true;
+            scan.channel_volume_amount = modulator.amount;
+            scan.supported_channel_control_records = saturatingAdd32(
+                scan.supported_channel_control_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedChannelPanRoute(modulator)) {
+            scan.channel_pan_found = true;
+            scan.channel_pan_amount = modulator.amount;
+            scan.supported_channel_control_records = saturatingAdd32(
+                scan.supported_channel_control_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
+        } else if (isSupportedChannelExpressionRoute(modulator)) {
+            scan.channel_expression_found = true;
+            scan.channel_expression_amount = modulator.amount;
+            scan.supported_channel_control_records = saturatingAdd32(
+                scan.supported_channel_control_records, 1);
+            scan.supported_records = saturatingAdd32(scan.supported_records, 1);
         } else if (isSupportedChannelPressureVibratoRoute(modulator)) {
             scan.channel_pressure_vibrato_found = true;
             scan.channel_pressure_vibrato_amount = modulator.amount;
@@ -349,6 +396,24 @@ ResolvedZoneModulation combine(
     if (instrument_local.velocity_filter_found) {
         resolved.velocity_to_filter_fc_cents =
             instrument_local.velocity_filter_amount;
+    }
+    if (instrument_global.channel_volume_found) {
+        resolved.volume_to_attenuation_cb = instrument_global.channel_volume_amount;
+    }
+    if (instrument_local.channel_volume_found) {
+        resolved.volume_to_attenuation_cb = instrument_local.channel_volume_amount;
+    }
+    if (instrument_global.channel_pan_found) {
+        resolved.pan_amount = instrument_global.channel_pan_amount;
+    }
+    if (instrument_local.channel_pan_found) {
+        resolved.pan_amount = instrument_local.channel_pan_amount;
+    }
+    if (instrument_global.channel_expression_found) {
+        resolved.expression_to_attenuation_cb = instrument_global.channel_expression_amount;
+    }
+    if (instrument_local.channel_expression_found) {
+        resolved.expression_to_attenuation_cb = instrument_local.channel_expression_amount;
     }
     if (instrument_global.channel_pressure_vibrato_found) {
         resolved.channel_pressure_to_vib_lfo_pitch_cents =
@@ -411,6 +476,52 @@ ResolvedZoneModulation combine(
         resolved.velocity_to_filter_fc_cents = saturatingAddI32(
             resolved.velocity_to_filter_fc_cents,
             preset_filter_amount);
+    }
+
+    bool preset_volume_found = false;
+    std::int32_t preset_volume_amount = 0;
+    if (preset_global.channel_volume_found) {
+        preset_volume_found = true;
+        preset_volume_amount = preset_global.channel_volume_amount;
+    }
+    if (preset_local.channel_volume_found) {
+        preset_volume_found = true;
+        preset_volume_amount = preset_local.channel_volume_amount;
+    }
+    if (preset_volume_found) {
+        resolved.volume_to_attenuation_cb = saturatingAddI32(
+            resolved.volume_to_attenuation_cb,
+            preset_volume_amount);
+    }
+
+    bool preset_pan_found = false;
+    std::int32_t preset_pan_amount = 0;
+    if (preset_global.channel_pan_found) {
+        preset_pan_found = true;
+        preset_pan_amount = preset_global.channel_pan_amount;
+    }
+    if (preset_local.channel_pan_found) {
+        preset_pan_found = true;
+        preset_pan_amount = preset_local.channel_pan_amount;
+    }
+    if (preset_pan_found) {
+        resolved.pan_amount = saturatingAddI32(resolved.pan_amount, preset_pan_amount);
+    }
+
+    bool preset_expression_found = false;
+    std::int32_t preset_expression_amount = 0;
+    if (preset_global.channel_expression_found) {
+        preset_expression_found = true;
+        preset_expression_amount = preset_global.channel_expression_amount;
+    }
+    if (preset_local.channel_expression_found) {
+        preset_expression_found = true;
+        preset_expression_amount = preset_local.channel_expression_amount;
+    }
+    if (preset_expression_found) {
+        resolved.expression_to_attenuation_cb = saturatingAddI32(
+            resolved.expression_to_attenuation_cb,
+            preset_expression_amount);
     }
 
     bool preset_pressure_found = false;
@@ -491,6 +602,13 @@ ResolvedZoneModulation combine(
         saturatingAdd32(
             instrument_global.supported_velocity_filter_records,
             instrument_local.supported_velocity_filter_records));
+    const std::uint32_t supported_channel_controls = saturatingAdd32(
+        saturatingAdd32(
+            preset_global.supported_channel_control_records,
+            preset_local.supported_channel_control_records),
+        saturatingAdd32(
+            instrument_global.supported_channel_control_records,
+            instrument_local.supported_channel_control_records));
     const std::uint32_t supported_vibrato = saturatingAdd32(
         saturatingAdd32(
             preset_global.supported_vibrato_records,
@@ -510,6 +628,7 @@ ResolvedZoneModulation combine(
         saturatingAdd32(instrument_global.unsupported_records, instrument_local.unsupported_records));
     resolved.supported_velocity_attenuation_records = clampU16(supported_velocity);
     resolved.supported_velocity_filter_records = clampU16(supported_filter);
+    resolved.supported_channel_control_records = clampU16(supported_channel_controls);
     resolved.supported_vibrato_records = clampU16(supported_vibrato);
     resolved.supported_effects_send_records = clampU16(supported_effects);
     resolved.unsupported_modulator_records = clampU16(unsupported);
@@ -723,8 +842,10 @@ ZoneModulatorResolveStatus Sf2ZoneModulatorResolver::resolveProgram(
                         resolved.supported_velocity_attenuation_records,
                         resolved.supported_velocity_filter_records),
                     saturatingAdd32(
-                        resolved.supported_vibrato_records,
-                        resolved.supported_effects_send_records)));
+                        resolved.supported_channel_control_records,
+                        saturatingAdd32(
+                            resolved.supported_vibrato_records,
+                            resolved.supported_effects_send_records))));
             result->unsupported_records = saturatingAdd32(
                 result->unsupported_records,
                 resolved.unsupported_modulator_records);
