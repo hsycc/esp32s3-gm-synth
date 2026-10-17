@@ -1,6 +1,7 @@
 #include "../../firmware/gm/PlaybackProgramSnapshot.h"
 #include "../../firmware/gm/ZoneResolver.h"
 #include "../../firmware/sf2/Sf2ModulationMath.h"
+#include "../../firmware/sf2/Sf2PanMath.h"
 #include "../../firmware/sf2/Sf2PlaybackMaterializer.h"
 
 #include <algorithm>
@@ -22,9 +23,15 @@ using gm_synth::sf2::PlaybackIssueFixedVelocityPending;
 using gm_synth::sf2::ResolvedZoneModulation;
 using gm_synth::sf2::Sf2PlaybackMaterializer;
 using gm_synth::sf2::attenuationCbToGainQ15;
+using gm_synth::sf2::sf2PanChannelGainQ15;
 using gm_synth::sf2::velocityToAttenuationCb;
 using gm_synth::voice::kPhaseOneQ32;
 using gm_synth::voice::kQ15Unity;
+
+std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
+    return static_cast<std::int32_t>(
+        (static_cast<std::int64_t>(a) * b + (std::int64_t{1} << 14)) >> 15);
+}
 
 NativeResolvedZone baseNativeZone() {
     NativeResolvedZone zone{};
@@ -96,7 +103,7 @@ void testResolverAppliesVelocityAttenuationAtNoteOn() {
     zone.velocity_high = 127;
     zone.root_key = 60;
     zone.root_phase_increment_q32 = kPhaseOneQ32;
-    zone.gain_left_q15 = 1234;   // must be replaced by note-on gain config
+    zone.gain_left_q15 = 1234;
     zone.gain_right_q15 = 2345;
     zone.note_on_gain.enabled = true;
     zone.note_on_gain.velocity_to_attenuation_cb = 960;
@@ -109,12 +116,15 @@ void testResolverAppliesVelocityAttenuationAtNoteOn() {
     assert(resolver.resolveNoteOn(program, 2, 60, 127, 10, &batch) == ZoneResolveStatus::Ok);
     assert(batch.count == 1);
     assert(batch.voices[0].velocity == 127);
-    assert(batch.voices[0].gain_left_q15 == kQ15Unity);
-    assert(batch.voices[0].gain_right_q15 == kQ15Unity);
+    assert(batch.voices[0].gain_left_q15 == sf2PanChannelGainQ15(0, true));
+    assert(batch.voices[0].gain_right_q15 == sf2PanChannelGainQ15(0, false));
 
     assert(resolver.resolveNoteOn(program, 2, 60, 111, 11, &batch) == ZoneResolveStatus::Ok);
     const std::int32_t attenuation = velocityToAttenuationCb(111, 960);
-    const std::int32_t expected_gain = attenuationCbToGainQ15(attenuation);
+    const std::int32_t expected_amplitude = attenuationCbToGainQ15(attenuation);
+    const std::int32_t expected_gain = multiplyQ15(
+        expected_amplitude,
+        sf2PanChannelGainQ15(0, true));
     assert(attenuation == 23);
     assert(batch.voices[0].gain_left_q15 == expected_gain);
     assert(batch.voices[0].gain_right_q15 == expected_gain);
@@ -145,12 +155,13 @@ void testFixedVelocityIsAppliedAfterZoneSelection() {
     assert(batch.voices[0].velocity == 64);
     const std::int32_t expected_attenuation =
         std::max(0, -100 + velocityToAttenuationCb(64, 960));
-    const std::int32_t expected_gain = attenuationCbToGainQ15(expected_attenuation);
+    const std::int32_t expected_amplitude = attenuationCbToGainQ15(expected_attenuation);
+    const std::int32_t expected_gain = multiplyQ15(
+        expected_amplitude,
+        sf2PanChannelGainQ15(0, true));
     assert(batch.voices[0].gain_left_q15 == expected_gain);
     assert(batch.voices[0].gain_right_q15 == expected_gain);
 
-    // Incoming velocity 70 does not select the zone even though generator 47
-    // would replace the post-selection modulation velocity with 64.
     assert(resolver.resolveNoteOn(program, 2, 60, 70, 13, &batch) == ZoneResolveStatus::NoMatch);
     assert(batch.count == 0);
 }
