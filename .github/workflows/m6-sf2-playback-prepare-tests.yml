@@ -24,6 +24,7 @@ on:
       - "tests/gm/test_gm_*.cpp"
       - "assets/sf2/manifests/*.analysis.json"
       - "assets/sf2/subsets/*.sf2"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_phase_g_host_tests.sh"
       - ".github/workflows/m6-sf2-playback-prepare-tests.yml"
   pull_request:
@@ -48,6 +49,7 @@ on:
       - "tests/gm/test_gm_*.cpp"
       - "assets/sf2/manifests/*.analysis.json"
       - "assets/sf2/subsets/*.sf2"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_phase_g_host_tests.sh"
       - ".github/workflows/m6-sf2-playback-prepare-tests.yml"
 
