@@ -57,11 +57,15 @@ inline Sf2PdtaReader::SampleHeader sampleHeaderForNative(const NativeResolvedZon
 
 inline bool stereoHeadersSynchronous(
     const Sf2PdtaReader::SampleHeader& left,
-    const Sf2PdtaReader::SampleHeader& right) {
+    const Sf2PdtaReader::SampleHeader& right,
+    bool require_loop_sync) {
     if (left.sample_rate == 0 || left.sample_rate != right.sample_rate ||
         left.end <= left.start || right.end <= right.start ||
         left.end - left.start != right.end - right.start) {
         return false;
+    }
+    if (!require_loop_sync) {
+        return true;
     }
     const std::int64_t left_loop_start =
         static_cast<std::int64_t>(left.start_loop) - left.start;
@@ -74,7 +78,7 @@ inline bool stereoHeadersSynchronous(
     return left_loop_start == right_loop_start && left_loop_end == right_loop_end;
 }
 
-inline void refreshExpandedAddressFlags(
+inline void refreshExpandedFlags(
     std::uint64_t smpl_point_count,
     NativeResolvedZone* zone) {
     if (zone == nullptr) {
@@ -83,6 +87,7 @@ inline void refreshExpandedAddressFlags(
     zone->flags &= ~(NativeZoneFlagSampleAddressOutOfSmpl |
                      NativeZoneFlagAddressOutsideSampleHeader |
                      NativeZoneFlagInvalidLoopRange |
+                     NativeZoneFlagRootKeyOutOfRange |
                      NativeZoneFlagStereoOrLinkedSample |
                      NativeZoneFlagRomSample);
     const std::int64_t points = smpl_point_count >
@@ -102,6 +107,9 @@ inline void refreshExpandedAddressFlags(
           zone->loop_start < zone->loop_end &&
           zone->loop_end <= zone->sample_end)) {
         zone->flags |= NativeZoneFlagInvalidLoopRange;
+    }
+    if (zone->rootKey() < 0 || zone->rootKey() > 127) {
+        zone->flags |= NativeZoneFlagRootKeyOutOfRange;
     }
 }
 
@@ -139,7 +147,7 @@ inline NativeResolvedZone expandedStereoSide(
     side.sample_rate = right_pitch_source.sample_rate;
     side.sample_root_key = right_pitch_source.original_pitch;
     side.sample_pitch_correction_cents = right_pitch_source.pitch_correction;
-    refreshExpandedAddressFlags(smpl_point_count, &side);
+    refreshExpandedFlags(smpl_point_count, &side);
     return side;
 }
 
@@ -177,7 +185,8 @@ inline StereoPairStatus expandStereoPair(
     const Sf2PdtaReader::SampleHeader source_header = sampleHeaderForNative(source);
     const Sf2PdtaReader::SampleHeader& left_header = source_left ? source_header : linked;
     const Sf2PdtaReader::SampleHeader& right_header = source_left ? linked : source_header;
-    if (!stereoHeadersSynchronous(left_header, right_header)) {
+    const bool looping = (source.sampleModes() & 0x3) != 0;
+    if (!stereoHeadersSynchronous(left_header, right_header, looping)) {
         return StereoPairStatus::InvalidPair;
     }
 
