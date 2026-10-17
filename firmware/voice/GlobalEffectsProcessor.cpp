@@ -18,6 +18,13 @@ constexpr std::size_t kChorusDepthFrames = 96;
 // ~0.65 Hz at 44.1 kHz in Q0.32 cycles/frame.
 constexpr std::uint32_t kChorusPhaseStepQ32 = 63300u;
 
+inline void advanceRingIndex(std::size_t* index, std::size_t size) {
+    ++(*index);
+    if (*index == size) {
+        *index = 0;
+    }
+}
+
 }  // namespace
 
 void GlobalEffectsProcessor::reset() {
@@ -97,7 +104,7 @@ std::int32_t GlobalEffectsProcessor::processComb(
         static_cast<std::int64_t>(input) + feedback,
         std::numeric_limits<std::int32_t>::min(),
         std::numeric_limits<std::int32_t>::max())));
-    *index = (*index + 1u) % size;
+    advanceRingIndex(index, size);
     return delayed;
 }
 
@@ -114,14 +121,16 @@ std::int32_t GlobalEffectsProcessor::processAllpass(
         next,
         std::numeric_limits<std::int32_t>::min(),
         std::numeric_limits<std::int32_t>::max())));
-    *index = (*index + 1u) % size;
+    advanceRingIndex(index, size);
     return output;
 }
 
 std::int32_t GlobalEffectsProcessor::chorusTap(std::size_t delay_frames) const {
     const std::size_t size = chorus_delay_.size();
     const std::size_t delay = std::clamp<std::size_t>(delay_frames, 1u, size - 1u);
-    const std::size_t read = (chorus_write_ + size - delay) % size;
+    const std::size_t read = chorus_write_ >= delay
+        ? chorus_write_ - delay
+        : chorus_write_ + size - delay;
     return chorus_delay_[read];
 }
 
@@ -146,7 +155,7 @@ void GlobalEffectsProcessor::processAdd(
             static_cast<std::int32_t>(kChorusBaseDelayFrames) - modulation);
         const std::int32_t chorus_left = scaleQ15(chorusTap(left_delay), kChorusWetGainQ15);
         const std::int32_t chorus_right = scaleQ15(chorusTap(right_delay), kChorusWetGainQ15);
-        chorus_write_ = (chorus_write_ + 1u) % chorus_delay_.size();
+        advanceRingIndex(&chorus_write_, chorus_delay_.size());
         chorus_phase_q32_ += kChorusPhaseStepQ32;
 
         const std::int32_t reverb_input = averageStereo(reverb_bus, frame);
