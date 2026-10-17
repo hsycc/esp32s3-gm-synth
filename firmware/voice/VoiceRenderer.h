@@ -57,16 +57,22 @@ struct LfoGainTable {
     }
 };
 
-// Same strategy for dynamic filter cutoff: NoteOn prepares nine Q24 coefficient
-// sets, so the render path never calls tan(), pow() or integer division-heavy
-// coefficient generation while audio is running.
-struct LfoLowpassTable {
+// Dynamic filter cutoff is additive in cents across Mod-LFO and Mod-Envelope.
+// NoteOn therefore prepares one table over the reachable total offset range,
+// rather than one table per source whose coefficients would overwrite each
+// other. Voice only sums source cents and linearly interpolates Q24 coefficients.
+struct DynamicLowpassTable {
     bool enabled = false;
+    std::int32_t min_offset_cents = 0;
+    std::int32_t max_offset_cents = 0;
     std::array<BiquadLowpassConfig, kLfoControlPointCount> points{};
 
     bool valid() const {
         if (!enabled) {
             return true;
+        }
+        if (min_offset_cents > max_offset_cents) {
+            return false;
         }
         for (const auto& point : points) {
             if (!point.valid() || !point.enabled) {
@@ -92,19 +98,18 @@ struct PitchLfoConfig {
 };
 
 // SoundFont Mod-LFO has one oscillator and may target pitch, filter cutoff and
-// volume simultaneously. Filter/gain nonlinearities are already baked into the
-// two nine-point tables before Voice::start().
+// volume simultaneously. Gain nonlinearity is baked into the nine-point table;
+// filter depth is combined with Mod-Envelope before using DynamicLowpassTable.
 struct ModLfoConfig {
     bool enabled = false;
     std::uint32_t delay_frames = 0;
     std::uint32_t phase_step_q32 = 0;
     std::int32_t pitch_depth_cents = 0;
+    std::int32_t filter_depth_cents = 0;
     LfoGainTable gain_table{};
-    LfoLowpassTable lowpass_table{};
 
     bool valid() const {
-        return !enabled ||
-            (phase_step_q32 != 0 && gain_table.valid() && lowpass_table.valid());
+        return !enabled || (phase_step_q32 != 0 && gain_table.valid());
     }
 };
 
@@ -121,6 +126,20 @@ struct EnvelopeConfig {
     std::uint32_t decay_frames = 0;
     std::int32_t sustain_q15 = kQ15Unity;
     std::uint32_t release_frames = 64;
+};
+
+// Independent unipolar SF2 modulation envelope. Attack is rendered with the
+// SF2 convex shape; hold/decay/sustain/release use the linear envelope value.
+struct ModEnvelopeConfig {
+    bool enabled = false;
+    EnvelopeConfig envelope{};
+    std::int32_t pitch_depth_cents = 0;
+    std::int32_t filter_depth_cents = 0;
+
+    bool valid() const {
+        return !enabled ||
+            (envelope.sustain_q15 >= 0 && envelope.sustain_q15 <= kQ15Unity);
+    }
 };
 
 // Optional per-zone playback window within one resident shdr sample. SoundFont
@@ -194,8 +213,10 @@ struct VoiceStartParams {
     LoopMode loop_mode = LoopMode::None;
     SampleRegion sample_region{};
     BiquadLowpassConfig lowpass{};
+    DynamicLowpassTable dynamic_lowpass_table{};
     PitchLfoConfig vibrato_lfo{};
     ModLfoConfig mod_lfo{};
+    ModEnvelopeConfig mod_envelope{};
     std::int32_t gain_left_q15 = kQ15Unity;
     std::int32_t gain_right_q15 = kQ15Unity;
     // Prepared send state in SoundFont tenths-of-a-percent units. The dry Voice
@@ -294,11 +315,17 @@ public:
     std::int16_t reverbSendUnits() const { return params_.reverb_send_units; }
     std::int16_t chorusSendUnits() const { return params_.chorus_send_units; }
     std::int32_t envelopeLevelQ15() const { return envelope_level_q15_; }
+    std::int32_t modEnvelopeLevelQ15() const { return mod_envelope_level_q15_; }
+    std::int32_t modEnvelopeDspLevelQ15() const;
     bool lowpassEnabled() const { return current_lowpass_.enabled; }
     const BiquadLowpassConfig& lowpassConfig() const { return params_.lowpass; }
     const BiquadLowpassConfig& currentLowpassConfig() const { return current_lowpass_; }
+    const DynamicLowpassTable& dynamicLowpassTable() const {
+        return params_.dynamic_lowpass_table;
+    }
     const PitchLfoConfig& vibratoLfoConfig() const { return params_.vibrato_lfo; }
     const ModLfoConfig& modLfoConfig() const { return params_.mod_lfo; }
+    const ModEnvelopeConfig& modEnvelopeConfig() const { return params_.mod_envelope; }
     const VoiceRealtimeControlConfig& realtimeControl() const {
         return params_.realtime_control;
     }
@@ -330,10 +357,12 @@ private:
     bool validLoop() const;
     bool loopActive() const;
     std::int32_t nextEnvelopeLevel();
+    std::int32_t nextModEnvelopeLevel();
     std::int32_t interpolatedSample() const;
     std::int32_t applyLowpass(std::int32_t sample);
-    void refreshLfoState();
+    void refreshModulationState();
     void advanceLfos();
+    void beginModEnvelopeRelease();
     void advancePhase();
     void beginRelease(std::uint32_t release_frames, FastReleaseKind fast_release_kind);
     void finish();
@@ -358,6 +387,7 @@ private:
     std::uint32_t mod_lfo_phase_q32_ = 0;
     std::uint32_t mod_lfo_delay_remaining_ = 0;
     std::uint8_t mod_lfo_control_frames_remaining_ = 0;
+    std::uint8_t mod_envelope_control_frames_remaining_ = 0;
     std::int64_t lowpass_z1_q24_ = 0;
     std::int64_t lowpass_z2_q24_ = 0;
     EnvelopeStage envelope_stage_ = EnvelopeStage::Done;
@@ -365,6 +395,11 @@ private:
     std::uint32_t active_release_frames_ = 0;
     std::int32_t envelope_level_q15_ = 0;
     std::int32_t release_start_level_q15_ = 0;
+    EnvelopeStage mod_envelope_stage_ = EnvelopeStage::Done;
+    std::uint32_t mod_envelope_stage_frame_ = 0;
+    std::uint32_t mod_envelope_release_frames_ = 0;
+    std::int32_t mod_envelope_level_q15_ = 0;
+    std::int32_t mod_envelope_release_start_level_q15_ = 0;
 };
 
 using ActiveVoiceUpdater = bool (*)(void* context, Voice& voice);
