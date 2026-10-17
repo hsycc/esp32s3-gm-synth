@@ -9,12 +9,16 @@
 
 namespace gm_synth::sf2 {
 
-// Compact modulation state needed by the current runtime. Mandatory realtime
-// routes are carried explicitly at their SF2 defaults and file-defined routes
-// with the same identity may replace/augment them according to SF2 hierarchy.
 struct ResolvedZoneModulation {
     std::int32_t velocity_to_attenuation_cb = kSf2DefaultVelocityAttenuationCb;
     std::int32_t velocity_to_filter_fc_cents = kSf2DefaultVelocityFilterCutoffCents;
+    // Additional NoteOn-velocity routes exercised by real GM SoundFonts.
+    std::int32_t velocity_positive_to_mod_env_filter_cents = 0;
+    std::int32_t velocity_negative_to_mod_env_filter_cents = 0;
+    std::int32_t velocity_to_filter_q_cb = 0;
+    std::int32_t velocity_to_mod_env_attack_timecents = 0;
+    std::int32_t velocity_to_vol_env_attack_timecents = 0;
+
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t pan_amount = kSf2DefaultPanAmount;
     std::int32_t expression_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
@@ -28,6 +32,7 @@ struct ResolvedZoneModulation {
 
     std::uint16_t supported_velocity_attenuation_records = 0;
     std::uint16_t supported_velocity_filter_records = 0;
+    std::uint16_t supported_velocity_dsp_records = 0;
     std::uint16_t supported_channel_control_records = 0;
     std::uint16_t supported_vibrato_records = 0;
     std::uint16_t supported_effects_send_records = 0;
@@ -55,11 +60,6 @@ struct ZoneModulatorResolveResult {
     std::uint32_t unsupported_records = 0;
 };
 
-// Resolves modulators in exactly the same preset->instrument->sample zone order
-// as Sf2ResolvedZoneResolver. Instrument modulators replace an identical
-// default/global route; preset modulators are additive after their own
-// global/local supersession. Output is control-domain scratch and can be
-// released once PlaybackZone[] has been materialized.
 class Sf2ZoneModulatorResolver {
 public:
     ZoneModulatorResolveStatus resolveProgram(
