@@ -239,6 +239,36 @@ void testSimpleReleaseFastPathIsBitExact() {
     assert(realtime_fixture.directory.stats().live_voice_refs == 0);
 }
 
+void testUntilReleaseModeFallsBackBitExact() {
+    constexpr std::array<std::int16_t, 9> pcm{
+        700, -1400, 2800, -5600, 11200, -5600, 2800, -1400, 700};
+
+    Fixture generic_fixture;
+    Fixture realtime_fixture;
+    assert(generic_fixture.publish(pcm.data(), pcm.size(), 1, 8));
+    assert(realtime_fixture.publish(pcm.data(), pcm.size(), 1, 8));
+
+    VoiceStartParams params = steadyParams();
+    params.loop_mode = LoopMode::UntilRelease;
+
+    Voice generic;
+    Voice realtime;
+    assert(generic.start(generic_fixture.directory, params));
+    assert(realtime.start(realtime_fixture.directory, params));
+
+    constexpr std::size_t kFrames = 24;
+    std::array<std::int32_t, kFrames * 2> generic_mix{};
+    std::array<std::int32_t, kFrames * 2> realtime_mix{};
+    const auto generic_result = generic.renderAdd(generic_mix.data(), kFrames);
+    const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
+
+    assert(generic_mix == realtime_mix);
+    assertSameRenderState(generic, realtime, generic_result, realtime_result);
+
+    generic.reset();
+    realtime.reset();
+}
+
 }  // namespace
 
 int main() {
@@ -247,6 +277,7 @@ int main() {
     testQ15GainInt32ExtremesAreBitExact();
     testSimpleAttackDecayFastPathIsBitExact();
     testSimpleReleaseFastPathIsBitExact();
+    testUntilReleaseModeFallsBackBitExact();
     std::cout << "Voice realtime fast-path checks passed\n";
     return 0;
 }
