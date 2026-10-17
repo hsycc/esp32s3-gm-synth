@@ -20,10 +20,10 @@ bool Voice::applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update) {
         params_.mod_lfo.gain_table = update.mod_lfo_gain_table;
     }
 
-    // Re-evaluate the current oscillator positions immediately so Pitch Bend,
-    // CC7/10/11 and vibrato-controller events affect the next rendered frame.
-    // The expensive nonlinear Mod-LFO gain curve was already prepared by GM.
-    refreshLfoState();
+    // Re-evaluate all current modulation sources immediately so Pitch Bend,
+    // CC7/10/11 and vibrato-controller events affect the next rendered frame
+    // without dropping the current Mod-LFO/Mod-Envelope contribution.
+    refreshModulationState();
     return true;
 }
 
