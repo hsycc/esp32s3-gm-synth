@@ -6,6 +6,7 @@ from typing import Optional
 
 from .compatibility import make_compatibility_report
 from .core import SAMPLE_TYPE_NAMES, Sf2, align4
+from .residency import exact_worst_active_ready_pair, gm_programs_for_transition_pressure
 
 
 def _union(programs, samples):
@@ -90,6 +91,8 @@ def make_report(sf2: Sf2, psram_bytes: Optional[int] = None, reserve_bytes: Opti
     raw = sum(x["pcm_bytes"] for x in samples)
     melodic = [p for p in programs if p["bank"] == 0]
     drums = [p for p in programs if p["bank"] == 128]
+    gm_transition_programs = gm_programs_for_transition_pressure(programs)
+    exact_active_ready = exact_worst_active_ready_pair(sf2, gm_transition_programs)
     gm16 = []
     for d in drums:
         u = _greedy(sf2, melodic, 16, [d])
@@ -196,6 +199,7 @@ def make_report(sf2: Sf2, psram_bytes: Optional[int] = None, reserve_bytes: Opti
             "gm_bank0_plus_standard_drum_union": _union(
                 melodic + ([standard_drum] if standard_drum else []), sf2.shdr
             ),
+            "gm_exact_worst_active_ready_union": exact_active_ready,
             "greedy_16_program_union": _greedy(sf2, melodic, 16),
             "gm_15_melodic_plus_1_drum_greedy_union": max(
                 gm16, key=lambda x: x["aligned_pcm_bytes"], default=None
@@ -205,6 +209,7 @@ def make_report(sf2: Sf2, psram_bytes: Optional[int] = None, reserve_bytes: Opti
         "compatibility": make_compatibility_report(sf2),
         "notes": [
             "aligned residency sums each referenced sample independently at 4-byte alignment",
+            "gm_exact_worst_active_ready_union is an exact all-pairs scan over bank-0 programs 0..127 plus bank-128/program-0",
             "greedy 16-program unions are heuristic stress estimates, not exact combinatorial maxima",
             "bank 128 is reported as the conventional GM drum bank; banks may use other conventions",
             "modulator record_count includes non-terminal zero-amount records because they may override/disable default modulators",
