@@ -90,29 +90,30 @@ void test_generic_source_decoder_matches_sf2_bit_layout() {
     CHECK(!decodeSf2SourceOper(0x1002u, &source));
 }
 
-void test_generic_linear_note_on_sources_keep_128_step_semantics() {
+void test_generic_linear_note_on_sources_keep_sf2_128_step_semantics() {
     // GeneralUser's key-number route: positive bipolar linear, amount 1200.
+    // SF2 keeps the positive endpoint at 127/128 rather than forcing +1.0.
     CHECK(noteOnSourceToAmount(0x0203u, 0, 100, 1200) == -1200);
     CHECK(noteOnSourceToAmount(0x0203u, 32, 100, 1200) == -600);
     CHECK(noteOnSourceToAmount(0x0203u, 64, 100, 1200) == 0);
     CHECK(noteOnSourceToAmount(0x0203u, 96, 100, 1200) == 600);
-    CHECK(noteOnSourceToAmount(0x0203u, 127, 100, 1200) == 1181);
+    CHECK(noteOnSourceToAmount(0x0203u, 127, 100, 1200) == 1191);
     CHECK(noteOnSourceToAmount(0x0203u, 96, 100, -1200) == -600);
 
-    // Negative-unipolar linear retains the already-qualified velocity-filter
-    // endpoint rule used elsewhere in the engine.
-    CHECK(noteOnSourceToAmount(0x0102u, 60, 0, -2400) == -2400);
-    CHECK(noteOnSourceToAmount(0x0102u, 60, 64, -2400) == -1200);
+    // Generic negative-unipolar linear mapping is (127-value)/128. The
+    // dedicated mandatory velocity->filter special case remains separate.
+    CHECK(noteOnSourceToAmount(0x0102u, 60, 0, -2400) == -2381);
+    CHECK(noteOnSourceToAmount(0x0102u, 60, 64, -2400) == -1181);
     CHECK(noteOnSourceToAmount(0x0102u, 60, 127, -2400) == 0);
 }
 
 void test_generic_nonlinear_note_on_sources_follow_direction_and_curve() {
-    // GeneralUser's negative-unipolar convex velocity route must fall from a
-    // full low-velocity contribution to zero at velocity 127.
+    // GeneralUser's negative-unipolar convex velocity route falls from the SF2
+    // positive endpoint 127/128 to zero at velocity 127.
     const std::int32_t convex_low = noteOnSourceToAmount(0x0902u, 60, 0, 1200);
     const std::int32_t convex_mid = noteOnSourceToAmount(0x0902u, 60, 64, 1200);
     const std::int32_t convex_high = noteOnSourceToAmount(0x0902u, 60, 127, 1200);
-    CHECK(convex_low == 1200);
+    CHECK(convex_low == 1191);
     CHECK(convex_mid > 0 && convex_mid < convex_low);
     CHECK(convex_high == 0);
 
@@ -124,9 +125,10 @@ void test_generic_nonlinear_note_on_sources_follow_direction_and_curve() {
     CHECK(concave_mid > 0 && concave_mid < 1000);
     CHECK(convex_positive_mid > 0 && convex_positive_mid < 1000);
 
-    // Positive-unipolar switch toggles at the half-domain boundary.
+    // Positive-unipolar switch toggles at the half-domain boundary and maps to
+    // full +/-1 rather than the 127/128 linear/curve endpoint.
     CHECK(noteOnSourceToAmount(0x0C02u, 60, 63, 400) == 0);
-    CHECK(noteOnSourceToAmount(0x0C02u, 60, 64, 400) > 390);
+    CHECK(noteOnSourceToAmount(0x0C02u, 60, 64, 400) == 400);
 
     // Unsupported live-controller identities contribute nothing through the
     // immutable NoteOn evaluator.
@@ -201,7 +203,7 @@ int main() {
     test_default_velocity_curve_matches_sf2_reference_points();
     test_positive_linear_controller_uses_128_step_domain();
     test_generic_source_decoder_matches_sf2_bit_layout();
-    test_generic_linear_note_on_sources_keep_128_step_semantics();
+    test_generic_linear_note_on_sources_keep_sf2_128_step_semantics();
     test_generic_nonlinear_note_on_sources_follow_direction_and_curve();
     test_default_cc10_uses_full_pan_range_without_early_clamp();
     test_centibel_gain_is_fixed_point_and_clamped();
