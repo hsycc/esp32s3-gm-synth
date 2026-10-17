@@ -179,12 +179,24 @@ void prepareVolumeEnvelope(
 
 std::int32_t noteOnFilterCutoffCents(
     const PlaybackZone& zone,
+    std::uint8_t key,
     std::uint8_t effective_velocity) {
-    const std::int64_t summed_cutoff =
+    std::int64_t summed_cutoff =
         static_cast<std::int64_t>(zone.note_on_filter.initial_cutoff_cents) +
         sf2::velocityToFilterCutoffCents(
             effective_velocity,
             zone.note_on_filter.velocity_to_cutoff_cents);
+    for (std::size_t index = 0;
+         index < zone.note_on_filter.additional_cutoff_route_count;
+         ++index) {
+        const sf2::Sf2NoteOnSourceRoute& route =
+            zone.note_on_filter.additional_cutoff_routes[index];
+        summed_cutoff += sf2::noteOnSourceToAmount(
+            route.source_oper,
+            key,
+            effective_velocity,
+            route.amount);
+    }
     return static_cast<std::int32_t>(std::clamp<std::int64_t>(
         summed_cutoff,
         sf2::kSf2MinFilterCutoffCents,
@@ -193,13 +205,14 @@ std::int32_t noteOnFilterCutoffCents(
 
 void prepareNoteOnFilter(
     const PlaybackZone& zone,
+    std::uint8_t key,
     std::uint8_t effective_velocity,
     voice::BiquadLowpassConfig* output) {
     if (output == nullptr || !zone.note_on_filter.enabled) {
         return;
     }
     (void)sf2::prepareResonantLowpassQ24(
-        noteOnFilterCutoffCents(zone, effective_velocity),
+        noteOnFilterCutoffCents(zone, key, effective_velocity),
         effectiveFilterResonanceCb(zone, effective_velocity),
         sf2::kSf2FilterOutputSampleRate,
         output);
@@ -207,6 +220,7 @@ void prepareNoteOnFilter(
 
 void prepareDynamicFilterTable(
     const PlaybackZone& zone,
+    std::uint8_t key,
     std::uint8_t effective_velocity,
     voice::DynamicLowpassTable* output) {
     if (output == nullptr) {
@@ -230,7 +244,10 @@ void prepareDynamicFilterTable(
         return;
     }
 
-    const std::int32_t base_cutoff = noteOnFilterCutoffCents(zone, effective_velocity);
+    const std::int32_t base_cutoff = noteOnFilterCutoffCents(
+        zone,
+        key,
+        effective_velocity);
     const std::int32_t resonance_cb = effectiveFilterResonanceCb(zone, effective_velocity);
     const std::int32_t min_cutoff = static_cast<std::int32_t>(std::clamp<std::int64_t>(
         static_cast<std::int64_t>(base_cutoff) + min_offset,
@@ -579,7 +596,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.chorus_send_units = zone.effects_send.chorus_sf2_units;
         }
         prepareVolumeEnvelope(zone, key, effective_velocity, &params.envelope);
-        prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
+        prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
             params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
@@ -606,7 +623,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 &params.mod_lfo.gain_table);
         }
         prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
-        prepareDynamicFilterTable(zone, effective_velocity, &params.dynamic_lowpass_table);
+        prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
         batch->voices[batch->count++] = params;
     }
 
@@ -685,7 +702,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                     zone.effects_send.chorus_cc_amount));
         }
         prepareVolumeEnvelope(zone, key, effective_velocity, &params.envelope);
-        prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
+        prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
             params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
@@ -713,7 +730,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 &params.mod_lfo.gain_table);
         }
         prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
-        prepareDynamicFilterTable(zone, effective_velocity, &params.dynamic_lowpass_table);
+        prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
