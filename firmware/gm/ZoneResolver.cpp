@@ -18,8 +18,6 @@ constexpr std::array<std::uint32_t, 12> kSemitoneRatioQ20{
     1664511u, 1763488u, 1868350u, 1979448u,
 };
 
-// 2^(cents/1200) in Q20 for cents=0..99. This keeps fractional Pitch Bend
-// resolution out of floating point while retaining the existing semitone path.
 constexpr std::array<std::uint32_t, 100> kCentRatioQ20{
     1048576u, 1049182u, 1049788u, 1050395u, 1051002u, 1051609u, 1052216u, 1052824u, 1053433u, 1054041u,
     1054650u, 1055260u, 1055869u, 1056479u, 1057090u, 1057701u, 1058312u, 1058923u, 1059535u, 1060147u,
@@ -79,16 +77,47 @@ std::uint64_t keyTrackedPhaseIncrement(const PlaybackZone& zone, std::uint8_t ke
         : ZoneResolver::transposeCents(zone.root_phase_increment_q32, cents_delta);
 }
 
-std::int32_t effectiveInitialAttenuationCb(const PlaybackZone& zone) {
+std::int32_t effectiveFilterResonanceCb(
+    const PlaybackZone& zone,
+    std::uint8_t effective_velocity) {
+    if (!zone.note_on_filter.enabled) {
+        return 0;
+    }
+    const std::int64_t summed =
+        static_cast<std::int64_t>(zone.note_on_filter.resonance_cb) +
+        sf2::velocityToFilterCutoffCents(
+            effective_velocity,
+            zone.note_on_filter.velocity_to_resonance_cb);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(summed, 0, 960));
+}
+
+std::int32_t effectiveInitialAttenuationCb(
+    const PlaybackZone& zone,
+    std::uint8_t effective_velocity) {
     const std::int64_t summed =
         static_cast<std::int64_t>(zone.note_on_gain.initial_attenuation_cb) +
         (zone.note_on_filter.enabled
-            ? sf2::resonanceDcAttenuationCb(zone.note_on_filter.resonance_cb)
+            ? sf2::resonanceDcAttenuationCb(
+                  effectiveFilterResonanceCb(zone, effective_velocity))
             : 0);
     return static_cast<std::int32_t>(std::clamp<std::int64_t>(
         summed,
         std::numeric_limits<std::int32_t>::min(),
         std::numeric_limits<std::int32_t>::max()));
+}
+
+std::int32_t effectiveModEnvFilterDepthCents(
+    const PlaybackZone& zone,
+    std::uint8_t effective_velocity) {
+    const std::int64_t summed =
+        static_cast<std::int64_t>(zone.mod_envelope.filter_depth_cents) +
+        sf2::positiveLinearToAmount(
+            effective_velocity,
+            zone.mod_envelope.velocity_positive_to_filter_depth_cents) +
+        sf2::velocityToFilterCutoffCents(
+            effective_velocity,
+            zone.mod_envelope.velocity_negative_to_filter_depth_cents);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(summed, -12000, 12000));
 }
 
 std::int32_t lfoControlPointAmount(std::int32_t depth, std::size_t index) {
@@ -131,6 +160,23 @@ void applyEnvelopeKeyScaling(
         static_cast<int>(scaling.decay_timecents_per_key) * key_delta);
 }
 
+void prepareVolumeEnvelope(
+    const PlaybackZone& zone,
+    std::uint8_t key,
+    std::uint8_t effective_velocity,
+    voice::EnvelopeConfig* output) {
+    if (output == nullptr) {
+        return;
+    }
+    *output = zone.envelope;
+    output->attack_frames = scaleEnvelopeFramesByTimecents(
+        output->attack_frames,
+        sf2::velocityToFilterCutoffCents(
+            effective_velocity,
+            zone.velocity_to_vol_env_attack_timecents));
+    applyEnvelopeKeyScaling(zone.envelope_key_scaling, key, output);
+}
+
 std::int32_t noteOnFilterCutoffCents(
     const PlaybackZone& zone,
     std::uint8_t effective_velocity) {
@@ -154,7 +200,7 @@ void prepareNoteOnFilter(
     }
     (void)sf2::prepareResonantLowpassQ24(
         noteOnFilterCutoffCents(zone, effective_velocity),
-        zone.note_on_filter.resonance_cb,
+        effectiveFilterResonanceCb(zone, effective_velocity),
         sf2::kSf2FilterOutputSampleRate,
         output);
 }
@@ -176,7 +222,7 @@ void prepareDynamicFilterTable(
         : 0;
     const std::int64_t lfo_extent = lfo_depth < 0 ? -lfo_depth : lfo_depth;
     const std::int64_t env_depth = zone.mod_envelope.enabled
-        ? static_cast<std::int64_t>(zone.mod_envelope.filter_depth_cents)
+        ? static_cast<std::int64_t>(effectiveModEnvFilterDepthCents(zone, effective_velocity))
         : 0;
     std::int64_t min_offset = -lfo_extent + std::min<std::int64_t>(0, env_depth);
     std::int64_t max_offset = lfo_extent + std::max<std::int64_t>(0, env_depth);
@@ -185,6 +231,7 @@ void prepareDynamicFilterTable(
     }
 
     const std::int32_t base_cutoff = noteOnFilterCutoffCents(zone, effective_velocity);
+    const std::int32_t resonance_cb = effectiveFilterResonanceCb(zone, effective_velocity);
     const std::int32_t min_cutoff = static_cast<std::int32_t>(std::clamp<std::int64_t>(
         static_cast<std::int64_t>(base_cutoff) + min_offset,
         sf2::kSf2MinFilterCutoffCents,
@@ -214,7 +261,7 @@ void prepareDynamicFilterTable(
             static_cast<std::int64_t>(base_cutoff) + offset);
         if (!sf2::prepareResonantLowpassQ24(
                 cutoff,
-                zone.note_on_filter.resonance_cb,
+                resonance_cb,
                 sf2::kSf2FilterOutputSampleRate,
                 &candidate.points[index])) {
             return;
@@ -245,9 +292,6 @@ void prepareModLfoGainTable(
     voice::LfoGainTable candidate{};
     candidate.enabled = true;
     for (std::size_t index = 0; index < candidate.points.size(); ++index) {
-        // SF2/FluidSynth semantics: a positive Mod-LFO volume amount increases
-        // volume during the oscillator's positive half-cycle, i.e. it subtracts
-        // from the final attenuation summing node.
         const std::int64_t adjusted =
             static_cast<std::int64_t>(initial_attenuation_cb) -
             lfoControlPointAmount(volume_depth_cb, index);
@@ -304,15 +348,21 @@ std::int32_t vibratoDepthCents(
 void prepareModEnvelope(
     const PlaybackZone& zone,
     std::uint8_t key,
+    std::uint8_t effective_velocity,
     voice::ModEnvelopeConfig* output) {
     if (output == nullptr || !zone.mod_envelope.enabled) {
         return;
     }
     output->enabled = true;
     output->envelope = zone.mod_envelope.envelope;
+    output->envelope.attack_frames = scaleEnvelopeFramesByTimecents(
+        output->envelope.attack_frames,
+        sf2::velocityToFilterCutoffCents(
+            effective_velocity,
+            zone.mod_envelope.velocity_to_attack_timecents));
     applyEnvelopeKeyScaling(zone.mod_envelope.key_scaling, key, &output->envelope);
     output->pitch_depth_cents = zone.mod_envelope.pitch_depth_cents;
-    output->filter_depth_cents = zone.mod_envelope.filter_depth_cents;
+    output->filter_depth_cents = effectiveModEnvFilterDepthCents(zone, effective_velocity);
 }
 
 struct ActiveVoiceRefreshContext {
@@ -501,7 +551,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
 
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
-        const std::int32_t initial_attenuation_cb = effectiveInitialAttenuationCb(zone);
+        const std::int32_t initial_attenuation_cb =
+            effectiveInitialAttenuationCb(zone, effective_velocity);
         voice::VoiceStartParams params{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
@@ -527,8 +578,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.reverb_send_units = zone.effects_send.reverb_sf2_units;
             params.chorus_send_units = zone.effects_send.chorus_sf2_units;
         }
-        params.envelope = zone.envelope;
-        applyEnvelopeKeyScaling(zone.envelope_key_scaling, key, &params.envelope);
+        prepareVolumeEnvelope(zone, key, effective_velocity, &params.envelope);
         prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
@@ -555,7 +605,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 zone.note_on_gain.expression_to_attenuation_cb,
                 &params.mod_lfo.gain_table);
         }
-        prepareModEnvelope(zone, key, &params.mod_envelope);
+        prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
         prepareDynamicFilterTable(zone, effective_velocity, &params.dynamic_lowpass_table);
         batch->voices[batch->count++] = params;
     }
@@ -579,8 +629,6 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
     batch->clear();
     for (std::size_t i = 0; i < program.zone_count; ++i) {
         const PlaybackZone& zone = program.zones[i];
-        // Key/velocity ranges use the raw incoming NoteOn. Generator 46/47 and
-        // controller modulators are applied only after the zone has matched.
         if (!zone.matches(key, velocity)) {
             continue;
         }
@@ -590,7 +638,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
 
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
-        const std::int32_t initial_attenuation_cb = effectiveInitialAttenuationCb(zone);
+        const std::int32_t initial_attenuation_cb =
+            effectiveInitialAttenuationCb(zone, effective_velocity);
         voice::VoiceStartParams params{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
@@ -635,8 +684,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                     channel_state.chorus_send,
                     zone.effects_send.chorus_cc_amount));
         }
-        params.envelope = zone.envelope;
-        applyEnvelopeKeyScaling(zone.envelope_key_scaling, key, &params.envelope);
+        prepareVolumeEnvelope(zone, key, effective_velocity, &params.envelope);
         prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
@@ -664,7 +712,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 zone.note_on_gain.expression_to_attenuation_cb,
                 &params.mod_lfo.gain_table);
         }
-        prepareModEnvelope(zone, key, &params.mod_envelope);
+        prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
         prepareDynamicFilterTable(zone, effective_velocity, &params.dynamic_lowpass_table);
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
@@ -814,10 +862,6 @@ bool RealtimeProgramEventApplier::apply(
         return false;
     }
 
-    // Never use an old melodic fallback for GM Channel 10. Program Prepare may
-    // be pending, or the loaded SF2 may have no bank-128 drum preset at all; in
-    // either case percussion NoteOn remains silent until a real drum snapshot
-    // is active instead of producing the wrong instrument.
     if (event.channel == kGmPercussionChannel && program->bank != kSf2PercussionBank) {
         util::saturatingIncrement(stats_.percussion_program_unavailable);
         return true;
