@@ -28,6 +28,7 @@ struct ResolvedZoneModulation {
 
     std::uint16_t supported_velocity_attenuation_records = 0;
     std::uint16_t supported_velocity_filter_records = 0;
+    std::uint16_t supported_channel_control_records = 0;
     std::uint16_t supported_vibrato_records = 0;
     std::uint16_t supported_effects_send_records = 0;
     std::uint16_t unsupported_modulator_records = 0;
