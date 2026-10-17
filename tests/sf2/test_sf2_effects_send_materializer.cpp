@@ -62,9 +62,7 @@ void testStaticGeneratorsAndResolvedControllerAmountsArePreserved() {
     PlaybackZone output{};
     const auto result = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
     assert(result.playablePreview());
-    // Kept as a compatibility issue bit until all callers have moved to the
-    // global FX renderer; the values themselves are fully materialized.
-    assert(result.hasIssue(PlaybackIssueEffectsSendPending));
+    assert(!result.hasIssue(PlaybackIssueEffectsSendPending));
     assert(output.effects_send.enabled);
     assert(output.effects_send.reverb_sf2_units == 400);
     assert(output.effects_send.chorus_sf2_units == 300);
@@ -82,6 +80,7 @@ void testStaticEffectsSendGeneratorsClampToSf2Range() {
     PlaybackZone output{};
     const auto result = Sf2PlaybackMaterializer{}.materialize(native, modulation, &output);
     assert(result.playablePreview());
+    assert(!result.hasIssue(PlaybackIssueEffectsSendPending));
     assert(output.effects_send.reverb_sf2_units == 1000);
     assert(output.effects_send.chorus_sf2_units == 0);
 }
