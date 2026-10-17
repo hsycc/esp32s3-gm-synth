@@ -39,8 +39,9 @@ jobs:
       - name: Run GM128 full-bank qualification
         shell: bash
         run: |
+          set -o pipefail
           mkdir -p build/gm128-full-bank
-          bash scripts/run_gm128_full_bank_tests.sh | tee build/gm128-full-bank/qualification-report.txt
+          bash scripts/run_gm128_full_bank_tests.sh 2>&1 | tee build/gm128-full-bank/qualification-report.txt
       - name: Publish qualification summary
         if: always()
         shell: bash
@@ -49,7 +50,7 @@ jobs:
             {
               echo '## Full FM GM128 qualification'
               echo '```text'
-              grep -E '^(GM128_|Full FM GM128)' build/gm128-full-bank/qualification-report.txt || true
+              grep -E '^(GM128_|Full FM GM128|.*error:|.*Assertion)' build/gm128-full-bank/qualification-report.txt || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
