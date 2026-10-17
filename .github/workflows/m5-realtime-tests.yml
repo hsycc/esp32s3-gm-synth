@@ -8,6 +8,7 @@ on:
       - "firmware/voice/**"
       - "firmware/sample/PublishedSampleDirectory.*"
       - "tests/realtime/**"
+      - "tests/voice/test_voice_realtime_fast_path.cpp"
       - ".github/workflows/m5-realtime-tests.yml"
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - "firmware/voice/**"
       - "firmware/sample/PublishedSampleDirectory.*"
       - "tests/realtime/**"
+      - "tests/voice/test_voice_realtime_fast_path.cpp"
       - ".github/workflows/m5-realtime-tests.yml"
 
 jobs:
@@ -37,5 +39,14 @@ jobs:
             firmware/realtime/ScheduledAudioBlockRenderer.cpp \
             tests/realtime/test_scheduled_audio.cpp \
             -o build/host-tests/test_scheduled_audio
+
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            tests/voice/test_voice_realtime_fast_path.cpp \
+            -o build/host-tests/test_voice_realtime_fast_path
       - name: Run sample-accurate realtime tests
         run: ./build/host-tests/test_scheduled_audio
+      - name: Run bit-exact Voice realtime fast-path tests
+        run: ./build/host-tests/test_voice_realtime_fast_path
