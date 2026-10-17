@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -14,6 +15,7 @@ using gm_synth::voice::LoopMode;
 using gm_synth::voice::Voice;
 using gm_synth::voice::VoiceStartParams;
 using gm_synth::voice::kPhaseOneQ32;
+using gm_synth::voice::kQ15Unity;
 
 struct Fixture {
     PublishedSampleDirectory directory;
@@ -127,6 +129,49 @@ void testMultiLoopIncrementFallbackIsBitExact() {
     realtime.reset();
 }
 
+void testQ15GainInt32ExtremesAreBitExact() {
+    constexpr std::array<std::int16_t, 8> pcm{
+        std::numeric_limits<std::int16_t>::min(),
+        std::numeric_limits<std::int16_t>::max(),
+        -32767,
+        32766,
+        -1,
+        1,
+        -16384,
+        16384,
+    };
+
+    Fixture generic_fixture;
+    Fixture realtime_fixture;
+    assert(generic_fixture.publish(pcm.data(), pcm.size(), 0, 8));
+    assert(realtime_fixture.publish(pcm.data(), pcm.size(), 0, 8));
+
+    VoiceStartParams params = steadyParams();
+    params.phase_increment_q32 = kPhaseOneQ32;
+    params.gain_left_q15 = kQ15Unity - 1;
+    params.gain_right_q15 = kQ15Unity / 2;
+    params.envelope.sustain_q15 = kQ15Unity;
+
+    Voice generic;
+    Voice realtime;
+    assert(generic.start(generic_fixture.directory, params));
+    assert(realtime.start(realtime_fixture.directory, params));
+
+    constexpr std::size_t kFrames = 32;
+    std::array<std::int32_t, kFrames * 2> generic_mix{};
+    std::array<std::int32_t, kFrames * 2> realtime_mix{};
+    const auto generic_result = generic.renderAdd(generic_mix.data(), kFrames);
+    const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
+
+    assert(generic_mix == realtime_mix);
+    assert(generic_result.frames_rendered == realtime_result.frames_rendered);
+    assert(generic_result.finished == realtime_result.finished);
+    assert(generic.phaseQ32() == realtime.phaseQ32());
+
+    generic.reset();
+    realtime.reset();
+}
+
 void testComplexEnvelopeFallsBackBitExact() {
     constexpr std::array<std::int16_t, 8> pcm{
         1000, -2000, 4000, -8000, 12000, -6000, 3000, -1500};
@@ -167,6 +212,7 @@ void testComplexEnvelopeFallsBackBitExact() {
 int main() {
     testSteadySustainFastPathIsBitExact();
     testMultiLoopIncrementFallbackIsBitExact();
+    testQ15GainInt32ExtremesAreBitExact();
     testComplexEnvelopeFallsBackBitExact();
     std::cout << "Voice realtime fast-path checks passed\n";
     return 0;
