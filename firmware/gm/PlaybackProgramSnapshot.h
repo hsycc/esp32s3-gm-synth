@@ -19,7 +19,7 @@ struct NoteOnGainConfig {
     std::int32_t initial_attenuation_cb = 0;
     std::int32_t velocity_to_attenuation_cb = 0;
     std::int32_t volume_to_attenuation_cb = 960;
-    std::int32_t pan_amount = 1000;
+    std::int32_t pan_amount = 500;
     std::int32_t expression_to_attenuation_cb = 960;
     std::int16_t pan_sf2_units = 0;
     // -1 means use the incoming NoteOn velocity. SF2 generator 47 may replace
@@ -33,10 +33,8 @@ struct NoteOnGainConfig {
     }
 };
 
-// Current filter subset: static initialFilterFc plus the SF2 2.04 default or
-// file-replaced velocity->filter route. Non-zero resonance is preserved here
-// but remains a materializer qualification issue until the embedded biquad Q
-// behavior/gain compensation is validated separately.
+// Static initialFilterFc plus velocity/LFO/envelope cutoff movement and the
+// full SF2 initialFilterQ range are represented by the prepared Q24 biquad path.
 struct NoteOnFilterConfig {
     bool enabled = false;
     std::int32_t initial_cutoff_cents = 13500;
@@ -135,10 +133,12 @@ struct PlaybackZone {
 
     // root_phase_increment_q32 already includes source/output sample-rate,
     // coarse/fine tuning and sample pitch-correction terms for root_key.
-    // Runtime NoteOn performs equal-temperament transposition with integer
-    // fixed-point math only. key_tracking=false is useful for drum zones.
+    // scale_tuning_cents_per_key is SF2 generator 56. Runtime NoteOn applies
+    // (key-root_key)*scaleTuning using fixed-point cents transposition only.
+    // key_tracking=false is used by fixed-key and zero-scale zones.
     std::uint8_t root_key = 60;
     bool key_tracking = true;
+    std::uint16_t scale_tuning_cents_per_key = 100;
     std::uint64_t root_phase_increment_q32 = voice::kPhaseOneQ32;
 
     // SoundFont address generators are resolved relative to the resident shdr
@@ -165,10 +165,11 @@ struct PlaybackZone {
                sample_region.loop_end_frame <= sample_region.end_frame)));
         return key_low <= key_high && key_high <= 127 &&
                velocity_low <= velocity_high && velocity_high <= 127 &&
-               root_key <= 127 && root_phase_increment_q32 != 0 &&
-               sample_region_valid && note_on_gain.valid() &&
-               note_on_filter.valid() && vibrato_lfo.valid() &&
-               mod_lfo.valid() && mod_envelope.valid() && effects_send.valid();
+               root_key <= 127 && scale_tuning_cents_per_key <= 1200 &&
+               root_phase_increment_q32 != 0 && sample_region_valid &&
+               note_on_gain.valid() && note_on_filter.valid() &&
+               vibrato_lfo.valid() && mod_lfo.valid() &&
+               mod_envelope.valid() && effects_send.valid();
     }
 
     bool matches(std::uint8_t key, std::uint8_t velocity) const {
