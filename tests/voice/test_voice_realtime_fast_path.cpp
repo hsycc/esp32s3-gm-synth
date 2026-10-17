@@ -55,6 +55,19 @@ VoiceStartParams steadyParams() {
     return params;
 }
 
+void assertSameRenderState(
+    const Voice& generic,
+    const Voice& realtime,
+    const gm_synth::voice::VoiceRenderResult& generic_result,
+    const gm_synth::voice::VoiceRenderResult& realtime_result) {
+    assert(generic_result.frames_rendered == realtime_result.frames_rendered);
+    assert(generic_result.finished == realtime_result.finished);
+    assert(generic.phaseQ32() == realtime.phaseQ32());
+    assert(generic.envelopeLevelQ15() == realtime.envelopeLevelQ15());
+    assert(generic.currentGainLeftQ15() == realtime.currentGainLeftQ15());
+    assert(generic.currentGainRightQ15() == realtime.currentGainRightQ15());
+}
+
 void testSteadySustainFastPathIsBitExact() {
     constexpr std::array<std::int16_t, 9> pcm{
         1200, -4000, 8000, -12000, 16000, -8000, 4000, -2000, 6000};
@@ -78,12 +91,7 @@ void testSteadySustainFastPathIsBitExact() {
     const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
 
     assert(generic_mix == realtime_mix);
-    assert(generic_result.frames_rendered == realtime_result.frames_rendered);
-    assert(generic_result.finished == realtime_result.finished);
-    assert(generic.phaseQ32() == realtime.phaseQ32());
-    assert(generic.envelopeLevelQ15() == realtime.envelopeLevelQ15());
-    assert(generic.currentGainLeftQ15() == realtime.currentGainLeftQ15());
-    assert(generic.currentGainRightQ15() == realtime.currentGainRightQ15());
+    assertSameRenderState(generic, realtime, generic_result, realtime_result);
     assert(generic_fixture.directory.stats().live_voice_refs == 1);
     assert(realtime_fixture.directory.stats().live_voice_refs == 1);
 
@@ -120,10 +128,7 @@ void testMultiLoopIncrementFallbackIsBitExact() {
     const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
 
     assert(generic_mix == realtime_mix);
-    assert(generic_result.frames_rendered == realtime_result.frames_rendered);
-    assert(generic_result.finished == realtime_result.finished);
-    assert(generic.phaseQ32() == realtime.phaseQ32());
-    assert(generic.envelopeLevelQ15() == realtime.envelopeLevelQ15());
+    assertSameRenderState(generic, realtime, generic_result, realtime_result);
 
     generic.reset();
     realtime.reset();
@@ -164,15 +169,13 @@ void testQ15GainInt32ExtremesAreBitExact() {
     const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
 
     assert(generic_mix == realtime_mix);
-    assert(generic_result.frames_rendered == realtime_result.frames_rendered);
-    assert(generic_result.finished == realtime_result.finished);
-    assert(generic.phaseQ32() == realtime.phaseQ32());
+    assertSameRenderState(generic, realtime, generic_result, realtime_result);
 
     generic.reset();
     realtime.reset();
 }
 
-void testComplexEnvelopeFallsBackBitExact() {
+void testSimpleAttackDecayFastPathIsBitExact() {
     constexpr std::array<std::int16_t, 8> pcm{
         1000, -2000, 4000, -8000, 12000, -6000, 3000, -1500};
 
@@ -198,13 +201,42 @@ void testComplexEnvelopeFallsBackBitExact() {
     const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
 
     assert(generic_mix == realtime_mix);
-    assert(generic_result.frames_rendered == realtime_result.frames_rendered);
-    assert(generic_result.finished == realtime_result.finished);
-    assert(generic.phaseQ32() == realtime.phaseQ32());
-    assert(generic.envelopeLevelQ15() == realtime.envelopeLevelQ15());
+    assertSameRenderState(generic, realtime, generic_result, realtime_result);
 
     generic.reset();
     realtime.reset();
+}
+
+void testSimpleReleaseFastPathIsBitExact() {
+    constexpr std::array<std::int16_t, 9> pcm{
+        -9000, -4500, 0, 4500, 9000, 4500, 0, -4500, -9000};
+
+    Fixture generic_fixture;
+    Fixture realtime_fixture;
+    assert(generic_fixture.publish(pcm.data(), pcm.size(), 1, 8));
+    assert(realtime_fixture.publish(pcm.data(), pcm.size(), 1, 8));
+
+    VoiceStartParams params = steadyParams();
+    params.envelope.release_frames = 9;
+
+    Voice generic;
+    Voice realtime;
+    assert(generic.start(generic_fixture.directory, params));
+    assert(realtime.start(realtime_fixture.directory, params));
+    generic.noteOff();
+    realtime.noteOff();
+
+    constexpr std::size_t kFrames = 16;
+    std::array<std::int32_t, kFrames * 2> generic_mix{};
+    std::array<std::int32_t, kFrames * 2> realtime_mix{};
+    const auto generic_result = generic.renderAdd(generic_mix.data(), kFrames);
+    const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
+
+    assert(generic_mix == realtime_mix);
+    assertSameRenderState(generic, realtime, generic_result, realtime_result);
+    assert(generic_result.finished);
+    assert(generic_fixture.directory.stats().live_voice_refs == 0);
+    assert(realtime_fixture.directory.stats().live_voice_refs == 0);
 }
 
 }  // namespace
@@ -213,7 +245,8 @@ int main() {
     testSteadySustainFastPathIsBitExact();
     testMultiLoopIncrementFallbackIsBitExact();
     testQ15GainInt32ExtremesAreBitExact();
-    testComplexEnvelopeFallsBackBitExact();
+    testSimpleAttackDecayFastPathIsBitExact();
+    testSimpleReleaseFastPathIsBitExact();
     std::cout << "Voice realtime fast-path checks passed\n";
     return 0;
 }
