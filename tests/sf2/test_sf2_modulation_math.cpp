@@ -116,11 +116,11 @@ void test_generic_nonlinear_note_on_sources_follow_direction_and_curve() {
     CHECK(convex_mid > 0 && convex_mid < convex_low);
     CHECK(convex_high == 0);
 
-    // Positive concave and positive convex have opposite curvature while both
-    // remain monotonic and bounded in the SF2 7-bit domain.
+    // In the positive direction, the SF2 concave curve rises slowly through
+    // the middle of the domain while convex is its complementary fast rise.
     const std::int32_t concave_mid = noteOnSourceToAmount(0x0402u, 60, 64, 1000);
     const std::int32_t convex_positive_mid = noteOnSourceToAmount(0x0802u, 60, 64, 1000);
-    CHECK(concave_mid > convex_positive_mid);
+    CHECK(concave_mid < convex_positive_mid);
     CHECK(concave_mid > 0 && concave_mid < 1000);
     CHECK(convex_positive_mid > 0 && convex_positive_mid < 1000);
 
