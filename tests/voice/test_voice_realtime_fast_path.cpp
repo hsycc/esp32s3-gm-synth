@@ -91,6 +91,42 @@ void testSteadySustainFastPathIsBitExact() {
     assert(realtime_fixture.directory.stats().live_voice_refs == 0);
 }
 
+void testMultiLoopIncrementFallbackIsBitExact() {
+    constexpr std::array<std::int16_t, 10> pcm{
+        900, -1800, 3600, -7200, 14400, -11000, 7000, -3500, 1750, -800};
+
+    Fixture generic_fixture;
+    Fixture realtime_fixture;
+    assert(generic_fixture.publish(pcm.data(), pcm.size(), 1, 8));
+    assert(realtime_fixture.publish(pcm.data(), pcm.size(), 1, 8));
+
+    VoiceStartParams params = steadyParams();
+    // Seven-frame loop, but advance by more than two loop lengths per output
+    // frame. This must take the modulo fallback rather than the common
+    // single-wrap path and still match the generic reference exactly.
+    params.phase_increment_q32 = 15u * kPhaseOneQ32 + kPhaseOneQ32 / 4u;
+
+    Voice generic;
+    Voice realtime;
+    assert(generic.start(generic_fixture.directory, params));
+    assert(realtime.start(realtime_fixture.directory, params));
+
+    constexpr std::size_t kFrames = 32;
+    std::array<std::int32_t, kFrames * 2> generic_mix{};
+    std::array<std::int32_t, kFrames * 2> realtime_mix{};
+    const auto generic_result = generic.renderAdd(generic_mix.data(), kFrames);
+    const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kFrames);
+
+    assert(generic_mix == realtime_mix);
+    assert(generic_result.frames_rendered == realtime_result.frames_rendered);
+    assert(generic_result.finished == realtime_result.finished);
+    assert(generic.phaseQ32() == realtime.phaseQ32());
+    assert(generic.envelopeLevelQ15() == realtime.envelopeLevelQ15());
+
+    generic.reset();
+    realtime.reset();
+}
+
 void testComplexEnvelopeFallsBackBitExact() {
     constexpr std::array<std::int16_t, 8> pcm{
         1000, -2000, 4000, -8000, 12000, -6000, 3000, -1500};
@@ -130,6 +166,7 @@ void testComplexEnvelopeFallsBackBitExact() {
 
 int main() {
     testSteadySustainFastPathIsBitExact();
+    testMultiLoopIncrementFallbackIsBitExact();
     testComplexEnvelopeFallsBackBitExact();
     std::cout << "Voice realtime fast-path checks passed\n";
     return 0;
