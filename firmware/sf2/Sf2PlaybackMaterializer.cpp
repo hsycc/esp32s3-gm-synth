@@ -1,7 +1,7 @@
 #include "Sf2PlaybackMaterializer.h"
 
 #include "Sf2FilterMath.h"
-#include "Sf2ModulationMath.h"
+#include "Sf2PanMath.h"
 #include "Sf2ResonantFilterMath.h"
 #include "../voice/PitchMath.h"
 
@@ -74,6 +74,12 @@ std::int32_t unitGainQ15(double gain, std::uint64_t* issues) {
         std::lround(gain * static_cast<double>(voice::kQ15Unity)));
 }
 
+std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
+    const std::int64_t product = static_cast<std::int64_t>(a) * b;
+    return static_cast<std::int32_t>(
+        (product + (std::int64_t{1} << 14)) >> 15);
+}
+
 double centibelsToLinear(std::int32_t centibels) {
     return std::pow(10.0, -static_cast<double>(centibels) / 200.0);
 }
@@ -125,9 +131,6 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     }
 
     PlaybackMaterializationResult result = materialize(native, conservative, output);
-    // Without the separately resolved modulator hierarchy we cannot prove that
-    // generator 47 is consistently applied to every velocity-sourced custom
-    // route, so retain the old conservative diagnostic for this overload.
     if (native.generators.has(47) && result.playablePreview()) {
         result.issues |= PlaybackIssueFixedVelocityPending;
         result.status = PlaybackMaterializationStatus::Preview;
@@ -145,11 +148,6 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         return result;
     }
 
-    // Mandatory SF2 defaults currently represented by the runtime: NoteOn
-    // velocity -> attenuation/filter, Channel Pressure/CC1 -> vibrato depth,
-    // CC7/10/11, Pitch Wheel/RPN and CC91/93. Remaining preview diagnostics
-    // below therefore describe non-default DSP/features rather than a blanket
-    // default-modulator gap.
     std::uint64_t issues = PlaybackIssueNone;
     if ((native.flags & NativeZoneFlagUnknownGenerator) != 0) {
         issues |= PlaybackIssueUnknownGenerator;
@@ -196,8 +194,6 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     const std::int32_t raw_scale_tuning = native.scaleTuningCentsPerKey();
     const std::int32_t scale_tuning = std::clamp<std::int32_t>(raw_scale_tuning, 0, 1200);
     if (raw_scale_tuning != scale_tuning) {
-        // Keep the historical bit useful for malformed/out-of-range files while
-        // fully qualifying every valid SF2 scaleTuning value.
         issues |= PlaybackIssueScaleTuningPending;
     }
     const bool has_fixed_key = native.generators.has(46);
@@ -212,15 +208,9 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         issues |= PlaybackIssueInvalidFixedVelocity;
     }
 
-    // The current fixed-point filter path covers static cutoff, velocity,
-    // resonance, Mod-LFO and Mod-Envelope movement at 44.1 kHz.
     if (output_sample_rate_ != kSf2FilterOutputSampleRate) {
         issues |= PlaybackIssueFilterPending;
     }
-    // Both SoundFont LFOs and the modulation envelope are represented. Their
-    // historical issue bits remain reserved for telemetry compatibility only.
-    // The send generators/controller routes are preserved and updated at runtime,
-    // but no reverb/chorus processor consumes the sends yet.
     if (differs(native, 15, 0) || differs(native, 16, 0) ||
         modulation.reverb_send_amount != 0 || modulation.chorus_send_amount != 0) {
         issues |= PlaybackIssueEffectsSendPending;
@@ -282,29 +272,23 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         }
     }
 
-    // Retain prepared static gains for direct/legacy PlaybackZone users. The
-    // same fixed-point attenuation + equal-power pan path is used by NoteOn so
-    // static and controller-driven playback cannot disagree about pan law.
     const std::int32_t static_attenuation_cb = static_cast<std::int32_t>(
         std::clamp<std::int64_t>(
             static_cast<std::int64_t>(native.initialAttenuationCb()) +
                 resonanceDcAttenuationCb(native.initialFilterQCb()),
             std::numeric_limits<std::int32_t>::min(),
             std::numeric_limits<std::int32_t>::max()));
-    if (static_attenuation_cb < 0) {
-        issues |= PlaybackIssueGainAboveUnityClamped;
-    }
-
+    double static_gain = centibelsToLinear(static_attenuation_cb);
+    const std::int32_t static_gain_q15 = unitGainQ15(static_gain, &issues);
     const std::int32_t pan_units = std::max<std::int32_t>(
         -500,
         std::min<std::int32_t>(500, native.panSf2Units()));
-    noteOnGainQ15(
-        static_attenuation_cb,
-        0,
-        127,
-        pan_units,
-        &candidate.gain_left_q15,
-        &candidate.gain_right_q15);
+    candidate.gain_left_q15 = multiplyQ15(
+        static_gain_q15,
+        sf2PanChannelGainQ15(pan_units, true));
+    candidate.gain_right_q15 = multiplyQ15(
+        static_gain_q15,
+        sf2PanChannelGainQ15(pan_units, false));
 
     candidate.note_on_gain.enabled = true;
     candidate.note_on_gain.initial_attenuation_cb = native.initialAttenuationCb();
