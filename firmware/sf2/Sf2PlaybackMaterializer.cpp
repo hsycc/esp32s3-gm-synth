@@ -88,14 +88,6 @@ bool modEnvelopeNeedsDsp(const NativeResolvedZone& zone) {
            differs(zone, 31, 0) || differs(zone, 32, 0);
 }
 
-bool lfoNeedsDsp(const NativeResolvedZone& zone) {
-    // Vibrato LFO (gen6/23/24) is implemented. Mod-LFO pitch/filter/volume and
-    // its delay/frequency remain explicit pending work.
-    return differs(zone, 5, 0) || differs(zone, 10, 0) ||
-           differs(zone, 13, 0) || differs(zone, 21, -12000) ||
-           differs(zone, 22, 0);
-}
-
 voice::LoopMode loopModeFor(std::int32_t sample_modes, bool* supported) {
     if (supported != nullptr) {
         *supported = true;
@@ -216,20 +208,17 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         issues |= PlaybackIssueInvalidFixedVelocity;
     }
 
-    // Static cutoff + NoteOn velocity modulation is now represented. Dynamic
-    // mod-envelope/mod-LFO cutoff movement and non-zero resonance remain explicit
-    // until their per-voice DSP semantics are validated.
+    // Static cutoff, velocity and Mod-LFO cutoff movement are represented now.
+    // Non-zero resonance and modulation-envelope cutoff movement remain explicit.
     if (output_sample_rate_ != kSf2FilterOutputSampleRate ||
-        native.initialFilterQCb() != 0 ||
-        differs(native, 10, 0) || differs(native, 11, 0)) {
+        native.initialFilterQCb() != 0 || differs(native, 11, 0)) {
         issues |= PlaybackIssueFilterPending;
     }
     if (modEnvelopeNeedsDsp(native)) {
         issues |= PlaybackIssueModEnvelopePending;
     }
-    if (lfoNeedsDsp(native)) {
-        issues |= PlaybackIssueLfoPending;
-    }
+    // Both SF2 oscillators are represented. Retain the historical LFO issue bit
+    // only as a stable telemetry position; it is no longer emitted here.
     // The send generators/controller routes are now fully preserved and
     // updated at runtime, but no reverb/chorus processor consumes the sends yet.
     if (differs(native, 15, 0) || differs(native, 16, 0) ||
@@ -356,6 +345,22 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         modulation.channel_pressure_to_vib_lfo_pitch_cents;
     candidate.vibrato_lfo.modulation_wheel_to_pitch_cents =
         modulation.modulation_wheel_to_vib_lfo_pitch_cents;
+
+    candidate.mod_lfo.pitch_depth_cents = std::clamp<std::int32_t>(
+        native.generators.value(5, 0), -12000, 12000);
+    candidate.mod_lfo.filter_depth_cents = std::clamp<std::int32_t>(
+        native.generators.value(10, 0), -12000, 12000);
+    candidate.mod_lfo.volume_depth_cb = std::clamp<std::int32_t>(
+        native.generators.value(13, 0), -960, 960);
+    candidate.mod_lfo.enabled = candidate.mod_lfo.pitch_depth_cents != 0 ||
+        candidate.mod_lfo.filter_depth_cents != 0 ||
+        candidate.mod_lfo.volume_depth_cb != 0;
+    candidate.mod_lfo.delay_frames = timecentsToFrames(
+        native.generators.value(21, -12000),
+        output_sample_rate_);
+    candidate.mod_lfo.phase_step_q32 = lfoFrequencyCentsToPhaseStepQ32(
+        native.generators.value(22, 0),
+        output_sample_rate_);
 
     candidate.effects_send.enabled = true;
     candidate.effects_send.reverb_sf2_units = static_cast<std::int16_t>(
