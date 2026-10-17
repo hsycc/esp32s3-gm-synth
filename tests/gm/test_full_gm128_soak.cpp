@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -95,13 +96,14 @@ private:
 };
 
 struct WorkspaceStorage {
-    std::vector<NativeResolvedZone> native{256};
-    std::vector<ResolvedZoneModulation> modulation{256};
-    std::vector<gm_synth::gm::PlaybackZone> playback{256};
-    std::vector<gm_synth::sample::SampleId> dependencies{512};
+    std::vector<NativeResolvedZone> native;
+    std::vector<ResolvedZoneModulation> modulation;
+    std::vector<gm_synth::gm::PlaybackZone> playback;
+    std::vector<gm_synth::sample::SampleId> dependencies;
     ProgramChangePrepareWorkspace workspace{};
 
-    WorkspaceStorage() {
+    WorkspaceStorage()
+        : native(256), modulation(256), playback(256), dependencies(512) {
         workspace.native_scratch = native.data();
         workspace.native_capacity = native.size();
         workspace.modulation_scratch = modulation.data();
@@ -292,15 +294,19 @@ DiscoveryResult discoverWorstPrograms() {
     for (const std::uint16_t bank : {std::uint16_t{0}, kSf2PercussionBank}) {
         const std::uint8_t channel = channelForBank(bank);
         for (std::uint16_t program = 0; program < 128; ++program) {
-            assert(preparePlayback(
-                pdta,
-                preparer,
-                storage,
-                channel,
-                bank,
-                static_cast<std::uint8_t>(program),
-                token++,
-                1));
+            if (!preparePlayback(
+                    pdta,
+                    preparer,
+                    storage,
+                    channel,
+                    bank,
+                    static_cast<std::uint8_t>(program),
+                    token++,
+                    1)) {
+                std::cerr << "GM128_SOAK_FAILURE stage=discovery_prepare bank=" << bank
+                          << " program=" << program << '\n';
+                assert(false);
+            }
 
             const auto& snapshot = storage.workspace.snapshot;
             if (snapshot.zone_count > discovered.max_zone_count) {
@@ -493,12 +499,7 @@ void testWorstZoneHeavyProgram(const DiscoveryResult& discovered) {
 void testReleaseTailAccumulation(const DiscoveryResult& discovered) {
     RuntimeFixture f(kArenaBytes);
     WorkspaceStorage workspace;
-    assert(f.activate(
-        workspace,
-        0,
-        0,
-        discovered.release_tail.program,
-        7000));
+    assert(f.activate(workspace, 0, 0, discovered.release_tail.program, 7000));
 
     const std::size_t layers = discovered.release_tail.layers;
     assert(layers > 0 && layers <= VoicePool::kHardVoiceCap / 2u);
@@ -603,43 +604,27 @@ void testThirtyTwoSecondMixedSoak() {
         } else if (phase == 160) {
             const std::uint8_t channel = static_cast<std::uint8_t>(epoch % 16u);
             assert(f.router.apply(
-                controlChange(
-                    channel,
-                    7,
-                    static_cast<std::uint8_t>(80u + epoch % 48u)),
+                controlChange(channel, 7, static_cast<std::uint8_t>(80u + epoch % 48u)),
                 f.voices));
             assert(f.router.apply(
-                controlChange(
-                    channel,
-                    10,
-                    static_cast<std::uint8_t>((epoch * 11u) % 128u)),
+                controlChange(channel, 10, static_cast<std::uint8_t>((epoch * 11u) % 128u)),
                 f.voices));
             assert(f.router.apply(
-                controlChange(
-                    channel,
-                    11,
-                    static_cast<std::uint8_t>(96u + epoch % 32u)),
+                controlChange(channel, 11, static_cast<std::uint8_t>(96u + epoch % 32u)),
                 f.voices));
             assert(f.router.apply(
                 controlChange(channel, 91, static_cast<std::uint8_t>(epoch % 128u)),
                 f.voices));
             assert(f.router.apply(
-                controlChange(
-                    channel,
-                    93,
-                    static_cast<std::uint8_t>((epoch * 3u) % 128u)),
+                controlChange(channel, 93, static_cast<std::uint8_t>((epoch * 3u) % 128u)),
                 f.voices));
             assert(f.router.apply(
-                pitchBend(
-                    channel,
-                    static_cast<std::uint16_t>((epoch * 257u) % 16384u)),
+                pitchBend(channel, static_cast<std::uint16_t>((epoch * 257u) % 16384u)),
                 f.voices));
         } else if (phase == 192) {
             f.voices.allSoundOff();
             for (std::uint8_t key = 35; key < 43; ++key) {
-                assert(f.router.apply(
-                    noteOn(kGmPercussionChannel, key, 115),
-                    f.voices));
+                assert(f.router.apply(noteOn(kGmPercussionChannel, key, 115), f.voices));
             }
         }
 

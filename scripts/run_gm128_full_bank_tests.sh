@@ -85,7 +85,6 @@ build_and_run test_full_gm128_capacity -pthread \
 
 printf '\n[5/5] Build and run discovery-driven 32-second host soak\n'
 build_and_run test_full_gm128_soak -pthread \
-  -include limits \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_full_gm128_soak.cpp
 
