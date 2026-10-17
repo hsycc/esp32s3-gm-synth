@@ -59,12 +59,12 @@ void VoicePool::renderAddWithEffects(
 
             VoiceRenderResult result{};
             if (!needs_send_scratch) {
-                result = voice.renderAdd(
+                result = voice.renderAddRealtime(
                     interleaved_stereo + sample_offset,
                     chunk_frames);
             } else {
                 std::fill_n(scratch.data(), chunk_samples, 0);
-                result = voice.renderAdd(scratch.data(), chunk_frames);
+                result = voice.renderAddRealtime(scratch.data(), chunk_frames);
                 for (std::size_t index = 0; index < chunk_samples; ++index) {
                     const std::int32_t value = scratch[index];
                     interleaved_stereo[sample_offset + index] += value;
