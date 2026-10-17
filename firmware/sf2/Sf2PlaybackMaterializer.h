@@ -45,12 +45,12 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueVolumeEnvelopeDelayPending = std::uint64_t{1} << 12,
     PlaybackIssueVolumeEnvelopeHoldPending = std::uint64_t{1} << 13,
     PlaybackIssueVolumeEnvelopeKeyScalingPending = std::uint64_t{1} << 14,
-    // Static cutoff + NoteOn velocity modulation are implemented. This bit now
-    // means non-zero resonance or dynamic mod-env/LFO filter motion is pending.
+    // Static cutoff, NoteOn velocity and Mod-LFO cutoff movement are implemented.
+    // This bit now means non-zero resonance or modulation-envelope filter motion.
     PlaybackIssueFilterPending = std::uint64_t{1} << 15,
     PlaybackIssueModEnvelopePending = std::uint64_t{1} << 16,
-    // Vibrato LFO pitch is implemented. This bit now means Mod-LFO pitch,
-    // filter or volume modulation (gen5/10/13/21/22) is still pending.
+    // Reserved historical diagnostic bit. Vibrato LFO and Mod-LFO pitch/filter/
+    // volume destinations are implemented now; keep this bit stable but unused.
     PlaybackIssueLfoPending = std::uint64_t{1} << 17,
     // Reverb/chorus generator + CC91/93 send values are preserved and updated
     // sample-accurately in Voice state; this bit means the actual FX bus/DSP
