@@ -27,6 +27,8 @@ idf_component_register(
         "voice/PitchMath.cpp"
         "voice/VoiceRenderer.cpp"
         "voice/VoiceRuntimeControl.cpp"
+        "voice/VoiceEffectsBus.cpp"
+        "voice/GlobalEffectsProcessor.cpp"
         "voice/AudioBlockRenderer.cpp"
         "voice/AdaptivePolyphony.cpp"
         "realtime/RealtimeEventQueue.cpp"
