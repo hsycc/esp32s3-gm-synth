@@ -45,9 +45,9 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueVolumeEnvelopeDelayPending = std::uint64_t{1} << 12,
     PlaybackIssueVolumeEnvelopeHoldPending = std::uint64_t{1} << 13,
     PlaybackIssueVolumeEnvelopeKeyScalingPending = std::uint64_t{1} << 14,
-    // Static cutoff, velocity, Mod-LFO and Mod-Envelope cutoff movement are
-    // represented. This bit now means non-zero resonance or unsupported output
-    // sample-rate filter qualification.
+    // Static cutoff, velocity, resonance, Mod-LFO and Mod-Envelope cutoff
+    // movement are represented at 44.1 kHz. This bit is retained for output
+    // sample rates whose filter coefficient path is not yet qualified.
     PlaybackIssueFilterPending = std::uint64_t{1} << 15,
     // Reserved historical diagnostic bit. SF2 modulation-envelope timing,
     // key-scaled hold/decay and pitch/filter destinations are implemented now.
