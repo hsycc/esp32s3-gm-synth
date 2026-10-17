@@ -10,7 +10,7 @@
 namespace gm_synth::voice {
 namespace {
 
-constexpr std::uint8_t kLfoControlFrames = 16;
+constexpr std::uint8_t kModulationControlFrames = 16;
 constexpr std::array<std::uint32_t, 12> kSemitoneRatioQ20{
     1048576u, 1110928u, 1176987u, 1246974u,
     1321123u, 1399681u, 1482910u, 1571089u,
@@ -28,6 +28,21 @@ constexpr std::array<std::uint32_t, 100> kCentRatioQ20{
     1098167u, 1098802u, 1099437u, 1100072u, 1100708u, 1101344u, 1101980u, 1102617u, 1103254u, 1103891u,
     1104529u, 1105167u, 1105806u, 1106445u, 1107084u, 1107724u, 1108364u, 1109004u, 1109645u, 1110286u,
 };
+
+// Q15 SoundFont convex curve used by the modulation-envelope attack. This is
+// the inverse/reverse of the same 128-point SF2 concave controller curve used
+// by Sf2ModulationMath, keeping log/pow out of the realtime path.
+constexpr std::array<std::uint16_t, 128> kModEnvelopeAttackConvexQ15{{
+    0, 4044, 8154, 10558, 12264, 13587, 14668, 15582, 16374, 17072, 17697, 18262, 18778, 19253, 19692, 20101,
+    20484, 20843, 21182, 21503, 21807, 22096, 22372, 22635, 22888, 23130, 23362, 23586, 23802, 24010, 24211, 24405,
+    24594, 24776, 24953, 25125, 25292, 25454, 25613, 25767, 25917, 26063, 26206, 26346, 26482, 26615, 26745, 26873,
+    26998, 27120, 27240, 27357, 27472, 27585, 27696, 27805, 27912, 28017, 28120, 28221, 28321, 28419, 28515, 28610,
+    28704, 28795, 28886, 28975, 29063, 29150, 29235, 29319, 29402, 29484, 29564, 29644, 29723, 29800, 29877, 29952,
+    30027, 30100, 30173, 30245, 30316, 30386, 30455, 30524, 30592, 30659, 30725, 30791, 30855, 30919, 30983, 31046,
+    31108, 31169, 31230, 31290, 31350, 31409, 31467, 31525, 31582, 31639, 31695, 31751, 31806, 31861, 31915, 31969,
+    32022, 32074, 32127, 32178, 32230, 32281, 32331, 32381, 32431, 32480, 32529, 32577, 32625, 32673, 32720, 32767,
+}};
+
 constexpr std::uint32_t kRatioFractionBits = 20;
 constexpr std::uint64_t kRatioRounding = std::uint64_t{1} << (kRatioFractionBits - 1u);
 
@@ -179,25 +194,63 @@ StereoGainQ15 interpolateGainTable(
     };
 }
 
-BiquadLowpassConfig interpolateLowpassTable(
-    const LfoLowpassTable& table,
-    std::int32_t level_q15) {
+BiquadLowpassConfig interpolateDynamicLowpassTable(
+    const DynamicLowpassTable& table,
+    std::int32_t offset_cents) {
     if (!table.enabled) {
         return BiquadLowpassConfig{};
     }
-    const LfoTablePosition position = lfoTablePosition(level_q15);
-    if (position.lower + 1u >= table.points.size()) {
+    if (table.min_offset_cents == table.max_offset_cents) {
+        return table.points.front();
+    }
+
+    const std::int32_t clamped = std::clamp(
+        offset_cents,
+        table.min_offset_cents,
+        table.max_offset_cents);
+    const std::uint64_t normalized = static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(clamped) - table.min_offset_cents);
+    const std::uint64_t span = static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(table.max_offset_cents) - table.min_offset_cents);
+    constexpr std::uint64_t kSegments = kLfoControlPointCount - 1u;
+    const std::uint64_t position_q16 =
+        (normalized * kSegments * 65536u + span / 2u) / span;
+    const std::size_t lower = std::min<std::size_t>(
+        static_cast<std::size_t>(position_q16 >> 16u),
+        table.points.size() - 1u);
+    if (lower + 1u >= table.points.size()) {
         return table.points.back();
     }
-    const BiquadLowpassConfig& a = table.points[position.lower];
-    const BiquadLowpassConfig& b = table.points[position.lower + 1u];
+    const std::uint32_t fraction_q16 = static_cast<std::uint32_t>(position_q16 & 0xffffu);
+    const BiquadLowpassConfig& a = table.points[lower];
+    const BiquadLowpassConfig& b = table.points[lower + 1u];
     BiquadLowpassConfig result{};
     result.enabled = true;
-    result.a0_q24 = interpolateI32(a.a0_q24, b.a0_q24, position.fraction_q16);
-    result.a1_q24 = interpolateI32(a.a1_q24, b.a1_q24, position.fraction_q16);
-    result.b1_q24 = interpolateI32(a.b1_q24, b.b1_q24, position.fraction_q16);
-    result.b2_q24 = interpolateI32(a.b2_q24, b.b2_q24, position.fraction_q16);
+    result.a0_q24 = interpolateI32(a.a0_q24, b.a0_q24, fraction_q16);
+    result.a1_q24 = interpolateI32(a.a1_q24, b.a1_q24, fraction_q16);
+    result.b1_q24 = interpolateI32(a.b1_q24, b.b1_q24, fraction_q16);
+    result.b2_q24 = interpolateI32(a.b2_q24, b.b2_q24, fraction_q16);
     return result;
+}
+
+std::int32_t convexAttackLevelQ15(std::int32_t linear_level_q15) {
+    const std::int32_t clamped = std::clamp(linear_level_q15, std::int32_t{0}, kQ15Unity);
+    if (clamped == 0 || clamped == kQ15Unity) {
+        return clamped;
+    }
+    const std::uint64_t position_q16 =
+        (static_cast<std::uint64_t>(clamped) * 127u * 65536u + kQ15Unity / 2u) /
+        static_cast<std::uint64_t>(kQ15Unity);
+    const std::size_t lower = std::min<std::size_t>(
+        static_cast<std::size_t>(position_q16 >> 16u),
+        kModEnvelopeAttackConvexQ15.size() - 1u);
+    if (lower + 1u >= kModEnvelopeAttackConvexQ15.size()) {
+        return kModEnvelopeAttackConvexQ15.back();
+    }
+    return interpolateI32(
+        kModEnvelopeAttackConvexQ15[lower],
+        kModEnvelopeAttackConvexQ15[lower + 1u],
+        static_cast<std::uint32_t>(position_q16 & 0xffffu));
 }
 
 std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
@@ -355,7 +408,8 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
          region_loop_end <= region_end);
     if (!descriptor_valid || !region_valid || !loop_valid ||
         params.phase_increment_q32 == 0 || !params.lowpass.valid() ||
-        !params.vibrato_lfo.valid() || !params.mod_lfo.valid()) {
+        !params.dynamic_lowpass_table.valid() || !params.vibrato_lfo.valid() ||
+        !params.mod_lfo.valid() || !params.mod_envelope.valid()) {
         directory.release(acquired);
         return false;
     }
@@ -366,6 +420,8 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     params_.gain_left_q15 = clampQ15(params.gain_left_q15);
     params_.gain_right_q15 = clampQ15(params.gain_right_q15);
     params_.envelope.sustain_q15 = clampQ15(params.envelope.sustain_q15);
+    params_.mod_envelope.envelope.sustain_q15 = clampQ15(
+        params.mod_envelope.envelope.sustain_q15);
 
     channel_ = params.channel;
     key_ = params.key;
@@ -380,6 +436,7 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     mod_lfo_phase_q32_ = 0;
     mod_lfo_delay_remaining_ = params_.mod_lfo.delay_frames;
     mod_lfo_control_frames_remaining_ = 0;
+    mod_envelope_control_frames_remaining_ = 0;
     lowpass_z1_q24_ = 0;
     lowpass_z2_q24_ = 0;
     key_released_ = false;
@@ -387,6 +444,9 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     envelope_stage_frame_ = 0;
     active_release_frames_ = 0;
     release_start_level_q15_ = 0;
+    mod_envelope_stage_frame_ = 0;
+    mod_envelope_release_frames_ = 0;
+    mod_envelope_release_start_level_q15_ = 0;
 
     if (params_.envelope.delay_frames != 0) {
         envelope_stage_ = EnvelopeStage::Delay;
@@ -405,8 +465,56 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
         envelope_level_q15_ = params_.envelope.sustain_q15;
     }
 
+    if (!params_.mod_envelope.enabled) {
+        mod_envelope_stage_ = EnvelopeStage::Done;
+        mod_envelope_level_q15_ = 0;
+    } else if (params_.mod_envelope.envelope.delay_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Delay;
+        mod_envelope_level_q15_ = 0;
+    } else if (params_.mod_envelope.envelope.attack_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Attack;
+        mod_envelope_level_q15_ = 0;
+    } else if (params_.mod_envelope.envelope.hold_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Hold;
+        mod_envelope_level_q15_ = kQ15Unity;
+    } else if (params_.mod_envelope.envelope.decay_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Decay;
+        mod_envelope_level_q15_ = kQ15Unity;
+    } else {
+        mod_envelope_stage_ = EnvelopeStage::Sustain;
+        mod_envelope_level_q15_ = params_.mod_envelope.envelope.sustain_q15;
+    }
+
     active_ = true;
     return true;
+}
+
+void Voice::beginModEnvelopeRelease() {
+    if (!params_.mod_envelope.enabled ||
+        mod_envelope_stage_ == EnvelopeStage::Done ||
+        mod_envelope_stage_ == EnvelopeStage::Release) {
+        return;
+    }
+
+    const std::int32_t start_level = modEnvelopeDspLevelQ15();
+    const std::uint32_t release_frames = params_.mod_envelope.envelope.release_frames;
+    mod_envelope_control_frames_remaining_ = 0;
+    if (release_frames == 0 || start_level <= 0) {
+        mod_envelope_stage_ = EnvelopeStage::Done;
+        mod_envelope_level_q15_ = 0;
+        mod_envelope_stage_frame_ = 0;
+        mod_envelope_release_frames_ = 0;
+        mod_envelope_release_start_level_q15_ = 0;
+        return;
+    }
+
+    // During attack the SoundFont modulation envelope is convex. Once NoteOff
+    // arrives, release is linear from the audible (already-shaped) level.
+    mod_envelope_level_q15_ = start_level;
+    mod_envelope_release_start_level_q15_ = start_level;
+    mod_envelope_release_frames_ = release_frames;
+    mod_envelope_stage_ = EnvelopeStage::Release;
+    mod_envelope_stage_frame_ = 0;
 }
 
 void Voice::beginRelease(
@@ -416,6 +524,7 @@ void Voice::beginRelease(
         return;
     }
 
+    beginModEnvelopeRelease();
     key_released_ = true;
     fast_release_kind_ = fast_release_kind;
     if (release_frames == 0 || envelope_level_q15_ <= 0) {
@@ -565,6 +674,141 @@ std::int32_t Voice::nextEnvelopeLevel() {
     }
 }
 
+std::int32_t Voice::nextModEnvelopeLevel() {
+    if (!params_.mod_envelope.enabled) {
+        mod_envelope_stage_ = EnvelopeStage::Done;
+        mod_envelope_level_q15_ = 0;
+        return 0;
+    }
+
+    const EnvelopeConfig& envelope = params_.mod_envelope.envelope;
+    switch (mod_envelope_stage_) {
+        case EnvelopeStage::Delay: {
+            const std::uint32_t total = envelope.delay_frames;
+            mod_envelope_level_q15_ = 0;
+            if (total == 0 || ++mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                if (envelope.attack_frames != 0) {
+                    mod_envelope_stage_ = EnvelopeStage::Attack;
+                } else if (envelope.hold_frames != 0) {
+                    mod_envelope_stage_ = EnvelopeStage::Hold;
+                } else if (envelope.decay_frames != 0) {
+                    mod_envelope_stage_ = EnvelopeStage::Decay;
+                } else {
+                    mod_envelope_stage_ = EnvelopeStage::Sustain;
+                }
+            }
+            return 0;
+        }
+
+        case EnvelopeStage::Attack: {
+            const std::uint32_t total = envelope.attack_frames;
+            if (total == 0) {
+                mod_envelope_stage_ = envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                return nextModEnvelopeLevel();
+            }
+            const std::uint64_t numerator =
+                static_cast<std::uint64_t>(kQ15Unity) * (mod_envelope_stage_frame_ + 1u);
+            mod_envelope_level_q15_ = static_cast<std::int32_t>(numerator / total);
+            ++mod_envelope_stage_frame_;
+            if (mod_envelope_stage_frame_ >= total) {
+                mod_envelope_level_q15_ = kQ15Unity;
+                mod_envelope_stage_ = envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Hold: {
+            const std::uint32_t total = envelope.hold_frames;
+            mod_envelope_level_q15_ = kQ15Unity;
+            if (total == 0 || ++mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                mod_envelope_stage_ = envelope.decay_frames != 0
+                    ? EnvelopeStage::Decay
+                    : EnvelopeStage::Sustain;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Decay: {
+            const std::uint32_t total = envelope.decay_frames;
+            if (total == 0) {
+                mod_envelope_stage_ = EnvelopeStage::Sustain;
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                mod_envelope_level_q15_ = envelope.sustain_q15;
+                return mod_envelope_level_q15_;
+            }
+            const std::int64_t delta =
+                static_cast<std::int64_t>(envelope.sustain_q15) - kQ15Unity;
+            const std::int64_t position =
+                static_cast<std::int64_t>(mod_envelope_stage_frame_ + 1u);
+            mod_envelope_level_q15_ = clampQ15(
+                static_cast<std::int32_t>(kQ15Unity + (delta * position) / total));
+            ++mod_envelope_stage_frame_;
+            if (mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_ = EnvelopeStage::Sustain;
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                mod_envelope_level_q15_ = envelope.sustain_q15;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Sustain:
+            mod_envelope_level_q15_ = envelope.sustain_q15;
+            return mod_envelope_level_q15_;
+
+        case EnvelopeStage::Release: {
+            const std::uint32_t total = mod_envelope_release_frames_;
+            if (total == 0 || mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_ = EnvelopeStage::Done;
+                mod_envelope_level_q15_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                return 0;
+            }
+            const std::uint32_t remaining = total - mod_envelope_stage_frame_;
+            mod_envelope_level_q15_ = static_cast<std::int32_t>(
+                (static_cast<std::int64_t>(mod_envelope_release_start_level_q15_) * remaining) /
+                total);
+            ++mod_envelope_stage_frame_;
+            if (mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_ = EnvelopeStage::Done;
+                mod_envelope_control_frames_remaining_ = 0;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Done:
+        default:
+            mod_envelope_level_q15_ = 0;
+            return 0;
+    }
+}
+
+std::int32_t Voice::modEnvelopeDspLevelQ15() const {
+    if (!params_.mod_envelope.enabled) {
+        return 0;
+    }
+    return mod_envelope_stage_ == EnvelopeStage::Attack
+        ? convexAttackLevelQ15(mod_envelope_level_q15_)
+        : clampQ15(mod_envelope_level_q15_);
+}
+
 std::int32_t Voice::interpolatedSample() const {
     if (!ref_.valid() || ref_.record == nullptr || ref_.record->pcm == nullptr) {
         return 0;
@@ -613,13 +857,14 @@ std::int32_t Voice::applyLowpass(std::int32_t sample) {
     return output;
 }
 
-void Voice::refreshLfoState() {
+void Voice::refreshModulationState() {
     current_phase_increment_q32_ = params_.phase_increment_q32;
     current_gain_left_q15_ = params_.gain_left_q15;
     current_gain_right_q15_ = params_.gain_right_q15;
     current_lowpass_ = params_.lowpass;
 
     std::int64_t pitch_cents = 0;
+    std::int64_t filter_offset_cents = 0;
     if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0 &&
         params_.vibrato_lfo.pitch_depth_cents != 0) {
         pitch_cents += scaleSignedQ15(
@@ -632,6 +877,11 @@ void Voice::refreshLfoState() {
         if (params_.mod_lfo.pitch_depth_cents != 0) {
             pitch_cents += scaleSignedQ15(params_.mod_lfo.pitch_depth_cents, level_q15);
         }
+        if (params_.mod_lfo.filter_depth_cents != 0) {
+            filter_offset_cents += scaleSignedQ15(
+                params_.mod_lfo.filter_depth_cents,
+                level_q15);
+        }
         if (params_.mod_lfo.gain_table.enabled) {
             const StereoGainQ15 gains = interpolateGainTable(
                 params_.mod_lfo.gain_table,
@@ -639,9 +889,18 @@ void Voice::refreshLfoState() {
             current_gain_left_q15_ = gains.left;
             current_gain_right_q15_ = gains.right;
         }
-        if (params_.mod_lfo.lowpass_table.enabled) {
-            current_lowpass_ = interpolateLowpassTable(
-                params_.mod_lfo.lowpass_table,
+    }
+
+    if (params_.mod_envelope.enabled) {
+        const std::int32_t level_q15 = modEnvelopeDspLevelQ15();
+        if (params_.mod_envelope.pitch_depth_cents != 0) {
+            pitch_cents += scaleSignedQ15(
+                params_.mod_envelope.pitch_depth_cents,
+                level_q15);
+        }
+        if (params_.mod_envelope.filter_depth_cents != 0) {
+            filter_offset_cents += scaleSignedQ15(
+                params_.mod_envelope.filter_depth_cents,
                 level_q15);
         }
     }
@@ -654,6 +913,17 @@ void Voice::refreshLfoState() {
         current_phase_increment_q32_ = transposeCentsFixed(
             params_.phase_increment_q32,
             clamped_pitch);
+    }
+
+    const std::int32_t clamped_filter_offset = static_cast<std::int32_t>(
+        std::clamp<std::int64_t>(
+            filter_offset_cents,
+            std::numeric_limits<std::int32_t>::min(),
+            std::numeric_limits<std::int32_t>::max()));
+    if (params_.dynamic_lowpass_table.enabled && clamped_filter_offset != 0) {
+        current_lowpass_ = interpolateDynamicLowpassTable(
+            params_.dynamic_lowpass_table,
+            clamped_filter_offset);
     }
 }
 
@@ -688,6 +958,10 @@ void Voice::advanceLfos() {
                 --mod_lfo_control_frames_remaining_;
             }
         }
+    }
+
+    if (params_.mod_envelope.enabled && mod_envelope_control_frames_remaining_ != 0) {
+        --mod_envelope_control_frames_remaining_;
     }
 }
 
@@ -731,6 +1005,7 @@ void Voice::finish() {
     mod_lfo_phase_q32_ = 0;
     mod_lfo_delay_remaining_ = 0;
     mod_lfo_control_frames_remaining_ = 0;
+    mod_envelope_control_frames_remaining_ = 0;
     lowpass_z1_q24_ = 0;
     lowpass_z2_q24_ = 0;
     envelope_stage_ = EnvelopeStage::Done;
@@ -738,6 +1013,11 @@ void Voice::finish() {
     active_release_frames_ = 0;
     envelope_level_q15_ = 0;
     release_start_level_q15_ = 0;
+    mod_envelope_stage_ = EnvelopeStage::Done;
+    mod_envelope_stage_frame_ = 0;
+    mod_envelope_release_frames_ = 0;
+    mod_envelope_level_q15_ = 0;
+    mod_envelope_release_start_level_q15_ = 0;
     directory_ = nullptr;
 }
 
@@ -761,13 +1041,20 @@ VoiceRenderResult Voice::renderAdd(
             vibrato_delay_remaining_ == 0 && vibrato_control_frames_remaining_ == 0;
         const bool mod_lfo_due = params_.mod_lfo.enabled &&
             mod_lfo_delay_remaining_ == 0 && mod_lfo_control_frames_remaining_ == 0;
-        if (vibrato_due || mod_lfo_due) {
-            refreshLfoState();
+        const bool mod_envelope_due = params_.mod_envelope.enabled &&
+            mod_envelope_control_frames_remaining_ == 0;
+
+        (void)nextModEnvelopeLevel();
+        if (vibrato_due || mod_lfo_due || mod_envelope_due) {
+            refreshModulationState();
             if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0) {
-                vibrato_control_frames_remaining_ = kLfoControlFrames;
+                vibrato_control_frames_remaining_ = kModulationControlFrames;
             }
             if (params_.mod_lfo.enabled && mod_lfo_delay_remaining_ == 0) {
-                mod_lfo_control_frames_remaining_ = kLfoControlFrames;
+                mod_lfo_control_frames_remaining_ = kModulationControlFrames;
+            }
+            if (params_.mod_envelope.enabled) {
+                mod_envelope_control_frames_remaining_ = kModulationControlFrames;
             }
         }
 
