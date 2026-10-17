@@ -290,6 +290,11 @@ public:
     bool beginExclusiveRelease(std::uint32_t fade_frames);
     bool applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update);
     VoiceRenderResult renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
+    // Realtime path: takes a bit-equivalent steady-Sustain fast path when safe
+    // and otherwise falls back to renderAdd(), which remains the reference path.
+    VoiceRenderResult renderAddRealtime(
+        std::int32_t* interleaved_stereo,
+        std::size_t frame_count);
     void reset();
 
     bool active() const { return active_; }
