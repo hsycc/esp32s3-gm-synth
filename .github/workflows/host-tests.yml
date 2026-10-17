@@ -163,6 +163,8 @@ jobs:
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            firmware/voice/GlobalEffectsProcessor.cpp \
             firmware/voice/AudioBlockRenderer.cpp \
             tests/voice/test_audio_block_renderer.cpp \
             -o build/host-tests/test_audio_block_renderer
