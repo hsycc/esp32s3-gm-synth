@@ -4,6 +4,7 @@
 #include "Sf2ModulationMath.h"
 #include "Sf2PdtaReader.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -19,6 +20,15 @@ struct ResolvedZoneModulation {
     std::int32_t velocity_to_mod_env_attack_timecents = 0;
     std::int32_t velocity_to_vol_env_attack_timecents = 0;
 
+    // Generic immutable NoteOn key/velocity routes to initialFilterFc. The
+    // default negative-linear velocity route remains in its dedicated field so
+    // existing replacement semantics stay bit-for-bit compatible; other
+    // direction/polarity/curve combinations are represented here instead of
+    // adding a field for every source-oper identity.
+    std::array<Sf2NoteOnSourceRoute, kSf2MaxNoteOnSourceRoutesPerDestination>
+        initial_filter_fc_note_on_routes{};
+    std::uint8_t initial_filter_fc_note_on_route_count = 0;
+
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t pan_amount = kSf2DefaultPanAmount;
     std::int32_t expression_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
@@ -33,6 +43,7 @@ struct ResolvedZoneModulation {
     std::uint16_t supported_velocity_attenuation_records = 0;
     std::uint16_t supported_velocity_filter_records = 0;
     std::uint16_t supported_velocity_dsp_records = 0;
+    std::uint16_t supported_note_on_source_records = 0;
     std::uint16_t supported_channel_control_records = 0;
     std::uint16_t supported_vibrato_records = 0;
     std::uint16_t supported_effects_send_records = 0;
