@@ -45,9 +45,12 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueVolumeEnvelopeDelayPending = std::uint64_t{1} << 12,
     PlaybackIssueVolumeEnvelopeHoldPending = std::uint64_t{1} << 13,
     PlaybackIssueVolumeEnvelopeKeyScalingPending = std::uint64_t{1} << 14,
-    // Static cutoff, NoteOn velocity and Mod-LFO cutoff movement are implemented.
-    // This bit now means non-zero resonance or modulation-envelope filter motion.
+    // Static cutoff, velocity, Mod-LFO and Mod-Envelope cutoff movement are
+    // represented. This bit now means non-zero resonance or unsupported output
+    // sample-rate filter qualification.
     PlaybackIssueFilterPending = std::uint64_t{1} << 15,
+    // Reserved historical diagnostic bit. SF2 modulation-envelope timing,
+    // key-scaled hold/decay and pitch/filter destinations are implemented now.
     PlaybackIssueModEnvelopePending = std::uint64_t{1} << 16,
     // Reserved historical diagnostic bit. Vibrato LFO and Mod-LFO pitch/filter/
     // volume destinations are implemented now; keep this bit stable but unused.
