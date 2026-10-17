@@ -21,6 +21,10 @@ struct NoteOnGainConfig {
     std::int32_t volume_to_attenuation_cb = 960;
     std::int32_t pan_amount = 500;
     std::int32_t expression_to_attenuation_cb = 960;
+    // Mono zones remain in the native -500..500 SF2 pan range. Expanded
+    // left/right stereo layers add their -500/+500 channel base before live
+    // CC10 is summed, so retaining -1000..1000 here is required to preserve
+    // the correct clamp history when a later controller moves back toward center.
     std::int16_t pan_sf2_units = 0;
     // -1 means use the incoming NoteOn velocity. SF2 generator 47 may replace
     // the velocity used by note-on modulators without changing zone selection.
@@ -28,7 +32,7 @@ struct NoteOnGainConfig {
 
     bool valid() const {
         return !enabled ||
-            (pan_sf2_units >= -500 && pan_sf2_units <= 500 &&
+            (pan_sf2_units >= -1000 && pan_sf2_units <= 1000 &&
              fixed_velocity >= -1 && fixed_velocity <= 127);
     }
 };
