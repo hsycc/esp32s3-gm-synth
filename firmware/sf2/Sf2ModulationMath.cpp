@@ -11,11 +11,6 @@
 namespace gm_synth::sf2 {
 namespace {
 
-// Q15 form of the SF2 concave curve shown in the 2.x controller model. Entry
-// n is concave(n) for n=0..127. It is generated from the documented curve
-//   -20/96 * log10((i*i)/(127*127)), i = 127-n
-// with endpoints fixed to 0 and 1. Negative-unipolar sources index it with
-// (127 - MIDI value).
 constexpr std::array<std::uint16_t, 128> kConcaveQ15{{
     0, 47, 94, 142, 190, 238, 287, 336, 386, 436, 486, 537, 589, 640, 693, 745,
     798, 852, 906, 961, 1016, 1072, 1128, 1185, 1242, 1300, 1358, 1417, 1477, 1537, 1598, 1659,
@@ -28,8 +23,6 @@ constexpr std::array<std::uint16_t, 128> kConcaveQ15{{
 }};
 
 constexpr std::uint32_t kQ30One = std::uint32_t{1} << 30u;
-// round(10^(-1/200) * 2^30). Repeated multiplication therefore evaluates
-// 10^(-centibels/200) without floating point or a 1441-entry amplitude table.
 constexpr std::uint32_t kOneCentibelGainQ30 = 1061450803u;
 
 std::uint32_t multiplyQ30(std::uint32_t a, std::uint32_t b) {
@@ -38,6 +31,15 @@ std::uint32_t multiplyQ30(std::uint32_t a, std::uint32_t b) {
 }
 
 std::int32_t multiplyQ15(std::int32_t a, std::int32_t b) {
+    if (a <= 0 || b <= 0) {
+        return 0;
+    }
+    if (a >= voice::kQ15Unity) {
+        return std::min<std::int32_t>(b, voice::kQ15Unity);
+    }
+    if (b >= voice::kQ15Unity) {
+        return std::min<std::int32_t>(a, voice::kQ15Unity);
+    }
     const std::int64_t product = static_cast<std::int64_t>(a) * b;
     return static_cast<std::int32_t>((product + (std::int64_t{1} << 14u)) >> 15u);
 }
@@ -53,19 +55,13 @@ void attenuationAndPanToGainQ15(
     const std::int32_t pan = static_cast<std::int32_t>(
         std::max<std::int64_t>(-500, std::min<std::int64_t>(500, pan_sf2_units)));
 
-    *gain_left_q15 = multiplyQ15(
-        amplitude_q15,
-        sf2PanChannelGainQ15(pan, true));
-    *gain_right_q15 = multiplyQ15(
-        amplitude_q15,
-        sf2PanChannelGainQ15(pan, false));
+    *gain_left_q15 = multiplyQ15(amplitude_q15, sf2PanChannelGainQ15(pan, true));
+    *gain_right_q15 = multiplyQ15(amplitude_q15, sf2PanChannelGainQ15(pan, false));
 }
 
 }  // namespace
 
-std::int32_t negativeConcaveToAmount(
-    std::uint8_t value,
-    std::int32_t amount) {
+std::int32_t negativeConcaveToAmount(std::uint8_t value, std::int32_t amount) {
     const unsigned clamped = std::min<unsigned>(value, 127u);
     const std::size_t curve_index = 127u - clamped;
     const std::int64_t scaled =
@@ -76,9 +72,7 @@ std::int32_t negativeConcaveToAmount(
     return -static_cast<std::int32_t>((-scaled + 16383) / 32767);
 }
 
-std::int32_t positiveLinearToAmount(
-    std::uint8_t value,
-    std::int32_t amount) {
+std::int32_t positiveLinearToAmount(std::uint8_t value, std::int32_t amount) {
     const std::int64_t scaled =
         static_cast<std::int64_t>(std::min<unsigned>(value, 127u)) * amount;
     if (scaled >= 0) {
@@ -87,22 +81,15 @@ std::int32_t positiveLinearToAmount(
     return -static_cast<std::int32_t>((-scaled + 64) / 128);
 }
 
-std::int32_t velocityToAttenuationCb(
-    std::uint8_t velocity,
-    std::int32_t amount_cb) {
+std::int32_t velocityToAttenuationCb(std::uint8_t velocity, std::int32_t amount_cb) {
     return negativeConcaveToAmount(velocity, amount_cb);
 }
 
-std::int32_t controllerToAttenuationCb(
-    std::uint8_t value,
-    std::int32_t amount_cb) {
+std::int32_t controllerToAttenuationCb(std::uint8_t value, std::int32_t amount_cb) {
     return negativeConcaveToAmount(value, amount_cb);
 }
 
-std::int32_t controllerToPanSf2Units(
-    std::uint8_t value,
-    std::int32_t amount) {
-    // Positive-bipolar linear SoundFont source: -1 + 2*v/128.
+std::int32_t controllerToPanSf2Units(std::uint8_t value, std::int32_t amount) {
     const std::int64_t bipolar_numerator =
         static_cast<std::int64_t>(2 * std::min<unsigned>(value, 127u)) - 128;
     const std::int64_t scaled = bipolar_numerator * amount;
@@ -112,9 +99,7 @@ std::int32_t controllerToPanSf2Units(
     return -static_cast<std::int32_t>((-scaled + 64) / 128);
 }
 
-std::int32_t controllerToEffectsSendSf2Units(
-    std::uint8_t value,
-    std::int32_t amount) {
+std::int32_t controllerToEffectsSendSf2Units(std::uint8_t value, std::int32_t amount) {
     return positiveLinearToAmount(value, amount);
 }
 
