@@ -316,6 +316,22 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         std::clamp<std::int32_t>(native.initialFilterQCb(), 0, 960));
     candidate.note_on_filter.velocity_to_resonance_cb =
         modulation.velocity_to_filter_q_cb;
+    const std::size_t source_route_count = std::min<std::size_t>(
+        modulation.initial_filter_fc_note_on_route_count,
+        modulation.initial_filter_fc_note_on_routes.size());
+    if (modulation.initial_filter_fc_note_on_route_count >
+        modulation.initial_filter_fc_note_on_routes.size()) {
+        issues |= PlaybackIssueCustomModulatorsPending;
+    }
+    for (std::size_t index = 0; index < source_route_count; ++index) {
+        const Sf2NoteOnSourceRoute& route = modulation.initial_filter_fc_note_on_routes[index];
+        if (!route.valid()) {
+            issues |= PlaybackIssueCustomModulatorsPending;
+            continue;
+        }
+        candidate.note_on_filter.additional_cutoff_routes[
+            candidate.note_on_filter.additional_cutoff_route_count++] = route;
+    }
 
     const std::int32_t static_vibrato_depth = native.generators.value(6, 0);
     candidate.vibrato_lfo.enabled =
