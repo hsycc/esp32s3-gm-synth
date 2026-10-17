@@ -18,6 +18,15 @@ std::int32_t scaleSend(std::int32_t sample, std::int32_t units) {
     if (sample == 0 || clamped == 0) {
         return 0;
     }
+    if (clamped == kMaxEffectsSendUnits) {
+        return sample;
+    }
+    if (clamped == kMaxEffectsSendUnits / 2) {
+        // Exact specialization of round(sample * 500 / 1000) with the same
+        // symmetric half-away-from-zero behavior as the generic formula.
+        // C++ signed / and % truncate toward zero, so q+r is exact here.
+        return sample / 2 + sample % 2;
+    }
     const std::int64_t product = static_cast<std::int64_t>(sample) * clamped;
     return product >= 0
         ? static_cast<std::int32_t>((product + kMaxEffectsSendUnits / 2) /
@@ -233,9 +242,11 @@ void VoicePool::renderAddWithEffects(
 
             const std::int32_t reverb_units = voice.reverbSendUnits();
             const std::int32_t chorus_units = voice.chorusSendUnits();
-            const bool needs_send_scratch =
-                (reverb_send_stereo != nullptr && reverb_units != 0) ||
-                (chorus_send_stereo != nullptr && chorus_units != 0);
+            const bool reverb_active = reverb_send_stereo != nullptr && reverb_units != 0;
+            const bool chorus_active = chorus_send_stereo != nullptr && chorus_units != 0;
+            const bool needs_send_scratch = reverb_active || chorus_active;
+            const bool shared_send_scale =
+                reverb_active && chorus_active && reverb_units == chorus_units;
 
             VoiceRenderResult result{};
             if (!needs_send_scratch) {
@@ -248,13 +259,19 @@ void VoicePool::renderAddWithEffects(
                 for (std::size_t index = 0; index < chunk_samples; ++index) {
                     const std::int32_t value = scratch[index];
                     interleaved_stereo[sample_offset + index] += value;
-                    if (reverb_send_stereo != nullptr && reverb_units != 0) {
-                        reverb_send_stereo[sample_offset + index] +=
-                            scaleSend(value, reverb_units);
-                    }
-                    if (chorus_send_stereo != nullptr && chorus_units != 0) {
-                        chorus_send_stereo[sample_offset + index] +=
-                            scaleSend(value, chorus_units);
+                    if (shared_send_scale) {
+                        const std::int32_t scaled = scaleSend(value, reverb_units);
+                        reverb_send_stereo[sample_offset + index] += scaled;
+                        chorus_send_stereo[sample_offset + index] += scaled;
+                    } else {
+                        if (reverb_active) {
+                            reverb_send_stereo[sample_offset + index] +=
+                                scaleSend(value, reverb_units);
+                        }
+                        if (chorus_active) {
+                            chorus_send_stereo[sample_offset + index] +=
+                                scaleSend(value, chorus_units);
+                        }
                     }
                 }
             }
