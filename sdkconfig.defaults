@@ -4,6 +4,12 @@
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
+# Audio/DSP timing qualification must use the same optimized build class that
+# will ship on hardware. ESP-IDF otherwise defaults this project to DEBUG/-Og,
+# which is useful for source debugging but invalid as a polyphony oracle.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE=y
+
 # Pin the physical-storage timing baseline explicitly. These are ESP-IDF v6.1
 # defaults for ESP32-S3, but keeping them here prevents a future IDF/default
 # change from silently invalidating Flash -> PSRAM benchmark comparisons.

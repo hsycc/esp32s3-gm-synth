@@ -5,6 +5,8 @@
 #ifdef CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "platform/EspRealtimeClock.h"
 #include "realtime/BlockEventScheduler.h"
@@ -32,9 +34,17 @@ constexpr std::size_t kWarmupBlocks = 16;
 constexpr std::size_t kMeasuredBlocks = realtime::RenderDeadlineMonitor::kWindowSize;
 constexpr std::array<std::size_t, 8> kVoiceCounts{{1, 4, 8, 12, 16, 18, 20, 24}};
 
+#if defined(CONFIG_COMPILER_OPTIMIZATION_PERF)
+constexpr char kCompilerOptimization[] = "perf";
+constexpr bool kPerformanceOptimizedBuild = true;
+#else
+constexpr char kCompilerOptimization[] = "non_perf";
+constexpr bool kPerformanceOptimizedBuild = false;
+#endif
+
 #ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
 constexpr char kTimingScope[] = "hardware";
-constexpr unsigned kPhysicalTimingEvidence = 1;
+constexpr unsigned kPhysicalTimingEvidence = kPerformanceOptimizedBuild ? 1u : 0u;
 #else
 constexpr char kTimingScope[] = "qemu_regression";
 constexpr unsigned kPhysicalTimingEvidence = 0;
@@ -102,6 +112,13 @@ std::uint64_t updateChecksum(
     return checksum;
 }
 
+void yieldToIdleTask() {
+    // This qualification runs from app_main without the real I2S task blocking
+    // cadence. Yield between measured cases so the IDLE0 watchdog can run. The
+    // delay sits completely outside warmup/measured render intervals.
+    vTaskDelay(1);
+}
+
 }  // namespace
 
 bool runOptionalRenderTimingBenchmark() {
@@ -142,16 +159,22 @@ bool runOptionalRenderTimingBenchmark() {
         return false;
     }
 
+    // Storage + Program Prepare run first in this one-shot image and can keep
+    // app_main continuously runnable for several seconds. Reset that artificial
+    // watchdog pressure before entering the timing matrix.
+    yieldToIdleTask();
+
     ESP_LOGI(
         kTag,
-        "render_bench: START frames_per_block=%u sample_rate=%u warmup_blocks=%u measured_blocks=%u budget_us=%u timing_scope=%s physical_timing_evidence=%u",
+        "render_bench: START frames_per_block=%u sample_rate=%u warmup_blocks=%u measured_blocks=%u budget_us=%u timing_scope=%s physical_timing_evidence=%u compiler_optimization=%s",
         static_cast<unsigned>(realtime::ScheduledAudioBlockRenderer::kFramesPerBlock),
         static_cast<unsigned>(kSampleRate),
         static_cast<unsigned>(kWarmupBlocks),
         static_cast<unsigned>(kMeasuredBlocks),
         static_cast<unsigned>(kBlockBudgetUs),
         kTimingScope,
-        kPhysicalTimingEvidence);
+        kPhysicalTimingEvidence,
+        kCompilerOptimization);
 
     std::uint64_t block_start_frame = 0;
     for (const std::size_t voice_count : kVoiceCounts) {
@@ -235,6 +258,8 @@ bool runOptionalRenderTimingBenchmark() {
             static_cast<unsigned long long>(case_misses),
             static_cast<unsigned long long>(case_clipped),
             static_cast<unsigned long long>(checksum));
+
+        yieldToIdleTask();
     }
 
     voices.allSoundOff();
@@ -249,12 +274,13 @@ bool runOptionalRenderTimingBenchmark() {
 
     ESP_LOGI(
         kTag,
-        "render_bench: PASS cases=%u final_refs=0 clock_faults=%llu duration_clamps=%llu timing_scope=%s physical_timing_evidence=%u",
+        "render_bench: PASS cases=%u final_refs=0 clock_faults=%llu duration_clamps=%llu timing_scope=%s physical_timing_evidence=%u compiler_optimization=%s",
         static_cast<unsigned>(kVoiceCounts.size()),
         static_cast<unsigned long long>(timed_renderer.stats().clock_faults),
         static_cast<unsigned long long>(timed_renderer.stats().duration_clamps),
         kTimingScope,
-        kPhysicalTimingEvidence);
+        kPhysicalTimingEvidence,
+        kCompilerOptimization);
     return true;
 }
 
