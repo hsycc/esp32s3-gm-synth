@@ -11,12 +11,7 @@
 namespace gm_synth::sf2 {
 
 enum class PlaybackPreparePolicy : std::uint8_t {
-    // Require every zone to be exact for the current runtime. With the current
-    // engine this intentionally rejects normal SF2 banks until mandatory
-    // channel-state/default modulators and the remaining DSP semantics land.
     StrictQualified = 0,
-    // Produce a playable snapshot when every zone is structurally representable
-    // while preserving the union of qualification issues for diagnostics.
     AllowPreview,
 };
 
@@ -41,8 +36,10 @@ struct PlaybackPrepareRequest {
     std::uint32_t bank_generation = 0;
     PlaybackPreparePolicy policy = PlaybackPreparePolicy::StrictQualified;
 
-    // Temporary control-domain workspace. These arrays may live in PSRAM and
-    // may be reused immediately after prepare() returns.
+    // Temporary control-domain workspace. Native/modulation scratch remains
+    // one entry per resolved SF2 zone. A valid stereo sample pair may expand to
+    // two long-lived PlaybackZone entries, so playback_capacity is checked
+    // independently after pair validation.
     NativeResolvedZone* native_scratch = nullptr;
     std::size_t native_capacity = 0;
     ResolvedZoneModulation* modulation_scratch = nullptr;
@@ -53,14 +50,11 @@ struct PlaybackPrepareRequest {
     gm::PlaybackZone* playback_zones = nullptr;
     std::size_t playback_capacity = 0;
 
-    // Unique sample IDs required by the resolved program. The same list may be
-    // passed directly to sample::ProgramPrepareController so residency and
-    // playback snapshots use one source of truth.
+    // Unique resident sample IDs required by the resolved program. Stereo
+    // pairs contribute both their left and right sample IDs.
     sample::SampleId* dependencies = nullptr;
     std::size_t dependency_capacity = 0;
 
-    // Written only on success. Caller owns the object and its publication
-    // lifetime just like PlaybackProgramSnapshotExchange requires.
     gm::PlaybackProgramSnapshot* snapshot = nullptr;
 };
 
@@ -69,7 +63,13 @@ struct PlaybackPrepareResult {
     ResolveProgramStatus resolve_status = ResolveProgramStatus::InvalidArgument;
     ZoneModulatorResolveStatus modulator_resolve_status =
         ZoneModulatorResolveStatus::InvalidArgument;
+
+    // zone_count is the final realtime PlaybackZone count after stereo pair
+    // expansion. native_zone_count is the 1:1 resolver/modulator scratch count.
     std::size_t zone_count = 0;
+    std::size_t native_zone_count = 0;
+    std::size_t stereo_pair_count = 0;
+    std::size_t required_native_capacity = 0;
     std::size_t required_zone_capacity = 0;
     std::size_t dependency_count = 0;
     std::size_t required_dependency_capacity = 0;
@@ -83,8 +83,9 @@ struct PlaybackPrepareResult {
 };
 
 // Control-domain bridge from a parsed SF2 bank to the immutable realtime
-// PlaybackProgramSnapshot. It performs count/native/modulator resolve passes and
-// a materialization preflight before mutating long-lived playback storage.
+// PlaybackProgramSnapshot. It resolves the native hierarchy first, validates
+// linked stereo pairs, expands left/right samples into two mono PlaybackZones,
+// then performs a transactional materialization preflight before publication.
 class Sf2PlaybackProgramPreparer {
 public:
     explicit Sf2PlaybackProgramPreparer(std::uint32_t output_sample_rate = 44100)
