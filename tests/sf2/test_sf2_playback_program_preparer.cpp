@@ -15,6 +15,7 @@ using gm_synth::gm::PlaybackProgramSnapshot;
 using gm_synth::gm::PlaybackZone;
 using gm_synth::sample::SampleId;
 using gm_synth::sf2::NativeResolvedZone;
+using gm_synth::sf2::PlaybackIssueCustomModulatorsPending;
 using gm_synth::sf2::PlaybackIssueDefaultModulatorsPending;
 using gm_synth::sf2::PlaybackIssueEffectsSendPending;
 using gm_synth::sf2::PlaybackPreparePolicy;
@@ -185,6 +186,61 @@ void testStrictQualificationAcceptsEffectsCompleteProgram() {
     assert(snapshot.zone_count == 1);
 }
 
+void testCheckedInFmBaselineAllPresetsStrictlyPrepare() {
+    FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
+    assert(reader.valid());
+    Sf2PdtaReader pdta;
+    assert(pdta.begin(reader));
+
+    // This checked-in qualification subset currently contains 67 bank-0
+    // melodic presets and no bank-128 drum preset. This is deliberately a
+    // breadth gate for the asset we actually ship in CI, not a claim that the
+    // final GM128 + drum product qualification is complete.
+    assert(pdta.presetCount() == 67);
+
+    std::array<NativeResolvedZone, 256> native{};
+    std::array<ResolvedZoneModulation, 256> modulation{};
+    std::array<PlaybackZone, 256> playback{};
+    std::array<SampleId, 256> dependencies{};
+    Sf2PlaybackProgramPreparer preparer;
+
+    for (std::size_t preset_index = 0; preset_index < pdta.presetCount(); ++preset_index) {
+        Sf2PdtaReader::PresetHeader preset{};
+        assert(pdta.presetHeader(preset_index, &preset));
+        assert(preset.bank == 0);
+
+        PlaybackProgramSnapshot snapshot{};
+        PlaybackPrepareRequest request = requestFor(
+            native.data(), native.size(),
+            modulation.data(), modulation.size(),
+            playback.data(), playback.size(),
+            dependencies.data(), dependencies.size(),
+            &snapshot);
+        request.bank = preset.bank;
+        request.program = preset.program;
+        request.token = static_cast<std::uint32_t>(preset_index + 1u);
+        request.policy = PlaybackPreparePolicy::StrictQualified;
+
+        const auto result = preparer.prepare(pdta, request);
+        assert(result.status == PlaybackPrepareStatus::Ok);
+        assert(result.resolve_status == ResolveProgramStatus::Ok);
+        assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
+        assert(result.native_zone_count == 1);
+        assert(result.zone_count == 1);
+        assert(result.stereo_pair_count == 0);
+        assert(result.unsupported_modulator_records == 0);
+        assert(result.preview_zone_count == 0);
+        assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) == 0);
+        assert((result.issue_union & PlaybackIssueCustomModulatorsPending) == 0);
+        assert((result.issue_union & PlaybackIssueEffectsSendPending) == 0);
+        assert(snapshot.valid());
+        assert(snapshot.bank == preset.bank);
+        assert(snapshot.program == preset.program);
+        assert(snapshot.zone_count == result.zone_count);
+        assert(playback[0].valid());
+    }
+}
+
 void testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch() {
     FileReader reader("assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2");
     assert(reader.valid());
@@ -257,6 +313,7 @@ void testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones() {
     }
     assert(result.supported_modulator_records == expected_supported);
     assert(result.unsupported_modulator_records == expected_unsupported);
+    assert(result.unsupported_modulator_records == 0);
 
     assert(result.required_dependency_capacity > dependencies.size());
     assert(snapshot.token == 55);
@@ -340,6 +397,7 @@ void testInvalidIdentityDoesNotTouchOutputs() {
 int main() {
     testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes();
     testStrictQualificationAcceptsEffectsCompleteProgram();
+    testCheckedInFmBaselineAllPresetsStrictlyPrepare();
     testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch();
     testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones();
     testModulationCapacityParticipatesInZonePreflight();
