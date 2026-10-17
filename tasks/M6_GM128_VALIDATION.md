@@ -23,6 +23,21 @@ Required host checks:
 
 Passing this host gate establishes parser/resolver/materializer/control-domain semantics for the checked-in GM bank. It does **not** by itself prove audible quality, physical realtime margin, storage timing, or guaranteed polyphony.
 
+## Automated host runtime-control gate
+
+The full-bank integration test also exercises the production-shaped transaction across
+`RealtimeProgramChangeRouter -> ProgramChangeControlService -> ProgramPrepareController -> sample residency/publication -> paired READY snapshots -> block-boundary commit -> ACK -> RealtimeProgramEventApplier/VoicePool`.
+
+Required runtime-control checks:
+- an initially activated full-bank melodic snapshot can immediately resolve NoteOn and start a Voice from the published resident sample;
+- channel 1 can change from program 0 to program 127 through the complete realtime/control/commit transaction and then start a Voice from program 127;
+- MIDI Channel 10 remains mapped to SF2 bank 128 through the same transaction and can start the standard kick-drum note;
+- GM Reset emits 16 latest-wins Program Change requests, all 16 channels prepare compatible residency/playback READY generations, all 16 commit at one audio-block boundary, and all 16 ACK/retire their old generations;
+- after the GM Reset commit, every channel can independently start a NoteOn using its active snapshot, with Channel 10 using the bank-128 drum snapshot;
+- no missing-active-program, percussion-fallback, residency-prepare, playback-prepare, or paired-publication invariant failure is accepted.
+
+The host integration arena is intentionally oversized (16 MiB) so this gate isolates transaction/lifetime correctness from product-capacity admission. It is **not** a change to the N16R8 product target. The 4 MiB initial PCM arena must still be qualified separately for real full-bank active+READY transitions and cache/eviction pressure.
+
 ## Functional matrix
 Test all required paths:
 - melodic programs 0–127
