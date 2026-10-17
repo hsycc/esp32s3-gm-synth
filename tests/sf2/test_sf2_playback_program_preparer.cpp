@@ -103,8 +103,7 @@ void testFmProgramPreparesSnapshotAndResolvedDefaultRoutes() {
     std::array<SampleId, 8> dependencies{};
     PlaybackProgramSnapshot snapshot{};
 
-    Sf2PlaybackProgramPreparer preparer;
-    const auto result = preparer.prepare(
+    const auto result = Sf2PlaybackProgramPreparer{}.prepare(
         pdta,
         requestFor(
             native.data(), native.size(),
@@ -117,6 +116,9 @@ void testFmProgramPreparesSnapshotAndResolvedDefaultRoutes() {
     assert(result.resolve_status == ResolveProgramStatus::Ok);
     assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
     assert(result.zone_count == 1);
+    assert(result.native_zone_count == 1);
+    assert(result.stereo_pair_count == 0);
+    assert(result.required_native_capacity == 1);
     assert(result.required_zone_capacity == 1);
     assert(result.dependency_count == 1);
     assert(result.required_dependency_capacity == 1);
@@ -138,6 +140,8 @@ void testFmProgramPreparesSnapshotAndResolvedDefaultRoutes() {
     assert(playback[0].note_on_gain.enabled);
     assert(playback[0].note_on_gain.velocity_to_attenuation_cb == 960);
     assert(playback[0].note_on_gain.fixed_velocity == -1);
+    assert(playback[0].note_on_filter.velocity_to_resonance_cb == 0);
+    assert(playback[0].velocity_to_vol_env_attack_timecents == 0);
     assert(playback[0].vibrato_lfo.enabled);
     assert(playback[0].vibrato_lfo.channel_pressure_to_pitch_cents == 50);
     assert(playback[0].vibrato_lfo.modulation_wheel_to_pitch_cents == 50);
@@ -171,6 +175,8 @@ void testStrictQualificationRejectsBeforeMutatingPlaybackStorage() {
     assert(result.status == PlaybackPrepareStatus::UnqualifiedZone);
     assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
     assert(result.first_problem_zone == 0);
+    assert(result.zone_count == 1);
+    assert(result.native_zone_count == 1);
     assert(result.preview_zone_count == 1);
     assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) == 0);
     assert((result.issue_union & PlaybackIssueEffectsSendPending) != 0);
@@ -201,6 +207,8 @@ void testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch() {
             dependencies.data(), dependencies.size(),
             &snapshot));
     assert(result.status == PlaybackPrepareStatus::ZoneCapacityExceeded);
+    assert(result.required_native_capacity == 200);
+    assert(result.native_zone_count == 200);
     assert(result.required_zone_capacity == 200);
     assert(result.zone_count == 0);
     assert(snapshot.token == 88);
@@ -230,14 +238,18 @@ void testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones() {
     assert(result.status == PlaybackPrepareStatus::DependencyCapacityExceeded);
     assert(result.resolve_status == ResolveProgramStatus::Ok);
     assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
+    assert(result.native_zone_count == 200);
     assert(result.zone_count == 200);
+    assert(result.stereo_pair_count == 0);
     assert(result.supported_modulator_records > 0);
 
     std::uint32_t expected_supported = 0;
     std::uint32_t expected_unsupported = 0;
-    for (std::size_t index = 0; index < result.zone_count; ++index) {
+    for (std::size_t index = 0; index < result.native_zone_count; ++index) {
         expected_supported += modulation[index].supported_velocity_attenuation_records;
         expected_supported += modulation[index].supported_velocity_filter_records;
+        expected_supported += modulation[index].supported_velocity_dsp_records;
+        expected_supported += modulation[index].supported_channel_control_records;
         expected_supported += modulation[index].supported_vibrato_records;
         expected_supported += modulation[index].supported_effects_send_records;
         expected_unsupported += modulation[index].unsupported_modulator_records;
@@ -270,6 +282,7 @@ void testModulationCapacityParticipatesInZonePreflight() {
 
     const auto result = Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
     assert(result.status == PlaybackPrepareStatus::ZoneCapacityExceeded);
+    assert(result.required_native_capacity == 1);
     assert(result.required_zone_capacity == 1);
     assert(snapshot.token == 66);
 }
@@ -307,7 +320,6 @@ void testInvalidIdentityDoesNotTouchOutputs() {
     PlaybackProgramSnapshot snapshot{};
     snapshot.token = 91;
 
-    // pdta is intentionally unopened: request validation must fail first.
     Sf2PdtaReader pdta;
     PlaybackPrepareRequest request = requestFor(
         &native, 1,
