@@ -237,7 +237,7 @@ void testVibratoGeneratorsAndControllerRoutesAreMaterialized() {
     assert(output.vibrato_lfo.modulation_wheel_to_pitch_cents == 70);
 }
 
-void testUnsupportedDynamicFilterModulationAndEffectsAreReported() {
+void testRemainingDynamicEnvelopeAndEffectsAreReported() {
     NativeResolvedZone native = baseZone();
     native.generators.set(33, 0);
     native.generators.set(35, 0);
@@ -245,7 +245,9 @@ void testUnsupportedDynamicFilterModulationAndEffectsAreReported() {
     native.generators.set(8, 12000);
     native.generators.set(11, 1200);
     native.generators.set(25, 0);
-    native.generators.set(5, 25);  // mod-LFO pitch remains pending
+    native.generators.set(5, 25);
+    native.generators.set(10, 600);
+    native.generators.set(13, 100);
     native.generators.set(21, 0);
     native.generators.set(15, 300);
     native.generators.set(16, 400);
@@ -261,7 +263,11 @@ void testUnsupportedDynamicFilterModulationAndEffectsAreReported() {
     assert(output.envelope_key_scaling.hold_timecents_per_key == 100);
     assert(result.hasIssue(PlaybackIssueFilterPending));
     assert(result.hasIssue(PlaybackIssueModEnvelopePending));
-    assert(result.hasIssue(PlaybackIssueLfoPending));
+    assert(!result.hasIssue(PlaybackIssueLfoPending));
+    assert(output.mod_lfo.enabled);
+    assert(output.mod_lfo.pitch_depth_cents == 25);
+    assert(output.mod_lfo.filter_depth_cents == 600);
+    assert(output.mod_lfo.volume_depth_cb == 100);
     assert(result.hasIssue(PlaybackIssueEffectsSendPending));
     assert(result.hasIssue(PlaybackIssueFixedVelocityPending));
     assert(result.hasIssue(PlaybackIssueCustomModulatorsPending));
@@ -365,7 +371,7 @@ int main() {
     testEnvelopeFieldsAreConvertedFromNativeSf2Units();
     testStaticFilterAndVelocityRouteAreMaterialized();
     testVibratoGeneratorsAndControllerRoutesAreMaterialized();
-    testUnsupportedDynamicFilterModulationAndEffectsAreReported();
+    testRemainingDynamicEnvelopeAndEffectsAreReported();
     testStaticPanAndGainRemainExplicitApproximations();
     testHardAddressFailureDoesNotMutateOutput();
     testHardLoopSampleModeRomAndStereoFailuresAreExplicit();
