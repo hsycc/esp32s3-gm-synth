@@ -17,8 +17,8 @@ bash scripts/run_phase_g_fast_host_tests.sh
 
 The fast runner preserves the existing 23-step Phase G build/test matrix but
 omits only the full-FM calls embedded in the preparer and Program Change test
-entry points. Their source files are restored before the runner exits. The 6 MiB
-checked-in fixtures remain the normal semantic/regression baseline.
+entry points. The 6 MiB checked-in fixtures remain the normal semantic/regression
+baseline.
 
 ## Full-bank GM qualification
 
@@ -28,7 +28,7 @@ checked-in fixtures remain the normal semantic/regression baseline.
 bash scripts/run_gm128_full_bank_tests.sh
 ```
 
-The dedicated lane has three gates:
+The dedicated lane has four gates:
 
 1. `test_full_gm128_qualification` scans the actual full bank and runs every
    tracked preset through `PlaybackPreparePolicy::StrictQualified`.
@@ -44,48 +44,70 @@ The dedicated lane has three gates:
    representative 15-melodic-plus-drum 16-channel voice workload with dense
    piano, sustain/release, repeated retrigger, drum bursts and live controller
    changes.
+4. `test_full_gm128_capacity` derives the representative 16-channel Active
+   dependency union, scans every bank-0 melodic READY candidate while the old
+   Active set remains pinned, identifies the largest Active+READY union, then
+   runs the real residency/publication/READY/commit/ACK transaction against
+   4.00/4.25/4.50/4.75/5.00/5.50/6.00 MiB arenas. This produces a host capacity
+   bracket without prematurely changing the N16R8 product default.
 
 The qualification report is uploaded as the
 `gm128-full-bank-qualification` Actions artifact and the `GM128_*` lines are
 also copied to the workflow summary.
 
+## Current tracked-bank findings
+
+The full FM asset contains 5760 presets across 45 banks, with 128 programs in
+each bank. All 5760 presets pass StrictQualified preparation with zero preview
+zones and zero unsupported modulator records. The file contains 175 samples;
+this asset itself has no non-zero pmod/imod records and no stereo pairs, so the
+separate GeneralUser/FluidR3 compatibility fixtures remain necessary for those
+features.
+
+The heaviest single prepared program is bank 128 / program 0 at 47 playback
+zones and 47 sample dependencies. Its aligned PCM working set is 2,969,748
+bytes.
+
+The first product-sized stress run established:
+
+- bank-0 programs 0-127 complete 127 sequential Program Change transactions in
+  a 4 MiB arena;
+- the melodic sweep reaches 4,184,380 bytes high-water and performs 92 safe
+  cache evictions / capacity retries;
+- bank-128 programs 0-127 complete the same sweep with a 2,969,748-byte
+  high-water and no eviction;
+- real Bank Select reaches a full-bank variation bank and a burst of 128
+  Program Changes coalesces to one latest-wins request;
+- the representative 15-melodic-plus-drum 16-channel Active set consumes
+  4,310,396 aligned PCM bytes, which is 116,092 bytes above the current 4 MiB
+  arena default;
+- the corresponding functional workload reaches 16 active Voices with zero
+  voice-start failures and zero sample acquire misses.
+
+Therefore 4 MiB is already proven for complete single-channel GM128 switching,
+but it is not large enough for the representative 16-channel Active set. The
+capacity-curve gate determines the next useful host bound; the production arena
+default must still wait for N16R8 PSRAM headroom measurements.
+
 ## Reported metrics
 
-The structure report records the bank topology and runtime-facing resource
-bounds:
+The structure report records bank topology, resolved/playback zone bounds,
+sample dependency counts, per-program PCM working sets, Prepare workspace,
+modulator identities and preview/unsupported counts.
 
-- total presets and exact bank/program coverage,
-- melodic and percussion preset counts,
-- sample count and `smpl` payload bytes,
-- total and maximum native resolved zones,
-- total and maximum final playback zones after stereo expansion,
-- stereo-pair count,
-- total, maximum and unique sample dependencies,
-- largest per-program logical/aligned PCM dependency working set,
-- maximum combined Prepare scratch/publication storage requirement,
-- supported/unsupported modulator record counts,
-- non-zero `pmod` / `imod` source-destination identity tuples,
-- preview-zone count.
+The stress/capacity reports add:
 
-The stress report adds:
-
-- 4 MiB melodic/drum Program Change transition counts,
-- 4 MiB sample-arena high-water marks,
+- 4 MiB melodic/drum Program Change transition counts and high-water marks,
 - safe cache eviction/retry counts and evicted bytes,
-- real full-bank Bank Select and rapid Program Change coalescing coverage,
-- representative 16-channel resident bytes/high-water data,
-- peak active voice count and total starts,
-- voice-start failures,
-- exclusive-class choke activity,
-- published-sample acquire misses.
-
-The semantic gate requires all bank-0 programs 0-127, the standard
-bank-128/program-0 drum kit, representative key/velocity coverage, GM drum keys
-35-81, zero unsupported modulators and zero preview zones. The stress gate
-requires complete single-channel 128-program melodic and percussion sweeps in a
-4 MiB sample arena with no prepare/publication invariant failures.
+- full-bank Bank Select and rapid Program Change coalescing coverage,
+- representative 16-channel resident/high-water bytes,
+- peak active Voice count, starts/failures and sample-acquire misses,
+- representative Active dependency union,
+- worst bank-0 Active+READY dependency union and candidate identity,
+- pass/fail/commit result for each tested sample-arena capacity,
+- first tested arena size that completes the real Active+READY transaction.
 
 These host metrics establish semantic, residency and bounded voice-behavior
-coverage. They do **not** replace N16R8 measurements for storage latency, PSRAM
-headroom outside the sample arena, DSP CPU, I2S deadline misses, underruns or
-stable guaranteed polyphony.
+coverage. They do **not** replace N16R8 measurements for storage latency, total
+PSRAM headroom outside the sample arena, DSP CPU, 64-frame I2S deadline misses,
+underruns or stable guaranteed polyphony.
