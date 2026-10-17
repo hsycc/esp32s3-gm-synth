@@ -389,13 +389,13 @@ bool runOptionalRenderTimingBenchmark() {
         diagnostic_mix.fill(0);
         diagnostic_reverb.fill(0);
         diagnostic_chorus.fill(0);
-        const std::uint64_t start_us = platform::espRealtimeNowUs();
+        const std::uint64_t start_us = platform::espRealtimeNowUs(nullptr);
         voices.renderAddWithEffects(
             diagnostic_mix.data(),
             diagnostic_reverb.data(),
             diagnostic_chorus.data(),
             realtime::ScheduledAudioBlockRenderer::kFramesPerBlock);
-        const std::uint64_t end_us = platform::espRealtimeNowUs();
+        const std::uint64_t end_us = platform::espRealtimeNowUs(nullptr);
         diagnostic_samples[block] = elapsedUs(start_us, end_us);
         voice_only_checksum = updateWideChecksum(voice_only_checksum, diagnostic_mix);
     }
@@ -428,9 +428,9 @@ bool runOptionalRenderTimingBenchmark() {
     std::uint64_t fx_checksum = 1469598103934665603ull;
     std::uint64_t fx_nonzero_samples = 0;
     for (std::size_t block = 0; block < kMeasuredBlocks; ++block) {
-        const std::uint64_t start_us = platform::espRealtimeNowUs();
+        const std::uint64_t start_us = platform::espRealtimeNowUs(nullptr);
         renderer.render(block_start_frame, output.data());
-        const std::uint64_t end_us = platform::espRealtimeNowUs();
+        const std::uint64_t end_us = platform::espRealtimeNowUs(nullptr);
         block_start_frame += realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
         diagnostic_samples[block] = elapsedUs(start_us, end_us);
         fx_checksum = updateChecksum(fx_checksum, output, &fx_nonzero_samples);
