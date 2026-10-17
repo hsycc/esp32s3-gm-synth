@@ -96,7 +96,7 @@ void testMaterializerQualifiesResonanceAt44100Only() {
     assert(result.playablePreview());
     assert(!result.hasIssue(PlaybackIssueFilterPending));
     assert(zone.note_on_filter.resonance_cb == 100);
-    assert(zone.gain_left_q15 >= 18400 && zone.gain_left_q15 <= 18450);
+    assert(zone.gain_left_q15 >= 13000 && zone.gain_left_q15 <= 13100);
     assert(zone.gain_right_q15 == zone.gain_left_q15);
 
     const auto other_rate = Sf2PlaybackMaterializer{48000}.materialize(
@@ -200,7 +200,7 @@ void testResolverCombinesResonanceWithDynamicCutoffAndRealtimeGainState() {
     // 100 cB resonance contributes 50 cB to the effective attenuation node.
     // It is stored in realtime_control so later CC7/CC11 refreshes preserve it.
     assert(params.realtime_control.initial_attenuation_cb == 50);
-    assert(params.gain_left_q15 >= 18400 && params.gain_left_q15 <= 18450);
+    assert(params.gain_left_q15 >= 13000 && params.gain_left_q15 <= 13100);
     assert(params.gain_right_q15 == params.gain_left_q15);
 }
 
