@@ -92,6 +92,44 @@ PlaybackPrepareRequest requestFor(
     return request;
 }
 
+void assertStrictQualifiedResult(
+    const gm_synth::sf2::PlaybackPrepareResult& result,
+    const PlaybackProgramSnapshot& snapshot,
+    std::uint16_t bank,
+    std::uint8_t program) {
+    assert(result.status == PlaybackPrepareStatus::Ok);
+    assert(result.resolve_status == ResolveProgramStatus::Ok);
+    assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
+    assert(result.native_zone_count > 0);
+    assert(result.zone_count > 0);
+    assert(result.zone_count <= PlaybackProgramSnapshot::kMaxZones);
+    assert(result.dependency_count > 0);
+    assert(result.unsupported_modulator_records == 0);
+    assert(result.preview_zone_count == 0);
+    assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) == 0);
+    assert((result.issue_union & PlaybackIssueCustomModulatorsPending) == 0);
+    assert((result.issue_union & PlaybackIssueEffectsSendPending) == 0);
+    assert(snapshot.valid());
+    assert(snapshot.bank == bank);
+    assert(snapshot.program == program);
+    assert(snapshot.zone_count == result.zone_count);
+    for (std::size_t zone_index = 0; zone_index < snapshot.zone_count; ++zone_index) {
+        assert(snapshot.zones[zone_index].valid());
+    }
+}
+
+bool anyZoneMatches(
+    const PlaybackProgramSnapshot& snapshot,
+    std::uint8_t key,
+    std::uint8_t velocity) {
+    for (std::size_t zone_index = 0; zone_index < snapshot.zone_count; ++zone_index) {
+        if (snapshot.zones[zone_index].matches(key, velocity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes() {
     FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
     assert(reader.valid());
@@ -193,9 +231,8 @@ void testCheckedInFmBaselineAllPresetsStrictlyPrepare() {
     assert(pdta.begin(reader));
 
     // This checked-in qualification subset currently contains 67 bank-0
-    // melodic presets and no bank-128 drum preset. This is deliberately a
-    // breadth gate for the asset we actually ship in CI, not a claim that the
-    // final GM128 + drum product qualification is complete.
+    // melodic presets and no bank-128 drum preset. It remains a compact fast
+    // fixture; the full tracked FM bank is qualified separately below.
     assert(pdta.presetCount() == 67);
 
     std::array<NativeResolvedZone, 256> native{};
@@ -238,6 +275,89 @@ void testCheckedInFmBaselineAllPresetsStrictlyPrepare() {
         assert(snapshot.program == preset.program);
         assert(snapshot.zone_count == result.zone_count);
         assert(playback[0].valid());
+    }
+}
+
+void testFullFmGm128MelodicProgramsStrictlyPrepare() {
+    FileReader reader("assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2");
+    assert(reader.valid());
+    Sf2PdtaReader pdta;
+    assert(pdta.begin(reader));
+    assert(pdta.presetCount() >= 129);
+
+    std::array<NativeResolvedZone, PlaybackProgramSnapshot::kMaxZones> native{};
+    std::array<ResolvedZoneModulation, PlaybackProgramSnapshot::kMaxZones> modulation{};
+    std::array<PlaybackZone, PlaybackProgramSnapshot::kMaxZones> playback{};
+    std::array<SampleId, PlaybackProgramSnapshot::kMaxZones> dependencies{};
+    Sf2PlaybackProgramPreparer preparer;
+    constexpr std::array<std::uint8_t, 3> representative_keys{{0, 60, 127}};
+
+    for (std::uint16_t program = 0; program < 128; ++program) {
+        PlaybackProgramSnapshot snapshot{};
+        PlaybackPrepareRequest request = requestFor(
+            native.data(), native.size(),
+            modulation.data(), modulation.size(),
+            playback.data(), playback.size(),
+            dependencies.data(), dependencies.size(),
+            &snapshot);
+        request.bank = 0;
+        request.program = program;
+        request.token = static_cast<std::uint32_t>(program + 1u);
+        request.policy = PlaybackPreparePolicy::StrictQualified;
+
+        const auto result = preparer.prepare(pdta, request);
+        assertStrictQualifiedResult(
+            result,
+            snapshot,
+            0,
+            static_cast<std::uint8_t>(program));
+        for (const std::uint8_t key : representative_keys) {
+            assert(anyZoneMatches(snapshot, key, 96));
+        }
+    }
+}
+
+void testFullFmStandardDrumKitStrictlyPreparesAndCoversGmKeys() {
+    FileReader reader("assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2");
+    assert(reader.valid());
+    Sf2PdtaReader pdta;
+    assert(pdta.begin(reader));
+
+    std::array<NativeResolvedZone, PlaybackProgramSnapshot::kMaxZones> native{};
+    std::array<ResolvedZoneModulation, PlaybackProgramSnapshot::kMaxZones> modulation{};
+    std::array<PlaybackZone, PlaybackProgramSnapshot::kMaxZones> playback{};
+    std::array<SampleId, PlaybackProgramSnapshot::kMaxZones> dependencies{};
+    PlaybackProgramSnapshot snapshot{};
+
+    PlaybackPrepareRequest request = requestFor(
+        native.data(), native.size(),
+        modulation.data(), modulation.size(),
+        playback.data(), playback.size(),
+        dependencies.data(), dependencies.size(),
+        &snapshot);
+    request.channel = 9;
+    request.bank = 128;
+    request.program = 0;
+    request.token = 129;
+    request.policy = PlaybackPreparePolicy::StrictQualified;
+
+    const auto result = Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
+    assertStrictQualifiedResult(result, snapshot, 128, 0);
+    assert(snapshot.channel == 9);
+
+    for (std::uint16_t key = 35; key <= 81; ++key) {
+        bool covered = false;
+        bool fixed_pitch = false;
+        for (std::size_t zone_index = 0; zone_index < snapshot.zone_count; ++zone_index) {
+            const PlaybackZone& zone = snapshot.zones[zone_index];
+            if (key >= zone.key_low && key <= zone.key_high) {
+                covered = true;
+                fixed_pitch = fixed_pitch ||
+                    (!zone.key_tracking && zone.scale_tuning_cents_per_key == 0);
+            }
+        }
+        assert(covered);
+        assert(fixed_pitch);
     }
 }
 
@@ -398,6 +518,8 @@ int main() {
     testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes();
     testStrictQualificationAcceptsEffectsCompleteProgram();
     testCheckedInFmBaselineAllPresetsStrictlyPrepare();
+    testFullFmGm128MelodicProgramsStrictlyPrepare();
+    testFullFmStandardDrumKitStrictlyPreparesAndCoversGmKeys();
     testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch();
     testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones();
     testModulationCapacityParticipatesInZonePreflight();
