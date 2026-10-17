@@ -68,6 +68,17 @@ std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) 
         : velocity;
 }
 
+std::uint64_t keyTrackedPhaseIncrement(const PlaybackZone& zone, std::uint8_t key) {
+    if (!zone.key_tracking) {
+        return zone.root_phase_increment_q32;
+    }
+    const int key_delta = static_cast<int>(key) - static_cast<int>(zone.root_key);
+    const int cents_delta = key_delta * static_cast<int>(zone.scale_tuning_cents_per_key);
+    return cents_delta == 0
+        ? zone.root_phase_increment_q32
+        : ZoneResolver::transposeCents(zone.root_phase_increment_q32, cents_delta);
+}
+
 std::int32_t effectiveInitialAttenuationCb(const PlaybackZone& zone) {
     const std::int64_t summed =
         static_cast<std::int64_t>(zone.note_on_gain.initial_attenuation_cb) +
@@ -498,11 +509,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.velocity = effective_velocity;
         params.exclusive_class = zone.exclusive_class;
         params.note_instance_id = note_instance_id;
-        params.phase_increment_q32 = zone.key_tracking
-            ? transposeSemitones(
-                  zone.root_phase_increment_q32,
-                  static_cast<int>(key) - static_cast<int>(zone.root_key))
-            : zone.root_phase_increment_q32;
+        params.phase_increment_q32 = keyTrackedPhaseIncrement(zone, key);
         params.loop_mode = zone.loop_mode;
         params.sample_region = zone.sample_region;
         params.gain_left_q15 = zone.gain_left_q15;
@@ -592,11 +599,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.exclusive_class = zone.exclusive_class;
         params.note_instance_id = note_instance_id;
 
-        const std::uint64_t key_increment = zone.key_tracking
-            ? transposeSemitones(
-                  zone.root_phase_increment_q32,
-                  static_cast<int>(key) - static_cast<int>(zone.root_key))
-            : zone.root_phase_increment_q32;
+        const std::uint64_t key_increment = keyTrackedPhaseIncrement(zone, key);
         params.phase_increment_q32 = bend_cents == 0
             ? key_increment
             : transposeCents(key_increment, bend_cents);
