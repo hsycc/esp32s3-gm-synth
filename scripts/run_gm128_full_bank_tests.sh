@@ -57,7 +57,7 @@ printf 'GM128 full-bank qualification\n'
 printf '  compiler: %s\n' "${CXX}"
 printf '  output:   %s\n' "${BUILD_DIR}"
 
-printf '\n[1/4] Build and run full-bank structure / StrictQualified report\n'
+printf '\n[1/5] Build and run full-bank structure / StrictQualified report\n'
 build_and_run test_full_gm128_qualification \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -68,19 +68,24 @@ build_and_run test_full_gm128_qualification \
   firmware/sf2/Sf2SampleSource.cpp \
   tests/gm/test_full_gm128_qualification.cpp
 
-printf '\n[2/4] Build and run full-bank runtime-control transactions\n'
+printf '\n[2/5] Build and run full-bank runtime-control transactions\n'
 build_and_run test_full_gm128_runtime -pthread \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_program_change_control_service.cpp
 
-printf '\n[3/4] Build and run full-bank 4 MiB / 16-channel stress qualification\n'
+printf '\n[3/5] Build and run full-bank 4 MiB / 16-channel stress qualification\n'
 build_and_run test_full_gm128_stress -pthread \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_full_gm128_stress.cpp
 
-printf '\n[4/4] Build and run 16-channel Active+READY capacity curve\n'
+printf '\n[4/5] Build and run 16-channel Active+READY capacity curve\n'
 build_and_run test_full_gm128_capacity -pthread \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_full_gm128_capacity.cpp
+
+printf '\n[5/5] Build and run discovery-driven 32-second host soak\n'
+build_and_run test_full_gm128_soak -pthread \
+  "${RUNTIME_SOURCES[@]}" \
+  tests/gm/test_full_gm128_soak.cpp
 
 printf '\nGM128 full-bank qualification passed.\n'

@@ -12,6 +12,7 @@ on:
       - "tests/gm/test_full_gm128_qualification.cpp"
       - "tests/gm/test_full_gm128_stress.cpp"
       - "tests/gm/test_full_gm128_capacity.cpp"
+      - "tests/gm/test_full_gm128_soak.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_gm128_full_bank_tests.sh"
@@ -25,6 +26,7 @@ on:
       - "tests/gm/test_full_gm128_qualification.cpp"
       - "tests/gm/test_full_gm128_stress.cpp"
       - "tests/gm/test_full_gm128_capacity.cpp"
+      - "tests/gm/test_full_gm128_soak.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_gm128_full_bank_tests.sh"
@@ -33,7 +35,7 @@ on:
 jobs:
   qualify-full-fm-gm128:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - name: Verify tracked full bank is present

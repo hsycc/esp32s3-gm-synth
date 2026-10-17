@@ -15,10 +15,8 @@ normal Phase G semantic loop depend on a 14+ MB bank scan.
 bash scripts/run_phase_g_fast_host_tests.sh
 ```
 
-The fast runner preserves the existing 23-step Phase G build/test matrix but
-omits only the full-FM calls embedded in the preparer and Program Change test
-entry points. The 6 MiB checked-in fixtures remain the normal semantic/regression
-baseline.
+The fast runner preserves the existing Phase G build/test matrix while the full
+14+ MB bank work stays in the dedicated GM128 lane.
 
 ## Full-bank GM qualification
 
@@ -28,32 +26,31 @@ baseline.
 bash scripts/run_gm128_full_bank_tests.sh
 ```
 
-The dedicated lane has four gates:
+The dedicated lane has five gates:
 
 1. `test_full_gm128_qualification` scans the actual full bank and runs every
    tracked preset through `PlaybackPreparePolicy::StrictQualified`.
 2. The canonical `test_program_change_control_service` integration binary
-   exercises the production residency/publication/READY/commit/ACK/NoteOn path,
-   including full-FM Program Change, channel-10 percussion and 16-channel GM
-   Reset.
-3. `test_full_gm128_stress` exercises product-sized 4 MiB residency pressure
-   and the full-bank functional stress baseline. It sweeps all 128 bank-0
-   melodic programs and all 128 bank-128 percussion programs through real
-   Program Change transactions, verifies safe cache eviction, exercises real
-   Bank Select and latest-wins Program Change coalescing, then runs a
-   representative 15-melodic-plus-drum 16-channel voice workload with dense
-   piano, sustain/release, repeated retrigger, drum bursts and live controller
-   changes.
+   exercises residency/publication/READY/commit/ACK/NoteOn, full-FM Program
+   Change, channel-10 percussion and 16-channel GM Reset.
+3. `test_full_gm128_stress` exercises the product-sized 4 MiB single-channel
+   residency path, safe cache eviction, Bank Select, latest-wins Program Change,
+   dense piano, sustain/release, retrigger, drum bursts and mixed 16-channel
+   functional behavior.
 4. `test_full_gm128_capacity` derives the representative 16-channel Active
-   dependency union, scans every bank-0 melodic READY candidate while the old
-   Active set remains pinned, identifies the largest Active+READY union, then
-   runs the real residency/publication/READY/commit/ACK transaction against
-   4.00/4.25/4.50/4.75/5.00/5.50/6.00 MiB arenas. This produces a host capacity
-   bracket without prematurely changing the N16R8 product default.
+   dependency union, scans every bank-0 melodic READY candidate while Active is
+   pinned, then runs the real transaction across 4.00/4.25/4.50/4.75/5.00/5.50/
+   6.00 MiB arenas.
+5. `test_full_gm128_soak` is discovery-driven. It scans bank 0 and bank 128 for
+   the largest playable NoteOn layer count, the largest prepared zone set and a
+   bounded long-release candidate, exercises those exact programs through the
+   production Voice path, verifies natural release-tail reference reclamation,
+   then renders 1,411,200 frames (32.0 seconds of 44.1 kHz audio time) of mixed
+   16-channel event churn using a 4.5 MiB host sample arena.
 
 The qualification report is uploaded as the
-`gm128-full-bank-qualification` Actions artifact and the `GM128_*` lines are
-also copied to the workflow summary.
+`gm128-full-bank-qualification` Actions artifact and `GM128_*` lines are copied
+to the workflow summary.
 
 ## Current tracked-bank findings
 
@@ -68,46 +65,35 @@ The heaviest single prepared program is bank 128 / program 0 at 47 playback
 zones and 47 sample dependencies. Its aligned PCM working set is 2,969,748
 bytes.
 
-The first product-sized stress run established:
+The product-sized stress/capacity evidence establishes:
 
-- bank-0 programs 0-127 complete 127 sequential Program Change transactions in
-  a 4 MiB arena;
+- bank-0 programs 0-127 complete sequential Program Change transactions in a
+  4 MiB arena;
 - the melodic sweep reaches 4,184,380 bytes high-water and performs 92 safe
-  cache evictions / capacity retries;
-- bank-128 programs 0-127 complete the same sweep with a 2,969,748-byte
-  high-water and no eviction;
-- real Bank Select reaches a full-bank variation bank and a burst of 128
-  Program Changes coalesces to one latest-wins request;
+  cache evictions/capacity retries;
+- bank-128 programs 0-127 complete the same sweep at 2,969,748 bytes high-water;
 - the representative 15-melodic-plus-drum 16-channel Active set consumes
-  4,310,396 aligned PCM bytes, which is 116,092 bytes above the current 4 MiB
-  arena default;
-- the corresponding functional workload reaches 16 active Voices with zero
-  voice-start failures and zero sample acquire misses.
+  4,310,396 aligned PCM bytes (62 unique samples);
+- the worst scanned READY candidate is channel 0 / program 122 and raises the
+  Active+READY union to 4,504,436 bytes;
+- 4.25 MiB can hold Active but cannot prepare that READY generation;
+- 4.50 MiB is the first tested arena size that completes Prepare, READY,
+  block-boundary commit and ACK; 4.75/5.0/5.5/6.0 MiB also pass.
 
-Therefore 4 MiB is already proven for complete single-channel GM128 switching,
-but it is not large enough for the representative 16-channel Active set. The
-capacity-curve gate determines the next useful host bound; the production arena
-default must still wait for N16R8 PSRAM headroom measurements.
+Therefore 4 MiB remains proven for complete single-channel GM128 switching but
+is not sufficient for the representative 16-channel Active set. 4.5 MiB is the
+current host lower bound for the scanned worst Active+READY transition, not yet
+a production default. N16R8 hardware still has to prove total PSRAM headroom
+with Voice/DSP/FX/audio buffers and system allocations present.
 
 ## Reported metrics
 
-The structure report records bank topology, resolved/playback zone bounds,
-sample dependency counts, per-program PCM working sets, Prepare workspace,
-modulator identities and preview/unsupported counts.
+The full-bank artifact reports topology, zone/dependency/PCM bounds, 4 MiB
+Program Change and eviction metrics, 16-channel residency, Active+READY capacity
+trials, max-layer/max-zone discovery, release-tail reclamation and the 32-second
+host-soak counters/checksum.
 
-The stress/capacity reports add:
-
-- 4 MiB melodic/drum Program Change transition counts and high-water marks,
-- safe cache eviction/retry counts and evicted bytes,
-- full-bank Bank Select and rapid Program Change coalescing coverage,
-- representative 16-channel resident/high-water bytes,
-- peak active Voice count, starts/failures and sample-acquire misses,
-- representative Active dependency union,
-- worst bank-0 Active+READY dependency union and candidate identity,
-- pass/fail/commit result for each tested sample-arena capacity,
-- first tested arena size that completes the real Active+READY transaction.
-
-These host metrics establish semantic, residency and bounded voice-behavior
-coverage. They do **not** replace N16R8 measurements for storage latency, total
-PSRAM headroom outside the sample arena, DSP CPU, 64-frame I2S deadline misses,
+These host metrics establish semantic, residency and bounded lifetime behavior.
+They do **not** replace N16R8 measurements for storage latency, total PSRAM
+headroom outside the sample arena, DSP CPU, 64-frame I2S deadline misses,
 underruns or stable guaranteed polyphony.
