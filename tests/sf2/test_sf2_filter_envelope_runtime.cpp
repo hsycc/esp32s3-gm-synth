@@ -13,6 +13,7 @@
 
 namespace {
 
+using gm_synth::gm::MidiChannelState;
 using gm_synth::gm::PlaybackProgramSnapshot;
 using gm_synth::gm::PlaybackZone;
 using gm_synth::gm::ResolvedVoiceBatch;
@@ -67,8 +68,6 @@ void testLowpassCoefficientPreparationIsBoundedAndExplicit() {
     assert(high.a0_q24 > low.a0_q24);
     assert(high.a1_q24 > low.a1_q24);
 
-    // The original cutoff-table helper deliberately remains the qualified Q=0
-    // primitive; SoundFont Q is layered on top by the fixed-point transform.
     BiquadLowpassConfig rejected{};
     assert(!prepareLowpassQ24(6900, 60, 44100, &rejected));
     assert(!prepareLowpassQ24(6900, 0, 48000, &rejected));
@@ -80,9 +79,6 @@ void testLowpassCoefficientPreparationIsBoundedAndExplicit() {
     assert(resonant.a1_q24 > low.a1_q24);
     assert(resonanceDcAttenuationCb(100) == 50);
 
-    // Exercise the full SF2 initialFilterQ range at the numerically hardest
-    // low-cutoff corner. Q24 stays non-zero because gain compensation is kept
-    // in the attenuation path rather than multiplied into tiny feed-forward terms.
     BiquadLowpassConfig extreme{};
     assert(prepareResonantLowpassQ24(1500, 960, 44100, &extreme));
     assert(extreme.enabled && extreme.valid());
@@ -155,7 +151,6 @@ void testDelayAttackHoldDecayStagesRenderInOrder() {
     const auto result = voice.renderAdd(output.data(), output.size() / 2u);
     assert(result.frames_rendered == 8);
 
-    // Left channel: delay, attack, hold, then two-frame decay to half sustain.
     assert(output[0] == 0);
     assert(output[2] == 0);
     assert(output[4] > 4500 && output[4] < 5500);
@@ -206,9 +201,6 @@ void testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance() {
     assert(batch.voices[0].envelope.hold_frames == 50);
     assert(batch.voices[0].envelope.decay_frames == 50);
     assert(batch.voices[0].lowpass.enabled);
-    // 100 cB filter resonance contributes 50 cB attenuation (Q15 ~= 18426).
-    // The SF2 center pan is equal-power, so each channel receives another
-    // sqrt(1/2) factor, yielding about 13029 per side rather than 18426.
     assert(batch.voices[0].gain_left_q15 >= 13000 && batch.voices[0].gain_left_q15 <= 13100);
     assert(batch.voices[0].gain_right_q15 == batch.voices[0].gain_left_q15);
 
@@ -224,6 +216,74 @@ void testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance() {
     assert(batch.voices[0].envelope.decay_frames == 200);
 }
 
+void testVelocityDspRoutesApplyOnceAtNoteOn() {
+    PlaybackZone zone{};
+    zone.sample_id = 0;
+    zone.root_key = 60;
+    zone.root_phase_increment_q32 = kPhaseOneQ32;
+    zone.note_on_gain.enabled = true;
+    zone.note_on_gain.velocity_to_attenuation_cb = 0;
+    zone.note_on_gain.fixed_velocity = 64;
+
+    zone.note_on_filter.enabled = true;
+    zone.note_on_filter.initial_cutoff_cents = 9000;
+    zone.note_on_filter.velocity_to_cutoff_cents = 0;
+    zone.note_on_filter.resonance_cb = 100;
+    zone.note_on_filter.velocity_to_resonance_cb = 8;
+
+    zone.envelope.attack_frames = 100;
+    zone.envelope.sustain_q15 = kQ15Unity;
+    zone.velocity_to_vol_env_attack_timecents = -1200;
+
+    zone.mod_envelope.enabled = true;
+    zone.mod_envelope.envelope.attack_frames = 100;
+    zone.mod_envelope.envelope.sustain_q15 = kQ15Unity;
+    zone.mod_envelope.filter_depth_cents = 0;
+    zone.mod_envelope.velocity_positive_to_filter_depth_cents = 4000;
+    zone.mod_envelope.velocity_negative_to_filter_depth_cents = -2000;
+    zone.mod_envelope.velocity_to_attack_timecents = -1200;
+
+    const PlaybackProgramSnapshot program = programFor(&zone);
+    assert(program.valid());
+
+    MidiChannelState state{};
+    state.resetAll();
+    state.volume = 127;
+    state.expression = 127;
+    state.pan = 64;
+
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, state, 2, 60, 127, 3, &batch) ==
+           ZoneResolveStatus::Ok);
+    assert(batch.count == 1);
+    const auto& params = batch.voices[0];
+    assert(params.velocity == 64);
+
+    // Negative-linear velocity=64 contributes half the route amount.
+    assert(velocityToFilterCutoffCents(64, 8) == 4);
+    BiquadLowpassConfig expected_q{};
+    assert(prepareResonantLowpassQ24(9000, 104, 44100, &expected_q));
+    assert(params.lowpass.a0_q24 == expected_q.a0_q24);
+    assert(params.lowpass.a1_q24 == expected_q.a1_q24);
+    assert(params.lowpass.b1_q24 == expected_q.b1_q24);
+    assert(params.lowpass.b2_q24 == expected_q.b2_q24);
+    assert(params.realtime_control.initial_attenuation_cb == 52);
+
+    // Positive-linear +4000 contributes +2000; negative-linear -2000
+    // contributes -1000, leaving a +1000-cent ModEnv filter destination.
+    assert(params.mod_envelope.enabled);
+    assert(params.mod_envelope.filter_depth_cents == 1000);
+    assert(params.dynamic_lowpass_table.enabled);
+    assert(params.dynamic_lowpass_table.min_offset_cents == 0);
+    assert(params.dynamic_lowpass_table.max_offset_cents == 1000);
+
+    // -600 timecents at effective velocity 64 is a sqrt(1/2) duration scale.
+    assert(params.envelope.attack_frames >= 70 && params.envelope.attack_frames <= 71);
+    assert(params.mod_envelope.envelope.attack_frames >= 70 &&
+           params.mod_envelope.envelope.attack_frames <= 71);
+}
+
 }  // namespace
 
 int main() {
@@ -232,6 +292,7 @@ int main() {
     testVoiceActuallyProcessesPreparedLowpass();
     testDelayAttackHoldDecayStagesRenderInOrder();
     testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance();
+    testVelocityDspRoutesApplyOnceAtNoteOn();
     std::cout << "SF2 filter/envelope runtime checks passed\n";
     return 0;
 }
