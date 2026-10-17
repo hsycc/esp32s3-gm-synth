@@ -35,26 +35,32 @@ constexpr std::uint32_t kBlockBudgetUs = 1451;
 constexpr std::size_t kWarmupBlocks = 16;
 constexpr std::size_t kMeasuredBlocks = realtime::RenderDeadlineMonitor::kWindowSize;
 constexpr std::array<std::size_t, 8> kVoiceCounts{{1, 4, 8, 12, 16, 18, 20, 24}};
-constexpr std::size_t kDiagnosticVoices = 16;
 constexpr std::int16_t kDiagnosticReverbSendUnits = 500;
 constexpr std::int16_t kDiagnosticChorusSendUnits = 500;
 
+#ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
+constexpr std::size_t kDiagnosticVoices = 16;
+#endif
+
 #if defined(CONFIG_COMPILER_OPTIMIZATION_PERF)
 constexpr char kCompilerOptimization[] = "perf";
-constexpr bool kPerformanceOptimizedBuild = true;
 #else
 constexpr char kCompilerOptimization[] = "non_perf";
-constexpr bool kPerformanceOptimizedBuild = false;
 #endif
 
 #ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
 constexpr char kTimingScope[] = "hardware";
-constexpr unsigned kPhysicalTimingEvidence = kPerformanceOptimizedBuild ? 1u : 0u;
+#if defined(CONFIG_COMPILER_OPTIMIZATION_PERF)
+constexpr unsigned kPhysicalTimingEvidence = 1u;
+#else
+constexpr unsigned kPhysicalTimingEvidence = 0u;
+#endif
 #else
 constexpr char kTimingScope[] = "qemu_regression";
 constexpr unsigned kPhysicalTimingEvidence = 0;
 #endif
 
+#ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
 struct DiagnosticTimingSnapshot {
     std::uint32_t min_us = 0;
     std::uint32_t avg_us = 0;
@@ -64,6 +70,7 @@ struct DiagnosticTimingSnapshot {
     std::uint32_t max_us = 0;
     std::uint32_t deadline_misses = 0;
 };
+#endif
 
 voice::AdaptivePolyphonyConfig fixedBenchmarkPolicy() {
     voice::AdaptivePolyphonyConfig config{};
@@ -131,6 +138,7 @@ std::uint64_t updateChecksum(
     return checksum;
 }
 
+#ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
 std::uint64_t updateWideChecksum(
     std::uint64_t checksum,
     const std::array<std::int32_t, realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock>& output) {
@@ -182,6 +190,7 @@ DiagnosticTimingSnapshot summarizeDiagnosticTiming(
     result.deadline_misses = deadline_misses;
     return result;
 }
+#endif
 
 void yieldToIdleTask() {
     // This qualification runs from app_main without the real I2S task blocking
@@ -190,6 +199,7 @@ void yieldToIdleTask() {
     vTaskDelay(1);
 }
 
+#ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
 bool startDiagnosticVoices(voice::VoicePool& voices, std::size_t count, bool effects_send) {
     voices.allSoundOff();
     for (std::size_t index = 0; index < count; ++index) {
@@ -200,6 +210,7 @@ bool startDiagnosticVoices(voice::VoicePool& voices, std::size_t count, bool eff
     }
     return voices.activeVoiceCount() == count;
 }
+#endif
 
 }  // namespace
 
