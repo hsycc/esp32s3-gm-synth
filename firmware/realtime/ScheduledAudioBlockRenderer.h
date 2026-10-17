@@ -27,8 +27,9 @@ struct ScheduledAudioStats {
 
 // M5 audio-side block renderer. It consumes a prepared timestamp batch and
 // renders only the ranges between event offsets, applying events exactly at the
-// requested sample boundary. No allocation, sorting, storage I/O or blocking
-// occurs here. The callback must obey the same realtime contract.
+// requested sample boundary. Dry audio and SF2 effects sends are segmented by
+// the same boundaries; global effects are then processed once over the complete
+// block. No allocation, sorting, storage I/O or blocking occurs here.
 class ScheduledAudioBlockRenderer {
 public:
     static constexpr std::size_t kFramesPerBlock = voice::AudioBlockRenderer::kFramesPerBlock;
@@ -59,6 +60,9 @@ private:
     RealtimeEventApplyFn apply_event_ = nullptr;
     void* apply_context_ = nullptr;
     std::array<std::int32_t, kSamplesPerBlock> mix_{};
+    std::array<std::int32_t, kSamplesPerBlock> reverb_send_{};
+    std::array<std::int32_t, kSamplesPerBlock> chorus_send_{};
+    voice::GlobalEffectsProcessor effects_{};
     ScheduledAudioStats stats_{};
 };
 
