@@ -10,6 +10,13 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE=y
 
+# Allow the compiler to inline hot audio calls across translation units. The
+# realtime path is split across VoiceRenderer / VoiceEffectsBus / scheduled
+# renderer files, so compile-time + link-time LTO is part of the production
+# performance configuration rather than a benchmark-only switch.
+CONFIG_COMPILER_LTO_LINKTIME=y
+CONFIG_COMPILER_LTO_COMPILETIME=y
+
 # Pin the physical-storage timing baseline explicitly. These are ESP-IDF v6.1
 # defaults for ESP32-S3, but keeping them here prevents a future IDF/default
 # change from silently invalidating Flash -> PSRAM benchmark comparisons.
