@@ -12,6 +12,8 @@ on:
       - "firmware/platform/EspRealtimeClock.*"
       - "firmware/voice/AdaptivePolyphony.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "tests/realtime/test_render_deadline_monitor.cpp"
       - "tests/realtime/test_timed_audio_block_renderer.cpp"
       - ".github/workflows/m6-deadline-tests.yml"
@@ -25,6 +27,8 @@ on:
       - "firmware/platform/EspRealtimeClock.*"
       - "firmware/voice/AdaptivePolyphony.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "tests/realtime/test_render_deadline_monitor.cpp"
       - "tests/realtime/test_timed_audio_block_renderer.cpp"
       - ".github/workflows/m6-deadline-tests.yml"
@@ -55,6 +59,8 @@ jobs:
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            firmware/voice/GlobalEffectsProcessor.cpp \
             firmware/voice/AdaptivePolyphony.cpp \
             firmware/realtime/RealtimeEventQueue.cpp \
             firmware/realtime/BlockEventScheduler.cpp \
