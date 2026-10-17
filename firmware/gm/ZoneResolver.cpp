@@ -92,7 +92,7 @@ std::uint32_t scaleEnvelopeFramesByTimecents(
 }
 
 void applyEnvelopeKeyScaling(
-    const PlaybackZone& zone,
+    const EnvelopeKeyScalingConfig& scaling,
     std::uint8_t key,
     voice::EnvelopeConfig* envelope) {
     if (envelope == nullptr) {
@@ -101,10 +101,10 @@ void applyEnvelopeKeyScaling(
     const int key_delta = 60 - static_cast<int>(key);
     envelope->hold_frames = scaleEnvelopeFramesByTimecents(
         envelope->hold_frames,
-        static_cast<int>(zone.envelope_key_scaling.hold_timecents_per_key) * key_delta);
+        static_cast<int>(scaling.hold_timecents_per_key) * key_delta);
     envelope->decay_frames = scaleEnvelopeFramesByTimecents(
         envelope->decay_frames,
-        static_cast<int>(zone.envelope_key_scaling.decay_timecents_per_key) * key_delta);
+        static_cast<int>(scaling.decay_timecents_per_key) * key_delta);
 }
 
 std::int32_t noteOnFilterCutoffCents(
@@ -138,31 +138,61 @@ void prepareNoteOnFilter(
         output);
 }
 
-void prepareModLfoFilterTable(
+void prepareDynamicFilterTable(
     const PlaybackZone& zone,
     std::uint8_t effective_velocity,
-    voice::LfoLowpassTable* output) {
+    voice::DynamicLowpassTable* output) {
     if (output == nullptr) {
         return;
     }
-    *output = voice::LfoLowpassTable{};
-    if (!zone.note_on_filter.enabled || zone.mod_lfo.filter_depth_cents == 0) {
+    *output = voice::DynamicLowpassTable{};
+    if (!zone.note_on_filter.enabled) {
+        return;
+    }
+
+    const std::int64_t lfo_depth = zone.mod_lfo.enabled
+        ? static_cast<std::int64_t>(zone.mod_lfo.filter_depth_cents)
+        : 0;
+    const std::int64_t lfo_extent = lfo_depth < 0 ? -lfo_depth : lfo_depth;
+    const std::int64_t env_depth = zone.mod_envelope.enabled
+        ? static_cast<std::int64_t>(zone.mod_envelope.filter_depth_cents)
+        : 0;
+    std::int64_t min_offset = -lfo_extent + std::min<std::int64_t>(0, env_depth);
+    std::int64_t max_offset = lfo_extent + std::max<std::int64_t>(0, env_depth);
+    if (min_offset == 0 && max_offset == 0) {
         return;
     }
 
     const std::int32_t base_cutoff = noteOnFilterCutoffCents(zone, effective_velocity);
-    voice::LfoLowpassTable candidate{};
+    const std::int32_t min_cutoff = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(base_cutoff) + min_offset,
+        sf2::kSf2MinFilterCutoffCents,
+        sf2::kSf2MaxFilterCutoffCents));
+    const std::int32_t max_cutoff = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(base_cutoff) + max_offset,
+        sf2::kSf2MinFilterCutoffCents,
+        sf2::kSf2MaxFilterCutoffCents));
+    min_offset = static_cast<std::int64_t>(min_cutoff) - base_cutoff;
+    max_offset = static_cast<std::int64_t>(max_cutoff) - base_cutoff;
+    if (min_offset == 0 && max_offset == 0) {
+        return;
+    }
+
+    voice::DynamicLowpassTable candidate{};
     candidate.enabled = true;
+    candidate.min_offset_cents = static_cast<std::int32_t>(min_offset);
+    candidate.max_offset_cents = static_cast<std::int32_t>(max_offset);
+    constexpr std::int64_t kSegments =
+        static_cast<std::int64_t>(voice::kLfoControlPointCount - 1u);
+    const std::int64_t span = max_offset - min_offset;
     for (std::size_t index = 0; index < candidate.points.size(); ++index) {
-        const std::int64_t cutoff =
-            static_cast<std::int64_t>(base_cutoff) +
-            lfoControlPointAmount(zone.mod_lfo.filter_depth_cents, index);
-        const std::int32_t clamped = static_cast<std::int32_t>(std::clamp<std::int64_t>(
-            cutoff,
-            sf2::kSf2MinFilterCutoffCents,
-            sf2::kSf2MaxFilterCutoffCents));
+        const std::int64_t numerator = span * static_cast<std::int64_t>(index);
+        const std::int64_t offset = min_offset +
+            (numerator + kSegments / 2) / kSegments;
+        const std::int32_t cutoff = static_cast<std::int32_t>(
+            static_cast<std::int64_t>(base_cutoff) + offset);
         if (!sf2::prepareLowpassQ24(
-                clamped,
+                cutoff,
                 0,
                 sf2::kSf2FilterOutputSampleRate,
                 &candidate.points[index])) {
@@ -248,6 +278,20 @@ std::int32_t vibratoDepthCents(
         depth,
         std::numeric_limits<std::int32_t>::min(),
         std::numeric_limits<std::int32_t>::max()));
+}
+
+void prepareModEnvelope(
+    const PlaybackZone& zone,
+    std::uint8_t key,
+    voice::ModEnvelopeConfig* output) {
+    if (output == nullptr || !zone.mod_envelope.enabled) {
+        return;
+    }
+    output->enabled = true;
+    output->envelope = zone.mod_envelope.envelope;
+    applyEnvelopeKeyScaling(zone.mod_envelope.key_scaling, key, &output->envelope);
+    output->pitch_depth_cents = zone.mod_envelope.pitch_depth_cents;
+    output->filter_depth_cents = zone.mod_envelope.filter_depth_cents;
 }
 
 struct ActiveVoiceRefreshContext {
@@ -466,7 +510,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.chorus_send_units = zone.effects_send.chorus_sf2_units;
         }
         params.envelope = zone.envelope;
-        applyEnvelopeKeyScaling(zone, key, &params.envelope);
+        applyEnvelopeKeyScaling(zone.envelope_key_scaling, key, &params.envelope);
         prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
@@ -480,6 +524,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.mod_lfo.delay_frames = zone.mod_lfo.delay_frames;
             params.mod_lfo.phase_step_q32 = zone.mod_lfo.phase_step_q32;
             params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
+            params.mod_lfo.filter_depth_cents = zone.mod_lfo.filter_depth_cents;
             prepareModLfoGainTable(
                 zone.note_on_gain.initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
@@ -491,8 +536,9 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 zone.note_on_gain.pan_amount,
                 zone.note_on_gain.expression_to_attenuation_cb,
                 &params.mod_lfo.gain_table);
-            prepareModLfoFilterTable(zone, effective_velocity, &params.mod_lfo.lowpass_table);
         }
+        prepareModEnvelope(zone, key, &params.mod_envelope);
+        prepareDynamicFilterTable(zone, effective_velocity, &params.dynamic_lowpass_table);
         batch->voices[batch->count++] = params;
     }
 
@@ -575,7 +621,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                     zone.effects_send.chorus_cc_amount));
         }
         params.envelope = zone.envelope;
-        applyEnvelopeKeyScaling(zone, key, &params.envelope);
+        applyEnvelopeKeyScaling(zone.envelope_key_scaling, key, &params.envelope);
         prepareNoteOnFilter(zone, effective_velocity, &params.lowpass);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
@@ -590,6 +636,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.mod_lfo.delay_frames = zone.mod_lfo.delay_frames;
             params.mod_lfo.phase_step_q32 = zone.mod_lfo.phase_step_q32;
             params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
+            params.mod_lfo.filter_depth_cents = zone.mod_lfo.filter_depth_cents;
             prepareModLfoGainTable(
                 zone.note_on_gain.initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
@@ -601,8 +648,9 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 zone.note_on_gain.pan_amount,
                 zone.note_on_gain.expression_to_attenuation_cb,
                 &params.mod_lfo.gain_table);
-            prepareModLfoFilterTable(zone, effective_velocity, &params.mod_lfo.lowpass_table);
         }
+        prepareModEnvelope(zone, key, &params.mod_envelope);
+        prepareDynamicFilterTable(zone, effective_velocity, &params.dynamic_lowpass_table);
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
