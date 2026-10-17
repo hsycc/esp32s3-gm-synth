@@ -100,10 +100,6 @@ std::int32_t modulationEnvelopeSustainQ15(std::int32_t sustain_units) {
     return static_cast<std::int32_t>(numerator / 1000);
 }
 
-bool differs(const NativeResolvedZone& zone, std::uint16_t oper, std::int32_t expected) {
-    return zone.generators.value(oper, expected) != expected;
-}
-
 voice::LoopMode loopModeFor(std::int32_t sample_modes, bool* supported) {
     if (supported != nullptr) {
         *supported = true;
@@ -219,10 +215,6 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
 
     if (output_sample_rate_ != kSf2FilterOutputSampleRate) {
         issues |= PlaybackIssueFilterPending;
-    }
-    if (differs(native, 15, 0) || differs(native, 16, 0) ||
-        modulation.reverb_send_amount != 0 || modulation.chorus_send_amount != 0) {
-        issues |= PlaybackIssueEffectsSendPending;
     }
 
     gm::PlaybackZone candidate{};
