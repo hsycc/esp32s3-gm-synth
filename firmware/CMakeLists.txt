@@ -47,10 +47,9 @@ idf_component_register(
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
 
-# ESP-IDF PERF is -O2. Push only the realtime DSP/render translation units to
-# -O3 so loop/inlining heuristics can be more aggressive without bloating the
-# parser/storage/control side of the firmware. LTO in sdkconfig.defaults then
-# allows the compiler to inline across these translation-unit boundaries.
+# ESP-IDF v6.1 PERF is -O2 and still forces -fno-lto at framework link time.
+# Push only the realtime DSP/render translation units to -O3 so loop and local
+# inlining heuristics can be more aggressive without bloating parser/storage.
 set_source_files_properties(
     "voice/VoiceRenderer.cpp"
     "voice/VoiceEffectsBus.cpp"
