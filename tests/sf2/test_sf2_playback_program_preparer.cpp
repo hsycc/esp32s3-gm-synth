@@ -91,7 +91,7 @@ PlaybackPrepareRequest requestFor(
     return request;
 }
 
-void testFmProgramPreparesSnapshotAndResolvedDefaultRoutes() {
+void testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes() {
     FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
     assert(reader.valid());
     Sf2PdtaReader pdta;
@@ -124,9 +124,9 @@ void testFmProgramPreparesSnapshotAndResolvedDefaultRoutes() {
     assert(result.required_dependency_capacity == 1);
     assert(result.supported_modulator_records == 0);
     assert(result.unsupported_modulator_records == 0);
-    assert(result.preview_zone_count == 1);
+    assert(result.preview_zone_count == 0);
     assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) == 0);
-    assert((result.issue_union & PlaybackIssueEffectsSendPending) != 0);
+    assert((result.issue_union & PlaybackIssueEffectsSendPending) == 0);
     assert(snapshot.valid());
     assert(snapshot.channel == 2);
     assert(snapshot.bank == 0);
@@ -148,7 +148,7 @@ void testFmProgramPreparesSnapshotAndResolvedDefaultRoutes() {
     assert(playback[0].valid());
 }
 
-void testStrictQualificationRejectsBeforeMutatingPlaybackStorage() {
+void testStrictQualificationAcceptsEffectsCompleteProgram() {
     FileReader reader("assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2");
     assert(reader.valid());
     Sf2PdtaReader pdta;
@@ -172,17 +172,17 @@ void testStrictQualificationRejectsBeforeMutatingPlaybackStorage() {
     request.policy = PlaybackPreparePolicy::StrictQualified;
 
     const auto result = Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
-    assert(result.status == PlaybackPrepareStatus::UnqualifiedZone);
+    assert(result.status == PlaybackPrepareStatus::Ok);
     assert(result.modulator_resolve_status == ZoneModulatorResolveStatus::Ok);
-    assert(result.first_problem_zone == 0);
     assert(result.zone_count == 1);
     assert(result.native_zone_count == 1);
-    assert(result.preview_zone_count == 1);
+    assert(result.preview_zone_count == 0);
     assert((result.issue_union & PlaybackIssueDefaultModulatorsPending) == 0);
-    assert((result.issue_union & PlaybackIssueEffectsSendPending) != 0);
-    assert(playback[0].sample_id == 999);
-    assert(playback[0].key_low == 19);
-    assert(snapshot.token == 1234);
+    assert((result.issue_union & PlaybackIssueEffectsSendPending) == 0);
+    assert(playback[0].sample_id == 0);
+    assert(snapshot.valid());
+    assert(snapshot.token == 7);
+    assert(snapshot.zone_count == 1);
 }
 
 void testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch() {
@@ -337,8 +337,8 @@ void testInvalidIdentityDoesNotTouchOutputs() {
 }  // namespace
 
 int main() {
-    testFmProgramPreparesSnapshotAndResolvedDefaultRoutes();
-    testStrictQualificationRejectsBeforeMutatingPlaybackStorage();
+    testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes();
+    testStrictQualificationAcceptsEffectsCompleteProgram();
     testGeneralUserReportsRequiredZoneCapacityBeforeResolvingScratch();
     testDependencyCapacityIsExplicitAndModulatorPassMatchesNativeZones();
     testModulationCapacityParticipatesInZonePreflight();
