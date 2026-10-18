@@ -26,6 +26,10 @@ public:
 
     bool initialize();
 
+    std::size_t maxStablePolyphony() const {
+        return max_stable_polyphony_;
+    }
+
     static bool callback(
         void* context,
         const realtime::RealtimeEvent& event,
