@@ -13,10 +13,11 @@ The latest measured physical checkpoint remains `73a4765`:
 
 A failed step in a voice-count sweep means **the tested workload crossed its realtime polyphony limit**. It does **not** mean the firmware or the whole M6 milestone failed. The purpose of the sweep is to find that boundary.
 
-The current source checkpoint after the latest harness work is `d3bbd8b` (`test: move clean SF2 prepare workspace off main task stack`). It contains two important changes that still require the next physical run for measurement/audible confirmation:
+The current source checkpoint after the latest harness work is `a991778` (`test: split clean realtime state into internal allocations`). It contains three important changes that still require the next physical run for measurement/audible confirmation:
 
 1. the pathological heavy-DSP sweep stops at the first unstable step instead of continuing deeper into already-proven overload and provoking watchdog activity;
-2. a separate real-SF2 clean audible gate runs before synthetic performance stress.
+2. a separate real-SF2 clean audible gate runs before synthetic performance stress;
+3. the clean-gate realtime state remains in internal SRAM but is split into several bounded allocations instead of requiring one fragile ~56.6 KiB contiguous block.
 
 The clean gate uses the real SF2 Bank 0 / Program 0 path and a sparse dry musical sequence. It is implemented in source, but **physical audible sign-off is still pending**. Do not call it passed until the board run and listening/log evidence confirm it.
 
@@ -137,7 +138,7 @@ Status: **DSP paths are implemented and physically exercised; dedicated clean-au
 
 Implemented DSP/audio paths include sample interpolation/phase stepping, pitch conversion, looping, attenuation/pan, volume envelope, resonant/dynamic filtering, vibrato LFO, modulation LFO, modulation envelope, reverb/chorus sends, global FX, I2S DMA, ES8311 and PA output.
 
-### Clean audible gate — source implementation at `d3bbd8b`
+### Clean audible gate — source implementation at `a991778`
 
 The physical qualification image now runs a clean path before synthetic stress:
 
@@ -164,7 +165,7 @@ The first audible SF2 sequence is deliberately sparse and dry:
 
 FX sends are cleared only for this first clean oracle. Sample region, tuning, loop, volume envelope, filter and native modulation state still come from the real prepared SF2 Program 0.
 
-The large `Sf2SampleSource` + prepare workspaces are allocated from PSRAM instead of the main task stack. The realtime queue, publication atomics and realtime runtime remain in internal RAM. A compile-time size guard prevents the clean realtime aggregate from silently growing beyond the current internal-RAM budget.
+The large `Sf2SampleSource` + prepare workspaces are allocated from PSRAM instead of the main task stack. Realtime/atomic state stays in internal SRAM. The first aggregate implementation measured about **56,608 bytes** in the physical ELF, almost equal to the previously measured ~57 KiB largest internal free block, so `a991778` splits it into separate internal allocations. The largest known individual block is the VoicePool at roughly 22.5 KiB rather than requiring one ~56.6 KiB contiguous allocation. The clean-gate READY log reports internal free/largest bytes and every component size so the next physical run can verify margin directly.
 
 Physical pass evidence still required:
 - clean SF2 `i2s_ok=1`;
@@ -172,7 +173,8 @@ Physical pass evidence still required:
 - no clipping;
 - no event rejects / missing program / unmatched zones / resolve overflow / voice-start failure;
 - subjective listening confirms correct pitch, clean single note/chord, sensible attack/loop/release;
-- no watchdog event.
+- no watchdog event;
+- internal allocation telemetry leaves adequate task/DMA headroom.
 
 After the initial dry oracle passes, add filter/modulation/FX one at a time rather than enabling the entire pathological feature set at once.
 
