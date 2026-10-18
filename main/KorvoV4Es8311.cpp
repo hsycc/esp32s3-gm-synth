@@ -181,7 +181,11 @@ bool KorvoV4Es8311::prepareMuted() {
     shutdown();
 
     gpio_reset_pin(kPaEnable);
-    if (gpio_set_direction(kPaEnable, GPIO_MODE_OUTPUT) != ESP_OK ||
+    // Qualification reads the physical PA enable level back as a hard gate.
+    // ESP-IDF gpio_get_level() only returns a valid value when input is enabled;
+    // an output-only pad always reads as zero. Keep input sensing enabled while
+    // still driving the pin so both PA OFF and PA ON states can be verified.
+    if (gpio_set_direction(kPaEnable, GPIO_MODE_INPUT_OUTPUT) != ESP_OK ||
         gpio_set_level(kPaEnable, 0) != ESP_OK) {
         ESP_LOGE(kTag, "es8311: failed to force PA off");
         return false;
@@ -339,13 +343,25 @@ bool KorvoV4Es8311::enableOutput() {
 
     unsigned unmuted_reg = 0;
     unsigned volume_reg = 0;
+    const bool mute_read_ok = readReg(kRegDacMute, unmuted_reg);
+    const bool volume_read_ok = readReg(kRegDacVolume, volume_reg);
+    const int pa_level = gpio_get_level(kPaEnable);
     const bool output_ok =
-        readReg(kRegDacMute, unmuted_reg) &&
-        readReg(kRegDacVolume, volume_reg) &&
+        mute_read_ok &&
+        volume_read_ok &&
         (unmuted_reg & 0x60u) == 0u &&
         volume_reg == kQualificationVolumeMinus12Db &&
-        gpio_get_level(kPaEnable) == 1;
+        pa_level == 1;
     if (!output_ok) {
+        ESP_LOGE(
+            kTag,
+            "es8311: OUTPUT_GATE FAIL mute_read_ok=%u volume_read_ok=%u dac31=%02x dac32=%02x expected_dac32=%02x pa_level=%d",
+            mute_read_ok ? 1u : 0u,
+            volume_read_ok ? 1u : 0u,
+            unmuted_reg,
+            volume_reg,
+            kQualificationVolumeMinus12Db,
+            pa_level);
         (void)gpio_set_level(kPaEnable, 0);
         (void)writeReg(kRegDacMute, (unmuted_reg & 0x9F) | 0x60);
         return false;
