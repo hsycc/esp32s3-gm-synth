@@ -226,6 +226,9 @@ void VoicePool::renderAddWithEffects(
         return;
     }
 
+    // The scratch array starts at zero once. Each send-distribution pass clears
+    // the slots as it consumes them, so the next Voice sees a zeroed scratch
+    // buffer without a separate fill_n memory pass.
     std::array<std::int32_t, kEffectsScratchFrames * kChannels> scratch{};
     std::size_t frame_offset = 0;
     while (frame_offset < frame_count) {
@@ -254,10 +257,10 @@ void VoicePool::renderAddWithEffects(
                     interleaved_stereo + sample_offset,
                     chunk_frames);
             } else {
-                std::fill_n(scratch.data(), chunk_samples, 0);
                 result = voice.renderAddRealtime(scratch.data(), chunk_frames);
                 for (std::size_t index = 0; index < chunk_samples; ++index) {
                     const std::int32_t value = scratch[index];
+                    scratch[index] = 0;
                     interleaved_stereo[sample_offset + index] += value;
                     if (shared_send_scale) {
                         const std::int32_t scaled = scaleSend(value, reverb_units);
