@@ -5,6 +5,7 @@
 #include "gm/ZoneResolver.h"
 #include "platform/EspRealtimeClock.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <new>
 
 namespace gm_synth::bringup {
 namespace {
@@ -198,6 +200,26 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
     channel_state.expression = 127;
     channel_state.pan = 64;
 
+    // ResolvedVoiceBatch contains storage for the hard-cap number of complete
+    // VoiceStartParams and is far too large for app_main's stack. Resolution is
+    // performed only before each measured polyphony step, never in the timed
+    // render loop, so PSRAM is the correct place for this diagnostic scratch.
+    void* batch_storage = heap_caps_malloc(
+        sizeof(gm::ResolvedVoiceBatch),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (batch_storage == nullptr) {
+        ESP_LOGE(
+            kTag,
+            "physical_heavy_dsp: PSRAM scratch allocation failed bytes=%u",
+            static_cast<unsigned>(sizeof(gm::ResolvedVoiceBatch)));
+        return result;
+    }
+    auto* batch = new (batch_storage) gm::ResolvedVoiceBatch{};
+    ESP_LOGI(
+        kTag,
+        "physical_heavy_dsp: RESOLVE_SCRATCH memory=psram bytes=%u",
+        static_cast<unsigned>(sizeof(gm::ResolvedVoiceBatch)));
+
     gm::ZoneResolver resolver;
     voices.allSoundOff();
     std::array<std::int16_t, kSamplesPerBlock> output{};
@@ -214,7 +236,7 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
 
     for (const std::size_t target : kSteps) {
         while (started < target) {
-            gm::ResolvedVoiceBatch batch{};
+            batch->clear();
             const std::uint8_t key = static_cast<std::uint8_t>(48u + (started % 36u));
             const gm::ZoneResolveStatus status = resolver.resolveNoteOn(
                 program,
@@ -223,22 +245,24 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
                 key,
                 100,
                 static_cast<std::uint32_t>(started + 1u),
-                &batch);
-            if (status != gm::ZoneResolveStatus::Ok || batch.count != 1 ||
-                !batch.voices[0].lowpass.enabled ||
-                !batch.voices[0].dynamic_lowpass_table.enabled ||
-                !batch.voices[0].vibrato_lfo.enabled ||
-                !batch.voices[0].mod_lfo.enabled ||
-                !batch.voices[0].mod_envelope.enabled ||
-                !voices.start(batch.voices[0])) {
+                batch);
+            if (status != gm::ZoneResolveStatus::Ok || batch->count != 1 ||
+                !batch->voices[0].lowpass.enabled ||
+                !batch->voices[0].dynamic_lowpass_table.enabled ||
+                !batch->voices[0].vibrato_lfo.enabled ||
+                !batch->voices[0].mod_lfo.enabled ||
+                !batch->voices[0].mod_envelope.enabled ||
+                !voices.start(batch->voices[0])) {
                 ESP_LOGE(
                     kTag,
                     "physical_heavy_dsp: resolve/start failed target=%u started=%u status=%u resolved=%u",
                     static_cast<unsigned>(target),
                     static_cast<unsigned>(started),
                     static_cast<unsigned>(status),
-                    static_cast<unsigned>(batch.count));
+                    static_cast<unsigned>(batch->count));
                 voices.allSoundOff();
+                batch->~ResolvedVoiceBatch();
+                heap_caps_free(batch_storage);
                 return result;
             }
             ++started;
@@ -289,6 +313,8 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
     }
 
     voices.allSoundOff();
+    batch->~ResolvedVoiceBatch();
+    heap_caps_free(batch_storage);
     ESP_LOGI(
         kTag,
         "physical_heavy_dsp: RESULT max_stable_voices=%u minimum_required=%u hard_cap=%u %s",
