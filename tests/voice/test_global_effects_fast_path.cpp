@@ -226,7 +226,7 @@ void fillInputs(
     }
 }
 
-void testModuloFreeIndicesAreBitExactAcrossWraps() {
+void testModuloFreeIndicesAndLfoMathAreBitExactAcrossWraps() {
     GlobalEffectsProcessor optimized;
     ReferenceEffectsProcessor reference;
     std::array<std::int32_t, kSamples> chorus{};
@@ -234,9 +234,11 @@ void testModuloFreeIndicesAreBitExactAcrossWraps() {
     std::array<std::int32_t, kSamples> expected{};
     std::array<std::int32_t, kSamples> actual{};
 
-    // 160 blocks = 10,240 frames, enough to wrap every delay line many times
-    // while also advancing the chorus LFO through a meaningful phase span.
-    for (std::size_t block = 0; block < 160; ++block) {
+    // 1,100 blocks = 70,400 frames. At phase step 63,300 this spans slightly
+    // more than one full 32-bit Chorus LFO cycle (~67,851 frames), while also
+    // wrapping every delay line many times. This validates every triangle LFO
+    // quadrant in addition to the ring-index/all-pass fast paths.
+    for (std::size_t block = 0; block < 1100; ++block) {
         fillInputs(block, &chorus, &reverb, &expected);
         actual = expected;
         reference.processAdd(chorus.data(), reverb.data(), expected.data(), kFrames);
@@ -298,9 +300,9 @@ void testResetRestoresIdenticalState() {
 }  // namespace
 
 int main() {
-    testModuloFreeIndicesAreBitExactAcrossWraps();
+    testModuloFreeIndicesAndLfoMathAreBitExactAcrossWraps();
     testSilentInputTailIsBitExact();
     testResetRestoresIdenticalState();
-    std::cout << "Global effects modulo-free index checks passed\n";
+    std::cout << "Global effects exact fast-path checks passed\n";
     return 0;
 }
