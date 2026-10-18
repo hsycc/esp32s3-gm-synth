@@ -1,5 +1,6 @@
 #include "sdkconfig.h"
 
+#include "EffectsTimingBenchmark.h"
 #include "ProgramPrepareBenchmark.h"
 #include "RenderTimingBenchmark.h"
 
@@ -267,6 +268,11 @@ extern "C" void app_main(void) {
 
     if (!gm_synth::bringup::runOptionalRenderTimingBenchmark()) {
         ESP_LOGE(kTag, "Render timing benchmark FAILED");
+        return;
+    }
+
+    if (!gm_synth::bringup::runOptionalEffectsTimingBenchmark()) {
+        ESP_LOGE(kTag, "Effects timing benchmark FAILED");
         return;
     }
 
