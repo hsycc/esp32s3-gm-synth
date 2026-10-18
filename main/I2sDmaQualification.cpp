@@ -484,15 +484,37 @@ bool runI2sTask(TaskContext& context) {
         }
     }
 
+    // Freeze callback telemetry at the exact end of the streaming window. The
+    // I2S DMA continues to run until anti-pop shutdown completes; counting EOF
+    // queue pressure during heap/log/shutdown bookkeeping would turn the test
+    // harness itself into a false underrun signal after the producer has
+    // intentionally stopped writing.
+    const std::uint32_t streaming_sent_callbacks = callback_stats.sent_events;
+    const std::uint32_t streaming_send_queue_overflows = callback_stats.send_queue_overflows;
     const std::uint64_t clipped_samples =
         context.renderer->stats().clipped_samples - clipped_before;
     const UBaseType_t stack_high_water_bytes = uxTaskGetStackHighWaterMark(nullptr);
     const InternalHeapSnapshot before_cleanup_heap = internalHeapSnapshot();
+
+    // Stop audible output before doing any potentially slow logging. The codec
+    // shutdown cuts PA first, then mutes/powers down while I2S clocks are still
+    // live, and only then the I2S channel is disabled/deleted.
+    cleanup();
+
+    const std::uint32_t final_sent_callbacks = callback_stats.sent_events;
+    const std::uint32_t final_send_queue_overflows = callback_stats.send_queue_overflows;
+    const std::uint32_t shutdown_tail_callbacks =
+        final_sent_callbacks - streaming_sent_callbacks;
+    const std::uint32_t shutdown_tail_overflows =
+        final_send_queue_overflows - streaming_send_queue_overflows;
+    const InternalHeapSnapshot after_cleanup_heap = internalHeapSnapshot();
+
     logInternalHeap("before_cleanup", before_cleanup_heap);
+    logInternalHeap("after_cleanup", after_cleanup_heap);
 
     ESP_LOGI(
         kTag,
-        "i2s_qual: RESULT blocks=%u render_us[min/avg/max]=%u/%u/%u write_wait_us[min/avg/max]=%u/%u/%u cycle_us[min/avg/max]=%u/%u/%u render_deadline_misses=%u cycle_over_budget=%u producer_stalls_over_dma_window=%u write_timeouts=%u partial_writes=%u sent_callbacks=%u send_event_queue_overflows=%u clipped_samples=%llu stack_high_water_bytes=%u checksum=%016llx",
+        "i2s_qual: RESULT blocks=%u render_us[min/avg/max]=%u/%u/%u write_wait_us[min/avg/max]=%u/%u/%u cycle_us[min/avg/max]=%u/%u/%u render_deadline_misses=%u cycle_over_budget=%u producer_stalls_over_dma_window=%u write_timeouts=%u partial_writes=%u streaming_sent_callbacks=%u streaming_send_queue_overflows=%u shutdown_tail_callbacks=%u shutdown_tail_overflows=%u clipped_samples=%llu stack_high_water_bytes=%u checksum=%016llx",
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS),
         static_cast<unsigned>(render_stats.minimum()),
         static_cast<unsigned>(render_stats.average()),
@@ -508,8 +530,10 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(producer_stalls),
         static_cast<unsigned>(write_timeouts),
         static_cast<unsigned>(partial_writes),
-        static_cast<unsigned>(callback_stats.sent_events),
-        static_cast<unsigned>(callback_stats.send_queue_overflows),
+        static_cast<unsigned>(streaming_sent_callbacks),
+        static_cast<unsigned>(streaming_send_queue_overflows),
+        static_cast<unsigned>(shutdown_tail_callbacks),
+        static_cast<unsigned>(shutdown_tail_overflows),
         static_cast<unsigned long long>(clipped_samples),
         static_cast<unsigned>(stack_high_water_bytes),
         static_cast<unsigned long long>(checksum));
@@ -519,13 +543,10 @@ bool runI2sTask(TaskContext& context) {
         producer_stalls == 0u &&
         write_timeouts == 0u &&
         partial_writes == 0u &&
-        callback_stats.send_queue_overflows == 0u &&
+        streaming_send_queue_overflows == 0u &&
         clipped_samples == 0u &&
         stack_high_water_bytes >= CONFIG_GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES;
 
-    cleanup();
-    const InternalHeapSnapshot after_cleanup_heap = internalHeapSnapshot();
-    logInternalHeap("after_cleanup", after_cleanup_heap);
     ESP_LOGI(
         kTag,
         "i2s_qual: MEMORY task_entry_free=%u dma_ready_free=%u before_cleanup_free=%u after_cleanup_free=%u dma_alloc_delta=%d cleanup_recovered=%d",
