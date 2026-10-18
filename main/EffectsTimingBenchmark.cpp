@@ -416,21 +416,25 @@ bool runOptionalEffectsTimingBenchmark() {
         voices,
         renderer,
         &block_start_frame);
+    const bool heavy_pass = heavy.pass();
     const std::size_t product_candidate = std::min(
         physical_stress->maxStablePolyphony(),
         heavy.max_stable_voices);
     ESP_LOGI(
         kTag,
-        "physical_product: RESULT full_fx_max=%u heavy_dsp_max=%u candidate=%u heavy_minimum_required=%u %s",
+        "physical_product: RESULT full_fx_max=%u heavy_dsp_max=%u candidate=%u heavy_minimum_required=%u first_failed_voices=%u failure_flags=0x%08x %s",
         static_cast<unsigned>(physical_stress->maxStablePolyphony()),
         static_cast<unsigned>(heavy.max_stable_voices),
         static_cast<unsigned>(product_candidate),
         static_cast<unsigned>(heavy.minimum_required_voices),
-        heavy.pass() ? "PASS" : "FAIL");
-    if (!heavy.pass()) {
-        ESP_LOGE(kTag, "effects_bench: physical heavy-DSP qualification FAILED");
+        static_cast<unsigned>(heavy.first_failed_voices),
+        static_cast<unsigned>(heavy.failure_flags),
+        heavy_pass ? "PASS" : "FAIL");
+    if (!heavy_pass) {
+        ESP_LOGE(
+            kTag,
+            "effects_bench: physical heavy-DSP qualification FAILED; continuing I2S/music stress for diagnostic completeness");
         voices.allSoundOff();
-        return false;
     }
 
     if (!physical_stress->enqueueTimeline(
@@ -454,6 +458,17 @@ bool runOptionalEffectsTimingBenchmark() {
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
     if (!physical_stress->validateAndLog(queue, voices, renderer)) {
         ESP_LOGE(kTag, "effects_bench: physical music stress qualification FAILED");
+        voices.allSoundOff();
+        return false;
+    }
+    if (!heavy_pass) {
+        ESP_LOGE(
+            kTag,
+            "effects_bench: physical heavy-DSP qualification FAILED after complete physical suite max_stable_voices=%u minimum_required=%u first_failed_voices=%u failure_flags=0x%08x",
+            static_cast<unsigned>(heavy.max_stable_voices),
+            static_cast<unsigned>(heavy.minimum_required_voices),
+            static_cast<unsigned>(heavy.first_failed_voices),
+            static_cast<unsigned>(heavy.failure_flags));
         voices.allSoundOff();
         return false;
     }
