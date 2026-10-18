@@ -3,6 +3,10 @@
 
 #include "sdkconfig.h"
 
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+#include "PhysicalMusicStress.h"
+#endif
+
 #ifdef CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE
 
 #include "esp_log.h"
@@ -212,7 +216,16 @@ bool runOptionalEffectsTimingBenchmark() {
     static voice::VoicePool voices(directory);
     static realtime::RealtimeEventQueue queue;
     static realtime::BlockEventScheduler scheduler(queue);
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    static PhysicalMusicStress physical_stress(directory);
+    static realtime::ScheduledAudioBlockRenderer renderer(
+        voices,
+        scheduler,
+        &PhysicalMusicStress::callback,
+        &physical_stress);
+#else
     static realtime::ScheduledAudioBlockRenderer renderer(voices, scheduler, nullptr);
+#endif
     static voice::GlobalEffectsProcessor effects;
     static std::array<std::int32_t, kSamplesPerBlock> mix{};
     static std::array<std::int32_t, kSamplesPerBlock> reverb{};
@@ -237,6 +250,13 @@ bool runOptionalEffectsTimingBenchmark() {
         ESP_LOGE(kTag, "effects_bench: publish failed");
         return false;
     }
+
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    if (!physical_stress.initialize()) {
+        ESP_LOGE(kTag, "effects_bench: physical music stress initialization failed");
+        return false;
+    }
+#endif
 
     ESP_LOGI(
         kTag,
@@ -338,11 +358,42 @@ bool runOptionalEffectsTimingBenchmark() {
         kTimingScope,
         kPhysicalTimingEvidence);
 
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    // Establish a hardware full-FX polyphony ceiling first, then start the
+    // physical stream from silence and let the realtime queue build/churn the
+    // active set. This keeps max-polyphony timing and dynamic-DMA evidence
+    // independently attributable.
+    voices.allSoundOff();
+    if (!physical_stress.runPolyphonySweep(voices, renderer, &block_start_frame)) {
+        ESP_LOGE(kTag, "effects_bench: physical polyphony qualification FAILED");
+        voices.allSoundOff();
+        return false;
+    }
+    if (!physical_stress.enqueueTimeline(
+            queue,
+            voices,
+            renderer,
+            block_start_frame,
+            CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS)) {
+        ESP_LOGE(kTag, "effects_bench: physical music stress timeline setup FAILED");
+        voices.allSoundOff();
+        return false;
+    }
+#endif
+
     if (!runOptionalI2sDmaQualification(renderer, block_start_frame)) {
         ESP_LOGE(kTag, "effects_bench: physical I2S/DMA qualification FAILED");
         voices.allSoundOff();
         return false;
     }
+
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    if (!physical_stress.validateAndLog(queue, voices, renderer)) {
+        ESP_LOGE(kTag, "effects_bench: physical music stress qualification FAILED");
+        voices.allSoundOff();
+        return false;
+    }
+#endif
 
     voices.allSoundOff();
 
