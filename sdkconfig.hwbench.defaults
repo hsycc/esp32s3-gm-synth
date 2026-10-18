@@ -13,6 +13,10 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions_qemu.csv"
 # N16R8 memory headroom. The normal firmware default remains 4 MiB.
 CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592
 
+# Keep boot-only benchmark scratch out of scarce internal DRAM. Only explicitly
+# EXT_RAM_BSS_ATTR data moves; realtime render state remains in internal SRAM.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"
 # Keep the established physical storage sweep at 4 MiB for direct comparison
