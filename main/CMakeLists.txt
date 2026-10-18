@@ -5,25 +5,27 @@ set(GM_SYNTH_MAIN_SRCS
     "EffectsTimingBenchmark.cpp"
 )
 
+# ESP-IDF resolves the component dependency graph before sdkconfig-dependent
+# source selection is finalized. Keep the Korvo driver components in the
+# unconditional dependency graph so feature-on builds receive their public
+# include paths reliably. KorvoV4Es8311.h exposes I2C handle types, making
+# esp_driver_i2c a public dependency; GPIO and I2S remain implementation-only.
 set(GM_SYNTH_MAIN_REQUIRES
     firmware
     esp_psram
     esp_timer
+    esp_driver_i2c
 )
-set(GM_SYNTH_MAIN_PRIV_REQUIRES fatfs)
+set(GM_SYNTH_MAIN_PRIV_REQUIRES
+    fatfs
+    esp_driver_gpio
+    esp_driver_i2s
+)
 
 if(CONFIG_GM_SYNTH_I2S_QUAL_ENABLE)
     list(APPEND GM_SYNTH_MAIN_SRCS
         "I2sDmaQualification.cpp"
         "KorvoV4Es8311.cpp"
-    )
-
-    # KorvoV4Es8311.h exposes ESP-IDF I2C handle types, so esp_driver_i2c is a
-    # public component dependency. GPIO and I2S are implementation-only.
-    list(APPEND GM_SYNTH_MAIN_REQUIRES esp_driver_i2c)
-    list(APPEND GM_SYNTH_MAIN_PRIV_REQUIRES
-        esp_driver_gpio
-        esp_driver_i2s
     )
 else()
     list(APPEND GM_SYNTH_MAIN_SRCS "I2sDmaQualificationDisabled.cpp")
