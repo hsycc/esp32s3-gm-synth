@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <utility>
 
 namespace gm_synth::bringup {
 namespace {
@@ -37,6 +38,7 @@ constexpr std::uint64_t kFramesPerSecond = 44100;
 constexpr std::uint64_t kHalfSecondFrames = kFramesPerSecond / 2u;
 constexpr std::uint64_t kFramesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
+constexpr std::uint32_t kInternalCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 
 struct SourceFillContext {
     sf2::Sf2SampleSource* source = nullptr;
@@ -61,35 +63,113 @@ struct CleanPrepareWorkspace {
     std::array<sample::SampleId, kWorkspaceCapacity> dependencies{};
 };
 
-struct CleanRuntime {
-    sample::PublishedSampleDirectory directory{};
-    voice::VoicePool voices;
-    realtime::RealtimeEventQueue queue{};
-    realtime::BlockEventScheduler scheduler;
-    gm::PlaybackProgramSnapshotExchange programs{};
-    gm::RealtimeProgramEventApplier event_applier;
-    realtime::ScheduledAudioBlockRenderer renderer;
+struct CleanOwnership {
     std::array<sample::ResidentRecord, kWorkspaceCapacity> records{};
     std::array<bool, kWorkspaceCapacity> pinned{};
     std::array<bool, kWorkspaceCapacity> published{};
-
-    CleanRuntime()
-        : voices(directory),
-          scheduler(queue),
-          event_applier(programs),
-          renderer(
-              voices,
-              scheduler,
-              &gm::RealtimeProgramEventApplier::callback,
-              &event_applier) {}
 };
 
-// RealtimeEventQueue and PublishedSampleDirectory deliberately rely on internal
-// RAM atomics. Fail at compile time if the aggregate ever grows too large for
-// the known physical internal-heap contiguous-block budget instead of silently
-// moving this object to PSRAM.
-static_assert(sizeof(CleanRuntime) <= 48u * 1024u,
-              "clean SF2 realtime state no longer fits the internal-RAM budget");
+template <typename T, typename... Args>
+T* allocateInternal(Args&&... args) {
+    void* storage = heap_caps_malloc(sizeof(T), kInternalCaps);
+    if (storage == nullptr) {
+        return nullptr;
+    }
+    return new (storage) T(std::forward<Args>(args)...);
+}
+
+template <typename T>
+void destroyInternal(T*& object) {
+    if (object == nullptr) {
+        return;
+    }
+    object->~T();
+    heap_caps_free(object);
+    object = nullptr;
+}
+
+// Keep objects that rely on S32C1I/internal-memory atomics and the production
+// realtime Voice path in internal SRAM. The old aggregate CleanRuntime was
+// 56,608 bytes in the d859b94 ELF, almost exactly the ~57 KiB largest free block
+// measured on hardware. Allocate the same state as several bounded blocks so we
+// do not require one fragile near-maximum contiguous allocation.
+struct CleanRuntime {
+    sample::PublishedSampleDirectory* directory = nullptr;
+    voice::VoicePool* voices = nullptr;
+    realtime::RealtimeEventQueue* queue = nullptr;
+    realtime::BlockEventScheduler* scheduler = nullptr;
+    gm::PlaybackProgramSnapshotExchange* programs = nullptr;
+    gm::RealtimeProgramEventApplier* event_applier = nullptr;
+    realtime::ScheduledAudioBlockRenderer* renderer = nullptr;
+    CleanOwnership* ownership = nullptr;
+
+    bool allocate() {
+        directory = allocateInternal<sample::PublishedSampleDirectory>();
+        if (directory == nullptr) {
+            return false;
+        }
+        voices = allocateInternal<voice::VoicePool>(*directory);
+        if (voices == nullptr) {
+            return false;
+        }
+        queue = allocateInternal<realtime::RealtimeEventQueue>();
+        if (queue == nullptr) {
+            return false;
+        }
+        scheduler = allocateInternal<realtime::BlockEventScheduler>(*queue);
+        if (scheduler == nullptr) {
+            return false;
+        }
+        programs = allocateInternal<gm::PlaybackProgramSnapshotExchange>();
+        if (programs == nullptr) {
+            return false;
+        }
+        event_applier = allocateInternal<gm::RealtimeProgramEventApplier>(*programs);
+        if (event_applier == nullptr) {
+            return false;
+        }
+        renderer = allocateInternal<realtime::ScheduledAudioBlockRenderer>(
+            *voices,
+            *scheduler,
+            &gm::RealtimeProgramEventApplier::callback,
+            event_applier);
+        if (renderer == nullptr) {
+            return false;
+        }
+        ownership = allocateInternal<CleanOwnership>();
+        return ownership != nullptr;
+    }
+
+    void release() {
+        destroyInternal(ownership);
+        destroyInternal(renderer);
+        destroyInternal(event_applier);
+        destroyInternal(programs);
+        destroyInternal(scheduler);
+        destroyInternal(queue);
+        destroyInternal(voices);
+        destroyInternal(directory);
+    }
+};
+
+static_assert(sizeof(sample::PublishedSampleDirectory) <= 4u * 1024u);
+static_assert(sizeof(voice::VoicePool) <= 32u * 1024u);
+static_assert(sizeof(realtime::RealtimeEventQueue) <= 4u * 1024u);
+static_assert(sizeof(realtime::BlockEventScheduler) <= 8u * 1024u);
+static_assert(sizeof(gm::PlaybackProgramSnapshotExchange) <= 2u * 1024u);
+static_assert(sizeof(gm::RealtimeProgramEventApplier) <= 24u * 1024u);
+static_assert(sizeof(realtime::ScheduledAudioBlockRenderer) <= 16u * 1024u);
+static_assert(sizeof(CleanOwnership) <= 4u * 1024u);
+
+constexpr std::size_t kCleanRuntimeInternalBytes =
+    sizeof(sample::PublishedSampleDirectory) +
+    sizeof(voice::VoicePool) +
+    sizeof(realtime::RealtimeEventQueue) +
+    sizeof(realtime::BlockEventScheduler) +
+    sizeof(gm::PlaybackProgramSnapshotExchange) +
+    sizeof(gm::RealtimeProgramEventApplier) +
+    sizeof(realtime::ScheduledAudioBlockRenderer) +
+    sizeof(CleanOwnership);
 
 bool snapshotMatchesAudibleKeys(const gm::PlaybackProgramSnapshot& snapshot) {
     constexpr std::array<std::uint8_t, 4> kKeys{60, 64, 67, 72};
@@ -266,44 +346,49 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         return false;
     }
 
-    void* runtime_storage = heap_caps_malloc(
-        sizeof(CleanRuntime),
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (runtime_storage == nullptr) {
+    CleanRuntime runtime{};
+    if (!runtime.allocate()) {
         ESP_LOGE(
             kTag,
-            "clean_sf2: internal runtime allocation failed bytes=%u free=%u largest=%u",
-            static_cast<unsigned>(sizeof(CleanRuntime)),
-            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
-            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+            "clean_sf2: split internal runtime allocation failed total_bytes=%u free=%u largest=%u sizes[dir/voices/queue/scheduler/programs/applier/renderer/ownership]=%u/%u/%u/%u/%u/%u/%u/%u",
+            static_cast<unsigned>(kCleanRuntimeInternalBytes),
+            static_cast<unsigned>(heap_caps_get_free_size(kInternalCaps)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(kInternalCaps)),
+            static_cast<unsigned>(sizeof(sample::PublishedSampleDirectory)),
+            static_cast<unsigned>(sizeof(voice::VoicePool)),
+            static_cast<unsigned>(sizeof(realtime::RealtimeEventQueue)),
+            static_cast<unsigned>(sizeof(realtime::BlockEventScheduler)),
+            static_cast<unsigned>(sizeof(gm::PlaybackProgramSnapshotExchange)),
+            static_cast<unsigned>(sizeof(gm::RealtimeProgramEventApplier)),
+            static_cast<unsigned>(sizeof(realtime::ScheduledAudioBlockRenderer)),
+            static_cast<unsigned>(sizeof(CleanOwnership)));
+        runtime.release();
         free_workspace();
         return false;
     }
-    auto* runtime = new (runtime_storage) CleanRuntime{};
-    bool cleanup_ok = true;
 
+    bool cleanup_ok = true;
     const auto cleanup = [&]() {
-        runtime->voices.allSoundOff();
+        runtime.voices->allSoundOff();
         for (std::size_t index = 0; index < prepared.dependency_count; ++index) {
-            if (runtime->published[index]) {
+            if (runtime.ownership->published[index]) {
                 const sample::ResidentRecord* retired =
-                    runtime->directory.unpublish(workspace->dependencies[index]);
-                if (retired != &runtime->records[index] ||
-                    !runtime->directory.canReclaim(&runtime->records[index])) {
+                    runtime.directory->unpublish(workspace->dependencies[index]);
+                if (retired != &runtime.ownership->records[index] ||
+                    !runtime.directory->canReclaim(&runtime.ownership->records[index])) {
                     cleanup_ok = false;
                 }
             }
-            if (runtime->pinned[index] &&
+            if (runtime.ownership->pinned[index] &&
                 !residency.unpin(workspace->dependencies[index])) {
                 cleanup_ok = false;
             }
         }
-        runtime->~CleanRuntime();
-        heap_caps_free(runtime_storage);
+        runtime.release();
         free_workspace();
     };
 
-    bool setup_ok = runtime->directory.bankGeneration() == request.bank_generation;
+    bool setup_ok = runtime.directory->bankGeneration() == request.bank_generation;
     for (std::size_t index = 0; setup_ok && index < prepared.dependency_count; ++index) {
         const sample::SampleId sample_id = workspace->dependencies[index];
         sample::SampleDescriptor descriptor{};
@@ -331,7 +416,7 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             setup_ok = false;
             break;
         }
-        runtime->pinned[index] = true;
+        runtime.ownership->pinned[index] = true;
 
         const sample::ResidentSampleView view = residency.residentView(sample_id);
         if (!view.valid()) {
@@ -341,27 +426,27 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             break;
         }
 
-        runtime->records[index].bank_generation = runtime->directory.bankGeneration();
-        runtime->records[index].sample_generation = view.generation;
-        runtime->records[index].pcm = view.pcm;
-        runtime->records[index].descriptor = view.descriptor;
-        runtime->records[index].voice_refs.store(0, std::memory_order_relaxed);
-        if (!runtime->directory.publish(sample_id, &runtime->records[index])) {
+        runtime.ownership->records[index].bank_generation = runtime.directory->bankGeneration();
+        runtime.ownership->records[index].sample_generation = view.generation;
+        runtime.ownership->records[index].pcm = view.pcm;
+        runtime.ownership->records[index].descriptor = view.descriptor;
+        runtime.ownership->records[index].voice_refs.store(0, std::memory_order_relaxed);
+        if (!runtime.directory->publish(sample_id, &runtime.ownership->records[index])) {
             ESP_LOGE(kTag, "clean_sf2: publish failed sample=%u",
                      static_cast<unsigned>(sample_id));
             setup_ok = false;
             break;
         }
-        runtime->published[index] = true;
+        runtime.ownership->published[index] = true;
     }
 
-    if (setup_ok && !runtime->programs.setInitialActive(&snapshot)) {
+    if (setup_ok && !runtime.programs->setInitialActive(&snapshot)) {
         ESP_LOGE(kTag, "clean_sf2: active Program 0 publish failed");
         setup_ok = false;
     }
 
     constexpr std::uint64_t kStartFrame = 0;
-    if (setup_ok && !enqueueCleanTimeline(runtime->queue, kStartFrame)) {
+    if (setup_ok && !enqueueCleanTimeline(*runtime.queue, kStartFrame)) {
         ESP_LOGE(kTag, "clean_sf2: event timeline enqueue failed");
         setup_ok = false;
     }
@@ -371,27 +456,37 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         return false;
     }
 
-    const auto queue_before = runtime->queue.stats();
+    const auto queue_before = runtime.queue->stats();
     ESP_LOGI(
         kTag,
-        "clean_sf2: READY zones=%u dependencies=%u events=%u cues=C4_2s,C_major_3s,C4_E4_G4_C5 dry_fx=1 prepare_psram_bytes=%u runtime_internal_bytes=%u",
+        "clean_sf2: READY zones=%u dependencies=%u events=%u cues=C4_2s,C_major_3s,C4_E4_G4_C5 dry_fx=1 prepare_psram_bytes=%u runtime_internal_total=%u internal_free=%u internal_largest=%u sizes[dir/voices/queue/scheduler/programs/applier/renderer/ownership]=%u/%u/%u/%u/%u/%u/%u/%u",
         static_cast<unsigned>(snapshot.zone_count),
         static_cast<unsigned>(prepared.dependency_count),
         static_cast<unsigned>(queue_before.accepted),
         static_cast<unsigned>(sizeof(CleanPrepareWorkspace)),
-        static_cast<unsigned>(sizeof(CleanRuntime)));
+        static_cast<unsigned>(kCleanRuntimeInternalBytes),
+        static_cast<unsigned>(heap_caps_get_free_size(kInternalCaps)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(kInternalCaps)),
+        static_cast<unsigned>(sizeof(sample::PublishedSampleDirectory)),
+        static_cast<unsigned>(sizeof(voice::VoicePool)),
+        static_cast<unsigned>(sizeof(realtime::RealtimeEventQueue)),
+        static_cast<unsigned>(sizeof(realtime::BlockEventScheduler)),
+        static_cast<unsigned>(sizeof(gm::PlaybackProgramSnapshotExchange)),
+        static_cast<unsigned>(sizeof(gm::RealtimeProgramEventApplier)),
+        static_cast<unsigned>(sizeof(realtime::ScheduledAudioBlockRenderer)),
+        static_cast<unsigned>(sizeof(CleanOwnership)));
 
-    const bool i2s_ok = runOptionalI2sDmaQualification(runtime->renderer, kStartFrame);
-    const auto renderer_stats = runtime->renderer.stats();
-    const auto event_stats = runtime->event_applier.stats();
-    const auto queue_after = runtime->queue.stats();
+    const bool i2s_ok = runOptionalI2sDmaQualification(*runtime.renderer, kStartFrame);
+    const auto renderer_stats = runtime.renderer->stats();
+    const auto event_stats = runtime.event_applier->stats();
+    const auto queue_after = runtime.queue->stats();
 
-    runtime->voices.allSoundOff();
+    runtime.voices->allSoundOff();
     const bool runtime_ok =
         queue_after.rejected_invalid == 0u &&
         queue_after.rejected_full == 0u &&
         queue_after.rejected_out_of_order == 0u &&
-        runtime->queue.empty() &&
+        runtime.queue->empty() &&
         renderer_stats.events_rejected == 0u &&
         renderer_stats.events_applied == queue_before.accepted &&
         event_stats.missing_active_program == 0u &&
@@ -413,7 +508,7 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         static_cast<unsigned long long>(event_stats.resolve_overflows),
         static_cast<unsigned long long>(event_stats.voice_start_failures),
         static_cast<unsigned long long>(renderer_stats.clipped_samples),
-        static_cast<unsigned>(runtime->queue.size()),
+        static_cast<unsigned>(runtime.queue->size()),
         (i2s_ok && runtime_ok) ? "PASS" : "FAIL");
 
     cleanup();
