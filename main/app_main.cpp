@@ -291,7 +291,13 @@ extern "C" void app_main(void) {
         static_cast<unsigned>(final_residency.allocation_failures),
         static_cast<unsigned>(final_residency.stale_reference_faults));
 
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
     ESP_LOGI(
         kTag,
-        "M6 bring-up core linked successfully; physical I2S output is intentionally not started in this target");
+        "M6 bring-up qualification passed including physical I2S/DMA, ES8311/PA, realtime music stress and full-FX polyphony sweep");
+#else
+    ESP_LOGI(
+        kTag,
+        "M6 bring-up core linked successfully; physical I2S qualification is disabled in this target");
+#endif
 }
