@@ -49,6 +49,18 @@ bool fillDependency(void* context, std::uint8_t* destination, std::size_t bytes)
         fill->source->fillSample(fill->sample_id, destination, bytes);
 }
 
+// Parsing/resolution scratch is control-domain only and can be large because
+// Sf2SampleSource owns metadata for up to 512 samples. Keep it in PSRAM instead
+// of consuming the ESP-IDF main-task stack. PlaybackZone storage stays alive for
+// the whole clean-audio run because the active ProgramSnapshot points into it.
+struct CleanPrepareWorkspace {
+    sf2::Sf2SampleSource source{};
+    std::array<sf2::NativeResolvedZone, kWorkspaceCapacity> native{};
+    std::array<sf2::ResolvedZoneModulation, kWorkspaceCapacity> modulation{};
+    std::array<gm::PlaybackZone, kWorkspaceCapacity> playback{};
+    std::array<sample::SampleId, kWorkspaceCapacity> dependencies{};
+};
+
 struct CleanRuntime {
     sample::PublishedSampleDirectory directory{};
     voice::VoicePool voices;
@@ -57,6 +69,9 @@ struct CleanRuntime {
     gm::PlaybackProgramSnapshotExchange programs{};
     gm::RealtimeProgramEventApplier event_applier;
     realtime::ScheduledAudioBlockRenderer renderer;
+    std::array<sample::ResidentRecord, kWorkspaceCapacity> records{};
+    std::array<bool, kWorkspaceCapacity> pinned{};
+    std::array<bool, kWorkspaceCapacity> published{};
 
     CleanRuntime()
         : voices(directory),
@@ -68,6 +83,13 @@ struct CleanRuntime {
               &gm::RealtimeProgramEventApplier::callback,
               &event_applier) {}
 };
+
+// RealtimeEventQueue and PublishedSampleDirectory deliberately rely on internal
+// RAM atomics. Fail at compile time if the aggregate ever grows too large for
+// the known physical internal-heap contiguous-block budget instead of silently
+// moving this object to PSRAM.
+static_assert(sizeof(CleanRuntime) <= 48u * 1024u,
+              "clean SF2 realtime state no longer fits the internal-RAM budget");
 
 bool snapshotMatchesAudibleKeys(const gm::PlaybackProgramSnapshot& snapshot) {
     constexpr std::array<std::uint8_t, 4> kKeys{60, 64, 67, 72};
@@ -164,20 +186,34 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         return false;
     }
 
+    void* workspace_storage = heap_caps_malloc(
+        sizeof(CleanPrepareWorkspace),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (workspace_storage == nullptr) {
+        ESP_LOGE(
+            kTag,
+            "clean_sf2: PSRAM prepare-workspace allocation failed bytes=%u free_psram=%u largest_psram=%u",
+            static_cast<unsigned>(sizeof(CleanPrepareWorkspace)),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+        return false;
+    }
+    auto* workspace = new (workspace_storage) CleanPrepareWorkspace{};
+    const auto free_workspace = [&]() {
+        workspace->~CleanPrepareWorkspace();
+        heap_caps_free(workspace_storage);
+    };
+
     sf2::Sf2PdtaReader pdta;
-    sf2::Sf2SampleSource source;
-    if (!pdta.begin(reader) || !source.begin(reader)) {
+    if (!pdta.begin(reader) || !workspace->source.begin(reader)) {
         ESP_LOGE(
             kTag,
             "clean_sf2: real SF2 parse failed sample_error=%u",
-            static_cast<unsigned>(source.lastError()));
+            static_cast<unsigned>(workspace->source.lastError()));
+        free_workspace();
         return false;
     }
 
-    std::array<sf2::NativeResolvedZone, kWorkspaceCapacity> native{};
-    std::array<sf2::ResolvedZoneModulation, kWorkspaceCapacity> modulation{};
-    std::array<gm::PlaybackZone, kWorkspaceCapacity> playback{};
-    std::array<sample::SampleId, kWorkspaceCapacity> dependencies{};
     gm::PlaybackProgramSnapshot snapshot{};
 
     sf2::PlaybackPrepareRequest request{};
@@ -187,14 +223,14 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
     request.token = 1;
     request.bank_generation = 1;
     request.policy = sf2::PlaybackPreparePolicy::StrictQualified;
-    request.native_scratch = native.data();
-    request.native_capacity = native.size();
-    request.modulation_scratch = modulation.data();
-    request.modulation_capacity = modulation.size();
-    request.playback_zones = playback.data();
-    request.playback_capacity = playback.size();
-    request.dependencies = dependencies.data();
-    request.dependency_capacity = dependencies.size();
+    request.native_scratch = workspace->native.data();
+    request.native_capacity = workspace->native.size();
+    request.modulation_scratch = workspace->modulation.data();
+    request.modulation_capacity = workspace->modulation.size();
+    request.playback_zones = workspace->playback.data();
+    request.playback_capacity = workspace->playback.size();
+    request.dependencies = workspace->dependencies.data();
+    request.dependency_capacity = workspace->dependencies.size();
     request.snapshot = &snapshot;
 
     const sf2::PlaybackPrepareResult prepared =
@@ -211,6 +247,7 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             static_cast<unsigned>(prepared.dependency_count),
             static_cast<unsigned>(prepared.required_dependency_capacity),
             static_cast<unsigned long long>(prepared.issue_union));
+        free_workspace();
         return false;
     }
 
@@ -218,13 +255,14 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
     // behavior (sample region, tuning, loop, volume envelope, filter and native
     // modulation state) remains production-derived from the real Program 0.
     for (std::size_t zone_index = 0; zone_index < snapshot.zone_count; ++zone_index) {
-        playback[zone_index].effects_send = gm::EffectsSendConfig{};
+        workspace->playback[zone_index].effects_send = gm::EffectsSendConfig{};
     }
     if (!snapshot.valid() || !snapshotMatchesAudibleKeys(snapshot)) {
         ESP_LOGE(
             kTag,
             "clean_sf2: Program 0 does not cover C4/E4/G4/C5 at velocity=%u",
             static_cast<unsigned>(kVelocity));
+        free_workspace();
         return false;
     }
 
@@ -238,45 +276,45 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             static_cast<unsigned>(sizeof(CleanRuntime)),
             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+        free_workspace();
         return false;
     }
     auto* runtime = new (runtime_storage) CleanRuntime{};
-
-    std::array<sample::ResidentRecord, kWorkspaceCapacity> records{};
-    std::array<bool, kWorkspaceCapacity> pinned{};
-    std::array<bool, kWorkspaceCapacity> published{};
     bool cleanup_ok = true;
 
     const auto cleanup = [&]() {
         runtime->voices.allSoundOff();
         for (std::size_t index = 0; index < prepared.dependency_count; ++index) {
-            if (published[index]) {
+            if (runtime->published[index]) {
                 const sample::ResidentRecord* retired =
-                    runtime->directory.unpublish(dependencies[index]);
-                if (retired != &records[index] || !runtime->directory.canReclaim(&records[index])) {
+                    runtime->directory.unpublish(workspace->dependencies[index]);
+                if (retired != &runtime->records[index] ||
+                    !runtime->directory.canReclaim(&runtime->records[index])) {
                     cleanup_ok = false;
                 }
             }
-            if (pinned[index] && !residency.unpin(dependencies[index])) {
+            if (runtime->pinned[index] &&
+                !residency.unpin(workspace->dependencies[index])) {
                 cleanup_ok = false;
             }
         }
         runtime->~CleanRuntime();
         heap_caps_free(runtime_storage);
+        free_workspace();
     };
 
     bool setup_ok = runtime->directory.bankGeneration() == request.bank_generation;
     for (std::size_t index = 0; setup_ok && index < prepared.dependency_count; ++index) {
-        const sample::SampleId sample_id = dependencies[index];
+        const sample::SampleId sample_id = workspace->dependencies[index];
         sample::SampleDescriptor descriptor{};
-        if (!source.descriptorFor(sample_id, &descriptor)) {
+        if (!workspace->source.descriptorFor(sample_id, &descriptor)) {
             ESP_LOGE(kTag, "clean_sf2: descriptor failed sample=%u",
                      static_cast<unsigned>(sample_id));
             setup_ok = false;
             break;
         }
 
-        SourceFillContext fill{&source, sample_id};
+        SourceFillContext fill{&workspace->source, sample_id};
         if (!residency.loadFromSource(descriptor, &fillDependency, &fill)) {
             ESP_LOGE(
                 kTag,
@@ -293,7 +331,7 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             setup_ok = false;
             break;
         }
-        pinned[index] = true;
+        runtime->pinned[index] = true;
 
         const sample::ResidentSampleView view = residency.residentView(sample_id);
         if (!view.valid()) {
@@ -303,18 +341,18 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             break;
         }
 
-        records[index].bank_generation = runtime->directory.bankGeneration();
-        records[index].sample_generation = view.generation;
-        records[index].pcm = view.pcm;
-        records[index].descriptor = view.descriptor;
-        records[index].voice_refs.store(0, std::memory_order_relaxed);
-        if (!runtime->directory.publish(sample_id, &records[index])) {
+        runtime->records[index].bank_generation = runtime->directory.bankGeneration();
+        runtime->records[index].sample_generation = view.generation;
+        runtime->records[index].pcm = view.pcm;
+        runtime->records[index].descriptor = view.descriptor;
+        runtime->records[index].voice_refs.store(0, std::memory_order_relaxed);
+        if (!runtime->directory.publish(sample_id, &runtime->records[index])) {
             ESP_LOGE(kTag, "clean_sf2: publish failed sample=%u",
                      static_cast<unsigned>(sample_id));
             setup_ok = false;
             break;
         }
-        published[index] = true;
+        runtime->published[index] = true;
     }
 
     if (setup_ok && !runtime->programs.setInitialActive(&snapshot)) {
@@ -336,10 +374,11 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
     const auto queue_before = runtime->queue.stats();
     ESP_LOGI(
         kTag,
-        "clean_sf2: READY zones=%u dependencies=%u events=%u cues=C4_2s,C_major_3s,C4_E4_G4_C5 dry_fx=1 runtime_internal_bytes=%u",
+        "clean_sf2: READY zones=%u dependencies=%u events=%u cues=C4_2s,C_major_3s,C4_E4_G4_C5 dry_fx=1 prepare_psram_bytes=%u runtime_internal_bytes=%u",
         static_cast<unsigned>(snapshot.zone_count),
         static_cast<unsigned>(prepared.dependency_count),
         static_cast<unsigned>(queue_before.accepted),
+        static_cast<unsigned>(sizeof(CleanPrepareWorkspace)),
         static_cast<unsigned>(sizeof(CleanRuntime)));
 
     const bool i2s_ok = runOptionalI2sDmaQualification(runtime->renderer, kStartFrame);
