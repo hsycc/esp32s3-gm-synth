@@ -144,7 +144,7 @@ bool IRAM_ATTR onSent(
     i2s_event_data_t*,
     void* user_context) {
     auto* stats = static_cast<CallbackStats*>(user_context);
-    ++stats->sent_events;
+    stats->sent_events = stats->sent_events + 1u;
     return false;
 }
 
@@ -153,7 +153,7 @@ bool IRAM_ATTR onSendQueueOverflow(
     i2s_event_data_t*,
     void* user_context) {
     auto* stats = static_cast<CallbackStats*>(user_context);
-    ++stats->send_queue_overflows;
+    stats->send_queue_overflows = stats->send_queue_overflows + 1u;
     return false;
 }
 
@@ -221,24 +221,27 @@ bool runI2sTask(TaskContext& context) {
         return false;
     }
 
-    i2s_std_config_t standard_config{
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
-            I2S_DATA_BIT_WIDTH_16BIT,
-            I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {
-            .mclk = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO),
-            .bclk = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO),
-            .ws = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO),
-            .dout = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO),
-            .din = I2S_GPIO_UNUSED,
-            .invert_flags = {
-                .mclk_inv = false,
-                .bclk_inv = false,
-                .ws_inv = false,
-            },
-        },
-    };
+    // Initialize the ESP-IDF config in assignments instead of relying on C++
+    // designated-initializer support/order. This keeps the physical build
+    // compatible with the compiler mode selected by ESP-IDF.
+    i2s_std_config_t standard_config{};
+    standard_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
+    standard_config.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+        I2S_DATA_BIT_WIDTH_16BIT,
+        I2S_SLOT_MODE_STEREO);
+    standard_config.gpio_cfg.mclk =
+        static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO);
+    standard_config.gpio_cfg.bclk =
+        static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO);
+    standard_config.gpio_cfg.ws =
+        static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO);
+    standard_config.gpio_cfg.dout =
+        static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO);
+    standard_config.gpio_cfg.din = I2S_GPIO_UNUSED;
+    standard_config.gpio_cfg.invert_flags.mclk_inv = false;
+    standard_config.gpio_cfg.invert_flags.bclk_inv = false;
+    standard_config.gpio_cfg.invert_flags.ws_inv = false;
+
     // ES8311 reference clock table has an exact 44.1 kHz entry at 256*Fs.
     standard_config.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
