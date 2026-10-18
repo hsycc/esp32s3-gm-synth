@@ -184,27 +184,25 @@ bool KorvoV4Es8311::prepareMuted() {
         return false;
     }
 
-    // Reuse I2C0 when another board service already owns it; otherwise create
-    // the Korvo audio-control bus ourselves and remember ownership for cleanup.
-    esp_err_t err = i2c_master_get_bus_handle(I2C_NUM_0, &bus_);
-    if (err == ESP_OK && bus_ != nullptr) {
-        owns_bus_ = false;
-    } else {
-        i2c_master_bus_config_t bus_config{};
-        bus_config.i2c_port = I2C_NUM_0;
-        bus_config.sda_io_num = kSda;
-        bus_config.scl_io_num = kScl;
-        bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
-        bus_config.glitch_ignore_cnt = 7;
-        bus_config.flags.enable_internal_pullup = true;
-        err = i2c_new_master_bus(&bus_config, &bus_);
-        if (err != ESP_OK) {
-            ESP_LOGE(kTag, "es8311: create I2C0 failed: %s", esp_err_to_name(err));
-            bus_ = nullptr;
-            return false;
-        }
-        owns_bus_ = true;
+    // This dedicated qualification path owns its short-lived audio-control bus.
+    // Let ESP-IDF select a free HP I2C controller for the fixed Korvo SDA/SCL
+    // pins instead of probing an uninitialized port (which logs an error by
+    // design). Production board services can later inject/share a persistent
+    // bus at a higher integration layer without changing the codec sequence.
+    i2c_master_bus_config_t bus_config{};
+    bus_config.i2c_port = -1;
+    bus_config.sda_io_num = kSda;
+    bus_config.scl_io_num = kScl;
+    bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_config.glitch_ignore_cnt = 7;
+    bus_config.flags.enable_internal_pullup = true;
+    esp_err_t err = i2c_new_master_bus(&bus_config, &bus_);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "es8311: create I2C bus failed: %s", esp_err_to_name(err));
+        bus_ = nullptr;
+        return false;
     }
+    owns_bus_ = true;
 
     i2c_device_config_t device_config{};
     device_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
