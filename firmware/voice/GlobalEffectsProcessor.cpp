@@ -13,10 +13,14 @@ constexpr std::int32_t kReverbWetGainQ15 = 11000;
 constexpr std::int32_t kReverbFeedbackAQ15 = 23800;
 constexpr std::int32_t kReverbFeedbackBQ15 = 23100;
 constexpr std::int32_t kReverbFeedbackCQ15 = 22400;
+constexpr std::size_t kChorusDelayFrames = 1024;
+constexpr std::size_t kChorusDelayMask = kChorusDelayFrames - 1u;
 constexpr std::size_t kChorusBaseDelayFrames = 600;
 constexpr std::size_t kChorusDepthFrames = 96;
 // ~0.65 Hz at 44.1 kHz in Q0.32 cycles/frame.
 constexpr std::uint32_t kChorusPhaseStepQ32 = 63300u;
+
+static_assert((kChorusDelayFrames & kChorusDelayMask) == 0u);
 
 inline void advanceRingIndex(std::size_t* index, std::size_t size) {
     ++(*index);
@@ -80,11 +84,24 @@ std::int32_t GlobalEffectsProcessor::averageStereo(
 
 std::int32_t GlobalEffectsProcessor::triangleQ15(std::uint32_t phase_q32) {
     constexpr std::uint32_t kQuarterMask = (std::uint32_t{1} << 30u) - 1u;
+    constexpr std::uint32_t kLow15Mask = (std::uint32_t{1} << 15u) - 1u;
     const std::uint32_t quadrant = phase_q32 >> 30u;
     const std::uint32_t fraction = phase_q32 & kQuarterMask;
+
+    // Exact 32-bit decomposition of:
+    //   (fraction * 32767 + 2^29) >> 30
+    // Split the 30-bit fraction into two 15-bit halves. Multiplication by
+    // 32767 is (x << 15) - x, and all intermediates remain below INT32_MAX.
+    // This preserves the original rounded Q15 ramp without a 64-bit multiply.
+    const std::uint32_t high = fraction >> 15u;
+    const std::uint32_t low = fraction & kLow15Mask;
+    const std::uint32_t high_product = (high << 15u) - high;
+    const std::uint32_t low_product = (low << 15u) - low;
+    const std::uint32_t rounded_low =
+        (low_product + (std::uint32_t{1} << 29u)) >> 15u;
     const std::int32_t ramp = static_cast<std::int32_t>(
-        (static_cast<std::uint64_t>(fraction) * kQ15Unity +
-         (std::uint64_t{1} << 29u)) >> 30u);
+        (high_product + rounded_low) >> 15u);
+
     switch (quadrant) {
         case 0:
             return ramp;
@@ -120,22 +137,23 @@ std::int32_t GlobalEffectsProcessor::processAllpass(
     std::size_t* index) {
     const std::int32_t delayed = buffer[*index];
     // g=0.5 all-pass: y = delayed - g*x, state = x + g*y.
+    // input is an average of three int16 comb taps, so input is int16-bounded.
+    // output is therefore within roughly +/-49151 and next within +/-57343;
+    // the old int64/int32 saturation path could never trigger here.
     const std::int32_t output = delayed - input / 2;
-    const std::int64_t next = static_cast<std::int64_t>(input) + output / 2;
-    buffer[*index] = clampI16(static_cast<std::int32_t>(std::clamp<std::int64_t>(
-        next,
-        std::numeric_limits<std::int32_t>::min(),
-        std::numeric_limits<std::int32_t>::max())));
+    const std::int32_t next = input + output / 2;
+    buffer[*index] = clampI16(next);
     advanceRingIndex(index, size);
     return output;
 }
 
 std::int32_t GlobalEffectsProcessor::chorusTap(std::size_t delay_frames) const {
-    const std::size_t size = chorus_delay_.size();
-    const std::size_t delay = std::clamp<std::size_t>(delay_frames, 1u, size - 1u);
-    const std::size_t read = chorus_write_ >= delay
-        ? chorus_write_ - delay
-        : chorus_write_ + size - delay;
+    const std::size_t delay = std::clamp<std::size_t>(
+        delay_frames,
+        1u,
+        kChorusDelayFrames - 1u);
+    const std::size_t read =
+        (chorus_write_ + kChorusDelayFrames - delay) & kChorusDelayMask;
     return chorus_delay_[read];
 }
 
@@ -162,7 +180,7 @@ void GlobalEffectsProcessor::processAdd(
             static_cast<std::int32_t>(kChorusBaseDelayFrames) - modulation);
         const std::int32_t chorus_left = scaleQ15(chorusTap(left_delay), kChorusWetGainQ15);
         const std::int32_t chorus_right = scaleQ15(chorusTap(right_delay), kChorusWetGainQ15);
-        advanceRingIndex(&chorus_write_, chorus_delay_.size());
+        chorus_write_ = (chorus_write_ + 1u) & kChorusDelayMask;
         chorus_phase_q32_ += kChorusPhaseStepQ32;
 
         const std::int32_t reverb_input = averageStereo(reverb_bus, frame);
