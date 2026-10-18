@@ -24,14 +24,6 @@ struct PhysicalHeavyDspStressResult {
     std::uint64_t first_failed_clipped_samples = 0;
     std::uint32_t failure_flags = 0;
     bool boundary_reached = false;
-
-    // Kept temporarily for the existing qualification caller while it is
-    // migrated from pass/fail semantics to workload-envelope reporting.
-    // A pathological heavy-DSP ceiling is not a nominal-product minimum gate.
-    std::size_t minimum_required_voices = 0;
-    bool pass() const {
-        return true;
-    }
 };
 
 // Measures the generic/worst-feature Voice path on the real MCU. The generated
