@@ -84,4 +84,101 @@ endif
 
 endmenu
 
+menu "I2S DMA qualification"
+
+config GM_SYNTH_I2S_QUAL_ENABLE
+    bool "Run physical 44.1 kHz stereo I2S/DMA qualification"
+    default n
+    depends on GM_SYNTH_RENDER_BENCHMARK_ENABLE
+    help
+        Starts a dedicated Core-pinned realtime task after the deterministic
+        16-Voice + Reverb/Chorus effects benchmark and streams the same renderer
+        through the ESP-IDF standard-mode I2S DMA driver. Keep disabled until
+        the board schematic has supplied real BCLK/WS/DOUT GPIO assignments.
+
+config GM_SYNTH_I2S_QUAL_BCLK_GPIO
+    int "I2S BCLK GPIO (-1 = unconfigured)"
+    default -1
+    range -1 48
+    help
+        Physical BCLK GPIO. Qualification refuses to start while this is -1.
+
+config GM_SYNTH_I2S_QUAL_WS_GPIO
+    int "I2S WS/LRCK GPIO (-1 = unconfigured)"
+    default -1
+    range -1 48
+    help
+        Physical WS/LRCK GPIO. Qualification refuses to start while this is -1.
+
+config GM_SYNTH_I2S_QUAL_DOUT_GPIO
+    int "I2S DOUT GPIO (-1 = unconfigured)"
+    default -1
+    range -1 48
+    help
+        Physical serial audio data output GPIO. Qualification refuses to start
+        while this is -1.
+
+config GM_SYNTH_I2S_QUAL_MCLK_GPIO
+    int "I2S MCLK GPIO (-1 = unused)"
+    default -1
+    range -1 48
+    help
+        Optional physical MCLK GPIO. Leave -1 for DAC/Codec configurations that
+        do not require an externally supplied MCLK.
+
+config GM_SYNTH_I2S_QUAL_DMA_DESC_NUM
+    int "I2S DMA descriptor count"
+    default 8
+    range 2 16
+    help
+        Number of TX DMA descriptors. At the default 64 frames per descriptor,
+        eight descriptors provide roughly 11.6 ms of queued audio at 44.1 kHz.
+
+config GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM
+    int "I2S DMA frames per descriptor"
+    default 64
+    range 16 511
+    help
+        Stereo audio frames per DMA descriptor. The qualification default is
+        intentionally one synth render block (64 frames).
+
+config GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS
+    int "I2S warm-up blocks"
+    default 64
+    range 8 2048
+
+config GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS
+    int "I2S measured blocks"
+    default 4096
+    range 128 32768
+    help
+        4096 blocks is about 5.94 seconds at 44.1 kHz / 64 frames per block.
+
+config GM_SYNTH_I2S_QUAL_WRITE_TIMEOUT_MS
+    int "I2S blocking write timeout (ms)"
+    default 20
+    range 2 1000
+
+config GM_SYNTH_I2S_QUAL_TASK_STACK_BYTES
+    int "I2S qualification task stack bytes"
+    default 8192
+    range 4096 32768
+
+config GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES
+    int "Minimum accepted stack high-water headroom bytes"
+    default 2048
+    range 512 16384
+
+config GM_SYNTH_I2S_QUAL_TASK_PRIORITY
+    int "I2S qualification task priority"
+    default 20
+    range 5 24
+
+config GM_SYNTH_I2S_QUAL_TASK_CORE
+    int "I2S qualification task core"
+    default 1
+    range 0 1
+
+endmenu
+
 endmenu
