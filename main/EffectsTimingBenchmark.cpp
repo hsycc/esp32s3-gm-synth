@@ -4,12 +4,16 @@
 #include "sdkconfig.h"
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+#include "PhysicalHeavyDspStress.h"
 #include "PhysicalMusicStress.h"
 #endif
 
 #ifdef CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE
 
 #include "esp_log.h"
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+#include "esp_heap_caps.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -26,6 +30,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+#include <new>
+#endif
 
 namespace gm_synth::bringup {
 namespace {
@@ -207,6 +214,38 @@ void logStage(const char* stage, const TimingSnapshot& timing, std::uint64_t che
         kPhysicalTimingEvidence);
 }
 
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+PhysicalMusicStress* allocatePhysicalMusicStress(
+    sample::PublishedSampleDirectory& directory) {
+    // PhysicalMusicStress embeds the production-shaped Program Event applier,
+    // whose 32-Voice resolve batch is intentionally large. Keeping this object
+    // as a function-static put that entire batch in .dram0.bss and overflowed
+    // the ESP32-S3 static DRAM link region. Allocate it once from INTERNAL heap
+    // instead: the realtime callback still runs from internal SRAM, while link-
+    // time BSS stays bounded. The renderer stores this pointer for process life,
+    // so this one-shot qualification allocation is deliberately not freed.
+    void* storage = heap_caps_malloc(
+        sizeof(PhysicalMusicStress),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (storage == nullptr) {
+        ESP_LOGE(
+            kTag,
+            "physical_stress: internal allocation failed bytes=%u free_internal=%u",
+            static_cast<unsigned>(sizeof(PhysicalMusicStress)),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+        return nullptr;
+    }
+
+    auto* stress = new (storage) PhysicalMusicStress(directory);
+    ESP_LOGI(
+        kTag,
+        "physical_stress: INTERNAL_STATE bytes=%u free_internal_after=%u",
+        static_cast<unsigned>(sizeof(PhysicalMusicStress)),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+    return stress;
+}
+#endif
+
 }  // namespace
 
 bool runOptionalEffectsTimingBenchmark() {
@@ -217,12 +256,15 @@ bool runOptionalEffectsTimingBenchmark() {
     static realtime::RealtimeEventQueue queue;
     static realtime::BlockEventScheduler scheduler(queue);
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    static PhysicalMusicStress physical_stress(directory);
+    static PhysicalMusicStress* physical_stress = allocatePhysicalMusicStress(directory);
+    if (physical_stress == nullptr) {
+        return false;
+    }
     static realtime::ScheduledAudioBlockRenderer renderer(
         voices,
         scheduler,
         &PhysicalMusicStress::callback,
-        &physical_stress);
+        physical_stress);
 #else
     static realtime::ScheduledAudioBlockRenderer renderer(voices, scheduler, nullptr);
 #endif
@@ -252,7 +294,7 @@ bool runOptionalEffectsTimingBenchmark() {
     }
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    if (!physical_stress.initialize()) {
+    if (!physical_stress->initialize()) {
         ESP_LOGE(kTag, "effects_bench: physical music stress initialization failed");
         return false;
     }
@@ -359,17 +401,39 @@ bool runOptionalEffectsTimingBenchmark() {
         kPhysicalTimingEvidence);
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    // Establish a hardware full-FX polyphony ceiling first, then start the
-    // physical stream from silence and let the realtime queue build/churn the
-    // active set. This keeps max-polyphony timing and dynamic-DMA evidence
-    // independently attributable.
+    // Establish both the ordinary full-FX ceiling and a generic heavy-DSP
+    // ceiling before the long physical stream. The product candidate is the
+    // conservative minimum of those independently measured consecutive limits.
     voices.allSoundOff();
-    if (!physical_stress.runPolyphonySweep(voices, renderer, &block_start_frame)) {
+    if (!physical_stress->runPolyphonySweep(voices, renderer, &block_start_frame)) {
         ESP_LOGE(kTag, "effects_bench: physical polyphony qualification FAILED");
         voices.allSoundOff();
         return false;
     }
-    if (!physical_stress.enqueueTimeline(
+
+    const PhysicalHeavyDspStressResult heavy = runPhysicalHeavyDspStress(
+        directory,
+        voices,
+        renderer,
+        &block_start_frame);
+    const std::size_t product_candidate = std::min(
+        physical_stress->maxStablePolyphony(),
+        heavy.max_stable_voices);
+    ESP_LOGI(
+        kTag,
+        "physical_product: RESULT full_fx_max=%u heavy_dsp_max=%u candidate=%u heavy_minimum_required=%u %s",
+        static_cast<unsigned>(physical_stress->maxStablePolyphony()),
+        static_cast<unsigned>(heavy.max_stable_voices),
+        static_cast<unsigned>(product_candidate),
+        static_cast<unsigned>(heavy.minimum_required_voices),
+        heavy.pass() ? "PASS" : "FAIL");
+    if (!heavy.pass()) {
+        ESP_LOGE(kTag, "effects_bench: physical heavy-DSP qualification FAILED");
+        voices.allSoundOff();
+        return false;
+    }
+
+    if (!physical_stress->enqueueTimeline(
             queue,
             voices,
             renderer,
@@ -388,7 +452,7 @@ bool runOptionalEffectsTimingBenchmark() {
     }
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    if (!physical_stress.validateAndLog(queue, voices, renderer)) {
+    if (!physical_stress->validateAndLog(queue, voices, renderer)) {
         ESP_LOGE(kTag, "effects_bench: physical music stress qualification FAILED");
         voices.allSoundOff();
         return false;
