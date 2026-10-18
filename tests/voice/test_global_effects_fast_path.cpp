@@ -55,8 +55,14 @@ public:
             const std::int32_t chorus_input = averageStereo(chorus_bus, frame);
             chorus_delay_[chorus_write_] = clampI16(chorus_input);
             const std::int32_t lfo_q15 = triangleQ15(chorus_phase_q32_);
+            // Model ESP32-S3 semantics explicitly. On 32-bit ESP32, size_t is
+            // uint32 and is representable by int64_t, so this multiplication is
+            // signed. On 64-bit hosts, an uncast size_t would otherwise promote
+            // the negative LFO half-cycle to uint64_t and corrupt the reference.
             const std::int32_t modulation = static_cast<std::int32_t>(
-                (static_cast<std::int64_t>(lfo_q15) * kChorusDepthFrames) / kQ15Unity);
+                (static_cast<std::int64_t>(lfo_q15) *
+                 static_cast<std::int64_t>(kChorusDepthFrames)) /
+                kQ15Unity);
             const std::size_t left_delay = static_cast<std::size_t>(
                 static_cast<std::int32_t>(kChorusBaseDelayFrames) + modulation);
             const std::size_t right_delay = static_cast<std::size_t>(
