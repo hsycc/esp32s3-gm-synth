@@ -6,19 +6,23 @@ This file is the durable execution plan for Codex/local development. Keep it ali
 
 The project is in **M6 physical product qualification / polyphony-envelope characterization**.
 
-Checkpoint `73a4765` successfully measured two different physical performance envelopes on the current ESP32-S3 N16R8 build:
+The latest measured physical checkpoint remains `73a4765`:
 
 - normal/full-FX synthetic workload: stable through 28 voices, first failed step at 32 voices;
-- deliberately heavy all-features-on DSP workload: stable through 4 voices, first failed step at 8 voices.
+- deliberately pathological all-features-on DSP workload: stable through 4 voices, first failed step at 8 voices.
 
-A failed step in a voice-count sweep means **the workload crossed its realtime polyphony limit**. It does **not** mean the firmware or the whole M6 milestone failed. The purpose of the sweep is to find that boundary.
+A failed step in a voice-count sweep means **the tested workload crossed its realtime polyphony limit**. It does **not** mean the firmware or the whole M6 milestone failed. The purpose of the sweep is to find that boundary.
 
-The current harness still has two issues to improve:
+The current source checkpoint after the latest harness work is `d3bbd8b` (`test: move clean SF2 prepare workspace off main task stack`). It contains two important changes that still require the next physical run for measurement/audible confirmation:
 
-1. after the first clearly failed step it keeps driving far beyond the measured limit, eventually provoking watchdog activity without adding useful product information;
-2. the long I2S/music stress is coupled to an intentionally aggressive dynamic workload, so its deadline/queue-overflow results must be interpreted as workload-limit evidence rather than as a generic hardware-audio failure.
+1. the pathological heavy-DSP sweep stops at the first unstable step instead of continuing deeper into already-proven overload and provoking watchdog activity;
+2. a separate real-SF2 clean audible gate runs before synthetic performance stress.
 
-The next product decision is to define representative workload classes and choose a conservative nominal polyphony with engineering margin. Clean audible correctness remains a separate gate.
+The clean gate uses the real SF2 Bank 0 / Program 0 path and a sparse dry musical sequence. It is implemented in source, but **physical audible sign-off is still pending**. Do not call it passed until the board run and listening/log evidence confirm it.
+
+The existing I2S hardware-isolation 441 Hz reference generator is still a **triangle wave**, not a sine wave. It is useful for basic I2S -> ES8311 -> PA -> speaker continuity but is naturally harmonically rough and must not be treated as the final clean-tone oracle. Converting that reference to a true sine remains an audible-diagnostics cleanup item.
+
+The next product decision is to define representative workload classes and choose a conservative nominal polyphony with engineering margin. A current working candidate for the normal/full-FX class is **24 voices**; 28 is a measured edge with too little timing margin to advertise directly.
 
 ## Fixed product baseline
 
@@ -129,23 +133,48 @@ Realtime invariant: no filesystem/Flash/SD read in the audio hot path.
 
 ## M4 — Voice DSP + FX + physical audio
 
-Status: **DSP paths are implemented and physically exercised; clean audible correctness still needs a dedicated sign-off path.**
+Status: **DSP paths are implemented and physically exercised; dedicated clean-audible source path is now implemented, with physical sign-off pending.**
 
-Implemented paths include sample interpolation/phase stepping, pitch conversion, looping, attenuation/pan, volume envelope, resonant/dynamic filtering, vibrato LFO, modulation LFO, modulation envelope, reverb/chorus sends, global FX, I2S DMA, ES8311 and PA output.
+Implemented DSP/audio paths include sample interpolation/phase stepping, pitch conversion, looping, attenuation/pan, volume envelope, resonant/dynamic filtering, vibrato LFO, modulation LFO, modulation envelope, reverb/chorus sends, global FX, I2S DMA, ES8311 and PA output.
 
-### Clean audible gate
+### Clean audible gate — source implementation at `d3bbd8b`
 
-Use real SF2 musical content, separate from performance stress:
+The physical qualification image now runs a clean path before synthetic stress:
 
-1. deterministic clean reference tone;
-2. one real SF2 melodic note, dry/no FX;
-3. small musical chord, dry/no FX;
-4. attack/loop/release sanity;
-5. filter alone;
-6. modulation paths one at a time;
-7. chorus/reverb last.
+```text
+real /sf2/test.sf2
+  -> Sf2PdtaReader + Sf2SampleSource
+  -> Sf2PlaybackProgramPreparer
+  -> Bank 0 / Program 0 PlaybackProgramSnapshot
+  -> resident sample reuse/pin/publish
+  -> RealtimeProgramEventApplier / ZoneResolver
+  -> VoicePool
+  -> ScheduledAudioBlockRenderer
+  -> mono downmix
+  -> I2S -> ES8311 -> PA -> speaker
+```
 
-Record PCM peak, clipping and checksum per stage.
+The first audible SF2 sequence is deliberately sparse and dry:
+
+- C4 single note for about 2 s;
+- silence;
+- C4/E4/G4 major chord for about 3 s;
+- silence;
+- C4 -> E4 -> G4 -> C5 sequence.
+
+FX sends are cleared only for this first clean oracle. Sample region, tuning, loop, volume envelope, filter and native modulation state still come from the real prepared SF2 Program 0.
+
+The large `Sf2SampleSource` + prepare workspaces are allocated from PSRAM instead of the main task stack. The realtime queue, publication atomics and realtime runtime remain in internal RAM. A compile-time size guard prevents the clean realtime aggregate from silently growing beyond the current internal-RAM budget.
+
+Physical pass evidence still required:
+- clean SF2 `i2s_ok=1`;
+- clean runtime invariants pass;
+- no clipping;
+- no event rejects / missing program / unmatched zones / resolve overflow / voice-start failure;
+- subjective listening confirms correct pitch, clean single note/chord, sensible attack/loop/release;
+- no watchdog event.
+
+After the initial dry oracle passes, add filter/modulation/FX one at a time rather than enabling the entire pathological feature set at once.
 
 ## M5 — Timestamped realtime event scheduler / GM channel runtime
 
@@ -177,13 +206,12 @@ Normal/full-FX synthetic workload:
 
 28 voices is a measured edge, not a safe public specification: it leaves only ~14 us against the block budget.
 
-Deliberately heavy all-features-on DSP workload:
+Deliberately pathological all-features-on DSP workload:
 
 - 1 voice: stable;
 - 2 voices: stable;
 - 4 voices: stable;
 - 8 voices: ~1513 us average, 128/128 deadline misses;
-- higher steps are further beyond budget;
 - **measured stable maximum = 4 voices**;
 - **first failed step = 8 voices**.
 
@@ -199,19 +227,40 @@ PASS ... PASS -> first FAIL
                  boundary found
 ```
 
-The first failed step is expected and useful. Continuing much further past that point generally adds little product information and can provoke watchdog activity or contaminate later tests.
+The first failed step is expected and useful.
 
-### Harness changes
+### Harness changes now implemented
 
-- stop or sharply reduce further sweep work after the first stable-to-failed boundary is established;
-- record `stable_max` and `first_failed` explicitly;
-- keep watchdog diagnostics from contaminating unrelated later measurements;
-- isolate long I2S stability tests from deliberately impossible overload states;
-- run long I2S/music stability at selected representative product workload(s), not automatically at every worst-case synthetic workload.
+- heavy-DSP sweep stops after the first unstable step;
+- results explicitly report `max_stable_voices`, `first_failed_voices` and `boundary_reached`;
+- pathological heavy result no longer computes the product candidate as `min(normal_max, heavy_max)`;
+- current log reports separate normal/full-FX maximum, nominal candidate, pathological heavy maximum and first unstable step;
+- an idle scheduling point separates the heavy sweep from the later continuous-I2S phase;
+- clean real-SF2 audible gate runs before synthetic performance stress.
+
+Expected next-board heavy sequence from the current measured envelope is therefore:
+
+```text
+1 PASS -> 2 PASS -> 4 PASS -> 8 first unstable -> STOP
+```
+
+It should no longer continue 12/16/20/24/28/32 merely to prove increasingly severe overload.
+
+### Long aggressive I2S/music timeline
+
+The existing long timeline intentionally mixes sustain/release/percussion/pitch/modulation/Program Change/GM reset and dense bursts. Its old `11338/16384` deadline misses and thousands of send-queue overflows are evidence that **that timeline crossed the realtime envelope**; they are not proof that a light/normal audio path is inherently broken.
+
+However, the current code still treats this aggressive long-I2S return value as a hard benchmark result. The next harness cleanup should separate:
+
+1. **clean/light I2S correctness gate** — must pass;
+2. **selected nominal workload continuous-I2S gate** — must pass for the product polyphony claim;
+3. **aggressive timeline stress** — characterize and report its boundary without confusing it with the nominal product gate.
+
+Do not simply ignore genuine I2S/write/clock failures: the distinction is based on workload class and the already-passing clean gate, not on suppressing error telemetry.
 
 ### Product polyphony classes
 
-Do not reduce all results to `min(normal_max, pathological_heavy_max)` without workload context. Track at least:
+Track at least:
 
 - **simple/dry SF2**;
 - **normal GM + FX**;
@@ -220,14 +269,21 @@ Do not reduce all results to `min(normal_max, pathological_heavy_max)` without w
 
 The eventual public specification should be a conservative **nominal polyphony** supported across representative real-bank workloads, with dynamic/adaptive reduction for unusually expensive patches if needed.
 
-A plausible direction from the current evidence is that 24 voices may be a normal/full-FX candidate while the 28-voice point is too close to the deadline to advertise. This is not final until representative real-SF2 workloads and continuous I2S output confirm margin.
+Current working direction:
+- normal/full-FX measured edge: 28;
+- normal nominal candidate for further continuous-I2S/real-bank validation: **24**;
+- pathological heavy ceiling: 4;
+- hard software voice cap: 32.
+
+This is not a final product specification until representative real-SF2 workloads and continuous I2S output confirm margin.
 
 ### M6 sign-off criteria
 
-- clean audible gate passes;
+- clean audible gate passes physically;
 - representative workload classes have measured stable maxima and first-failed points;
 - selected nominal product workload runs continuously through physical I2S with no unacceptable underrun/queue/deadline failure;
 - no unexpected clipping;
+- no watchdog caused by the supported nominal workload;
 - product polyphony is chosen with engineering margin from representative physical evidence;
 - pathological stress limits are documented separately rather than forcing the public nominal specification down to their worst-case number.
 
@@ -264,4 +320,5 @@ Release metrics include deadline misses/underruns/queue drops, invalid sample ac
 - Synthetic performance stress is not an audible-quality oracle.
 - A failed voice-count step after lower passing steps is a measured performance boundary, not automatically a product or milestone failure.
 - Current measured boundaries: **normal/full-FX stable to 28, first fail 32; pathological heavy-DSP stable to 4, first fail 8**.
+- Current normal nominal candidate for further validation is **24 voices**; 28 is an edge measurement, not a product promise.
 - Public nominal polyphony will be selected from representative real workload classes with engineering margin, not from the highest isolated voice count and not from the pathological minimum alone.
