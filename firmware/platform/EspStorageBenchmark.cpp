@@ -1,5 +1,6 @@
 #include "EspStorageBenchmark.h"
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -66,7 +67,12 @@ bool runEspStorageBenchmarkSweep(
         return false;
     }
 
-    static std::uint64_t latency_scratch[kLatencyScratchCount];
+    // This scratch stores one 64-bit latency sample per storage chunk and is
+    // not consumed by the realtime audio path. In the physical N16R8 image,
+    // sdkconfig.hwbench enables external-BSS placement so this 16 KiB array
+    // lives in PSRAM instead of exhausting scarce internal DRAM. Per-chunk
+    // latency is captured before the scratch write, preserving latency timing.
+    static EXT_RAM_BSS_ATTR std::uint64_t latency_scratch[kLatencyScratchCount];
     EspTimerClock clock;
     bool all_ok = true;
 
