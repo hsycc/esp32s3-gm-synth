@@ -27,6 +27,9 @@ namespace {
 constexpr char kTag[] = "gm_synth";
 constexpr std::uint32_t kSampleRate = 44100;
 constexpr std::uint32_t kBlockBudgetUs = 1451;
+constexpr std::uint32_t kExpectedBclkHz = kSampleRate * 16u * 2u;
+constexpr std::uint32_t kExpectedMclkHz = kSampleRate * 256u;
+constexpr std::uint32_t kClockTolerancePercent = 1u;
 constexpr std::size_t kFramesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
 constexpr std::size_t kSamplesPerBlock =
@@ -113,6 +116,17 @@ std::uint32_t elapsedUs(std::uint64_t start_us, std::uint64_t end_us) {
     return static_cast<std::uint32_t>(std::min<std::uint64_t>(
         end_us - start_us,
         std::numeric_limits<std::uint32_t>::max()));
+}
+
+bool clockWithinTolerance(std::uint32_t actual_hz, std::uint32_t expected_hz) {
+    if (actual_hz == 0u || expected_hz == 0u) {
+        return false;
+    }
+    const std::uint64_t delta = actual_hz >= expected_hz
+        ? static_cast<std::uint64_t>(actual_hz - expected_hz)
+        : static_cast<std::uint64_t>(expected_hz - actual_hz);
+    return delta * 100u <=
+        static_cast<std::uint64_t>(expected_hz) * kClockTolerancePercent;
 }
 
 void downmixMonoToStereoSlots(
@@ -261,6 +275,30 @@ bool runI2sTask(TaskContext& context) {
         cleanup();
         return false;
     }
+
+    const bool bclk_ok = clockWithinTolerance(channel_info.bclk_hz, kExpectedBclkHz);
+    const bool mclk_ok = clockWithinTolerance(channel_info.mclk_hz, kExpectedMclkHz);
+    if (!bclk_ok || !mclk_ok) {
+        ESP_LOGE(
+            kTag,
+            "i2s_qual: CLOCK_GATE FAIL expected_bclk=%u actual_bclk=%u expected_mclk=%u actual_mclk=%u tolerance_percent=%u",
+            static_cast<unsigned>(kExpectedBclkHz),
+            static_cast<unsigned>(channel_info.bclk_hz),
+            static_cast<unsigned>(kExpectedMclkHz),
+            static_cast<unsigned>(channel_info.mclk_hz),
+            static_cast<unsigned>(kClockTolerancePercent));
+        cleanup();
+        return false;
+    }
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: CLOCK_GATE PASS expected_bclk=%u actual_bclk=%u expected_mclk=%u actual_mclk=%u tolerance_percent=%u",
+        static_cast<unsigned>(kExpectedBclkHz),
+        static_cast<unsigned>(channel_info.bclk_hz),
+        static_cast<unsigned>(kExpectedMclkHz),
+        static_cast<unsigned>(channel_info.mclk_hz),
+        static_cast<unsigned>(kClockTolerancePercent));
+
     const InternalHeapSnapshot dma_ready_heap = internalHeapSnapshot();
     logInternalHeap("dma_ready", dma_ready_heap);
 
@@ -297,7 +335,23 @@ bool runI2sTask(TaskContext& context) {
         }
     }
 
-    // Start MCLK/BCLK/LRCK only after silence is resident in DMA.
+    if (channel_info.total_dma_buf_size == 0u ||
+        total_preloaded_bytes != static_cast<std::size_t>(channel_info.total_dma_buf_size)) {
+        ESP_LOGE(
+            kTag,
+            "i2s_qual: DMA_PRELOAD_GATE FAIL driver_dma_bytes=%u preloaded_bytes=%u",
+            static_cast<unsigned>(channel_info.total_dma_buf_size),
+            static_cast<unsigned>(total_preloaded_bytes));
+        cleanup();
+        return false;
+    }
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: DMA_PRELOAD_GATE PASS driver_dma_bytes=%u preloaded_bytes=%u",
+        static_cast<unsigned>(channel_info.total_dma_buf_size),
+        static_cast<unsigned>(total_preloaded_bytes));
+
+    // Start MCLK/BCLK/LRCK only after silence is resident in every DMA buffer.
     err = i2s_channel_enable(tx_channel);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "i2s_qual: i2s_channel_enable failed: %s", esp_err_to_name(err));
