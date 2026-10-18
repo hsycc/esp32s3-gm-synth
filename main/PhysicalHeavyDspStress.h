@@ -12,6 +12,11 @@ namespace gm_synth::bringup {
 struct PhysicalHeavyDspStressResult {
     std::size_t max_stable_voices = 0;
     std::size_t minimum_required_voices = 16;
+    std::size_t first_failed_voices = 0;
+    std::size_t first_failed_active_voices = 0;
+    std::uint32_t first_failed_deadline_misses = 0;
+    std::uint64_t first_failed_clipped_samples = 0;
+    std::uint32_t failure_flags = 0;
 
     bool pass() const {
         return max_stable_voices >= minimum_required_voices;
