@@ -27,6 +27,7 @@ if(CONFIG_GM_SYNTH_I2S_QUAL_ENABLE)
         "I2sDmaQualification.cpp"
         "KorvoV4Es8311.cpp"
         "PhysicalMusicStress.cpp"
+        "PhysicalHeavyDspStress.cpp"
     )
 else()
     list(APPEND GM_SYNTH_MAIN_SRCS "I2sDmaQualificationDisabled.cpp")
