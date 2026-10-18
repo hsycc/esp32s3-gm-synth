@@ -8,8 +8,15 @@ set(GM_SYNTH_MAIN_SRCS
 set(GM_SYNTH_MAIN_PRIV_REQUIRES fatfs)
 
 if(CONFIG_GM_SYNTH_I2S_QUAL_ENABLE)
-    list(APPEND GM_SYNTH_MAIN_SRCS "I2sDmaQualification.cpp")
-    list(APPEND GM_SYNTH_MAIN_PRIV_REQUIRES esp_driver_i2s)
+    list(APPEND GM_SYNTH_MAIN_SRCS
+        "I2sDmaQualification.cpp"
+        "KorvoV4Es8311.cpp"
+    )
+    list(APPEND GM_SYNTH_MAIN_PRIV_REQUIRES
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_i2s
+    )
 else()
     list(APPEND GM_SYNTH_MAIN_SRCS "I2sDmaQualificationDisabled.cpp")
 endif()
