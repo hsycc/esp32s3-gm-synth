@@ -87,14 +87,18 @@ endmenu
 menu "I2S DMA qualification"
 
 config GM_SYNTH_I2S_QUAL_ENABLE
-    bool "Run physical 44.1 kHz stereo I2S/DMA qualification"
+    bool "Run KS_S3_KORVO_V4 ES8311 + I2S/DMA qualification"
     default n
     depends on GM_SYNTH_RENDER_BENCHMARK_ENABLE
     help
-        Starts a dedicated Core-pinned realtime task after the deterministic
-        16-Voice + Reverb/Chorus effects benchmark and streams the same renderer
-        through the ESP-IDF standard-mode I2S DMA driver. Keep disabled until
-        the board schematic has supplied real BCLK/WS/DOUT GPIO assignments.
+        Dedicated physical-audio qualification path for KS_S3_KORVO_V4 /
+        ESP32-S3-Korvo-2 routing. A Core-pinned realtime task renders 44.1 kHz
+        audio into standard 16-bit stereo Philips I2S frames; renderer L/R is
+        averaged to mono and duplicated into both slots for the single ES8311
+        DAC / mono speaker path. The codec is held muted with PA off until DMA
+        silence has been preloaded and MCLK/BCLK/LRCK are running. Keep this
+        disabled in normal and QEMU images; sdkconfig.hwbench.defaults enables
+        it with the verified board pin map as the physical compile/runtime gate.
 
 config GM_SYNTH_I2S_QUAL_BCLK_GPIO
     int "I2S BCLK GPIO (-1 = unconfigured)"
@@ -102,6 +106,7 @@ config GM_SYNTH_I2S_QUAL_BCLK_GPIO
     range -1 48
     help
         Physical BCLK GPIO. Qualification refuses to start while this is -1.
+        KS_S3_KORVO_V4 uses GPIO9.
 
 config GM_SYNTH_I2S_QUAL_WS_GPIO
     int "I2S WS/LRCK GPIO (-1 = unconfigured)"
@@ -109,6 +114,7 @@ config GM_SYNTH_I2S_QUAL_WS_GPIO
     range -1 48
     help
         Physical WS/LRCK GPIO. Qualification refuses to start while this is -1.
+        KS_S3_KORVO_V4 uses GPIO45.
 
 config GM_SYNTH_I2S_QUAL_DOUT_GPIO
     int "I2S DOUT GPIO (-1 = unconfigured)"
@@ -116,15 +122,15 @@ config GM_SYNTH_I2S_QUAL_DOUT_GPIO
     range -1 48
     help
         Physical serial audio data output GPIO. Qualification refuses to start
-        while this is -1.
+        while this is -1. KS_S3_KORVO_V4 uses GPIO8 for ESP32-S3 -> ES8311.
 
 config GM_SYNTH_I2S_QUAL_MCLK_GPIO
-    int "I2S MCLK GPIO (-1 = unused)"
+    int "I2S MCLK GPIO (-1 = unconfigured)"
     default -1
     range -1 48
     help
-        Optional physical MCLK GPIO. Leave -1 for DAC/Codec configurations that
-        do not require an externally supplied MCLK.
+        Physical MCLK output GPIO. The Korvo V4 ES8311 qualification requires
+        this to be configured and uses GPIO16 with 256 * Fs = 11.2896 MHz.
 
 config GM_SYNTH_I2S_QUAL_DMA_DESC_NUM
     int "I2S DMA descriptor count"
