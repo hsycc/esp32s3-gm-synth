@@ -32,13 +32,20 @@ constexpr std::uint32_t kExpectedMclkHz = kSampleRate * 256u;
 constexpr std::uint32_t kClockTolerancePercent = 1u;
 constexpr std::size_t kFramesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
-constexpr std::size_t kSamplesPerBlock =
+constexpr std::size_t kRendererSamplesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock;
-constexpr std::size_t kBytesPerBlock = kSamplesPerBlock * sizeof(std::int16_t);
+constexpr std::size_t kI2sSamplesPerBlock = kFramesPerBlock;
+constexpr std::size_t kBytesPerBlock = kI2sSamplesPerBlock * sizeof(std::int16_t);
 constexpr std::uint32_t kInternalHeapCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+constexpr std::uint32_t kReferenceToneHz = 441;
+constexpr std::size_t kReferenceTonePeriodFrames = kSampleRate / kReferenceToneHz;
+constexpr std::int16_t kReferenceTonePeak = 8192;
+constexpr std::size_t kReferenceToneBlocks = 768;
 
-static_assert(kSamplesPerBlock == kFramesPerBlock * 2,
-              "physical I2S qualification requires interleaved stereo renderer output");
+static_assert(kRendererSamplesPerBlock == kFramesPerBlock * 2,
+              "physical I2S qualification expects interleaved stereo renderer output");
+static_assert(kSampleRate % kReferenceToneHz == 0,
+              "qualification tone frequency must divide sample rate exactly");
 
 struct LatencyStats {
     std::uint32_t min_us = std::numeric_limits<std::uint32_t>::max();
@@ -59,6 +66,31 @@ struct LatencyStats {
 
     std::uint32_t minimum() const {
         return samples == 0 ? 0 : min_us;
+    }
+};
+
+struct PcmStats {
+    std::uint32_t peak_abs = 0;
+    std::uint64_t total_abs = 0;
+    std::uint64_t samples = 0;
+    std::uint64_t nonzero_samples = 0;
+
+    void add(const std::array<std::int16_t, kI2sSamplesPerBlock>& values) {
+        for (const std::int16_t value : values) {
+            const std::int32_t widened = static_cast<std::int32_t>(value);
+            const std::uint32_t magnitude = static_cast<std::uint32_t>(
+                widened < 0 ? -widened : widened);
+            peak_abs = std::max(peak_abs, magnitude);
+            total_abs += magnitude;
+            ++samples;
+            if (value != 0) {
+                ++nonzero_samples;
+            }
+        }
+    }
+
+    std::uint32_t averageAbs() const {
+        return samples == 0 ? 0 : static_cast<std::uint32_t>(total_abs / samples);
     }
 };
 
@@ -129,22 +161,40 @@ bool clockWithinTolerance(std::uint32_t actual_hz, std::uint32_t expected_hz) {
         static_cast<std::uint64_t>(expected_hz) * kClockTolerancePercent;
 }
 
-void downmixMonoToStereoSlots(
-    std::array<std::int16_t, kSamplesPerBlock>& output) {
+void downmixToMono(
+    const std::array<std::int16_t, kRendererSamplesPerBlock>& stereo,
+    std::array<std::int16_t, kI2sSamplesPerBlock>& mono) {
     for (std::size_t frame = 0; frame < kFramesPerBlock; ++frame) {
         const std::size_t index = frame * 2;
         const std::int32_t sum =
-            static_cast<std::int32_t>(output[index]) +
-            static_cast<std::int32_t>(output[index + 1]);
-        const std::int16_t mono = static_cast<std::int16_t>(sum / 2);
-        output[index] = mono;
-        output[index + 1] = mono;
+            static_cast<std::int32_t>(stereo[index]) +
+            static_cast<std::int32_t>(stereo[index + 1]);
+        mono[frame] = static_cast<std::int16_t>(sum / 2);
     }
 }
 
+void fillReferenceTone(
+    std::array<std::int16_t, kI2sSamplesPerBlock>& mono,
+    std::uint64_t start_frame) {
+    for (std::size_t frame = 0; frame < kFramesPerBlock; ++frame) {
+        const std::size_t phase = static_cast<std::size_t>(
+            (start_frame + frame) % kReferenceTonePeriodFrames);
+        const std::size_t folded = phase <= (kReferenceTonePeriodFrames / 2u)
+            ? phase
+            : kReferenceTonePeriodFrames - phase;
+        const std::int32_t centered =
+            static_cast<std::int32_t>(folded * 2u) -
+            static_cast<std::int32_t>(kReferenceTonePeriodFrames / 2u);
+        mono[frame] = static_cast<std::int16_t>(
+            centered * static_cast<std::int32_t>(kReferenceTonePeak) /
+            static_cast<std::int32_t>(kReferenceTonePeriodFrames / 2u));
+    }
+}
+
+template <std::size_t N>
 std::uint64_t updateChecksum(
     std::uint64_t checksum,
-    const std::array<std::int16_t, kSamplesPerBlock>& output) {
+    const std::array<std::int16_t, N>& output) {
     constexpr std::uint64_t kFnvPrime = 1099511628211ull;
     for (const std::int16_t value : output) {
         checksum ^= static_cast<std::uint16_t>(value);
@@ -190,11 +240,11 @@ bool runI2sTask(TaskContext& context) {
     const InternalHeapSnapshot task_entry_heap = internalHeapSnapshot();
     logInternalHeap("task_entry", task_entry_heap);
 
-    // Anti-pop order begins here: PA OFF -> codec configured + muted. The codec
-    // stays muted until the DMA ring contains silence and I2S clocks are live.
+    // Anti-pop phase 1: force PA off and configure the ES8311 control plane.
+    // DAC start/power-up is deferred until physical MCLK/BCLK/LRCK are live.
     KorvoV4Es8311 codec;
     if (!codec.prepareMuted()) {
-        ESP_LOGE(kTag, "i2s_qual: ES8311 muted preparation failed");
+        ESP_LOGE(kTag, "i2s_qual: ES8311 muted control preparation failed");
         return false;
     }
 
@@ -235,14 +285,14 @@ bool runI2sTask(TaskContext& context) {
         return false;
     }
 
-    // Initialize the ESP-IDF config in assignments instead of relying on C++
-    // designated-initializer support/order. This keeps the physical build
-    // compatible with the compiler mode selected by ESP-IDF.
+    // Match Espressif's ESP32-S3-Korvo-2 speaker path: Philips I2S with a
+    // mono application buffer. Standard mode still emits the two-slot frame on
+    // the wire, so BCLK remains 32*Fs while each write contains 64 mono samples.
     i2s_std_config_t standard_config{};
     standard_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
     standard_config.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
         I2S_DATA_BIT_WIDTH_16BIT,
-        I2S_SLOT_MODE_STEREO);
+        I2S_SLOT_MODE_MONO);
     standard_config.gpio_cfg.mclk =
         static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO);
     standard_config.gpio_cfg.bclk =
@@ -255,8 +305,6 @@ bool runI2sTask(TaskContext& context) {
     standard_config.gpio_cfg.invert_flags.mclk_inv = false;
     standard_config.gpio_cfg.invert_flags.bclk_inv = false;
     standard_config.gpio_cfg.invert_flags.ws_inv = false;
-
-    // ES8311 reference clock table has an exact 44.1 kHz entry at 256*Fs.
     standard_config.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
     err = i2s_channel_init_std_mode(tx_channel, &standard_config);
@@ -314,9 +362,9 @@ bool runI2sTask(TaskContext& context) {
         return false;
     }
 
-    // PA OFF + codec muted are already guaranteed. Fill all available DMA
-    // buffers with stereo-slot silence before starting clocks.
-    std::array<std::int16_t, kSamplesPerBlock> silence{};
+    // PA OFF + codec not yet started. Fill every DMA buffer with mono silence
+    // before the first physical clock edge.
+    std::array<std::int16_t, kI2sSamplesPerBlock> silence{};
     std::size_t total_preloaded_bytes = 0;
     for (std::size_t attempt = 0;
          attempt < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM) + 1u;
@@ -351,25 +399,11 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(channel_info.total_dma_buf_size),
         static_cast<unsigned>(total_preloaded_bytes));
 
-    // Start MCLK/BCLK/LRCK only after silence is resident in every DMA buffer.
-    err = i2s_channel_enable(tx_channel);
-    if (err != ESP_OK) {
-        ESP_LOGE(kTag, "i2s_qual: i2s_channel_enable failed: %s", esp_err_to_name(err));
-        cleanup();
-        return false;
-    }
-    channel_enabled = true;
-
-    // Complete anti-pop startup: clocks live -> codec unmute -> PA ON.
-    if (!codec.enableOutput()) {
-        ESP_LOGE(kTag, "i2s_qual: ES8311 output enable failed");
-        cleanup();
-        return false;
-    }
-
+    // Print all configuration before clocks/output go live. No serial logging is
+    // performed between PA enable and the end of the realtime producer window.
     ESP_LOGI(
         kTag,
-        "i2s_qual: START sample_rate=%u frames_per_block=%u bytes_per_block=%u frame_format=stereo16 mono_policy=avg_lr_duplicate dma_desc=%u dma_frames=%u dma_window_us=%u driver_dma_bytes=%u preloaded_bytes=%u bclk_hz=%u mclk_hz=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
+        "i2s_qual: ARMED sample_rate=%u frames_per_block=%u bytes_per_block=%u frame_format=mono16_philips mono_policy=avg_lr dma_desc=%u dma_frames=%u dma_window_us=%u driver_dma_bytes=%u preloaded_bytes=%u reference_tone_hz=%u reference_tone_blocks=%u reference_tone_peak=%d bclk_hz=%u mclk_hz=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
         static_cast<unsigned>(kSampleRate),
         static_cast<unsigned>(kFramesPerBlock),
         static_cast<unsigned>(kBytesPerBlock),
@@ -378,6 +412,9 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(dmaWindowUs()),
         static_cast<unsigned>(channel_info.total_dma_buf_size),
         static_cast<unsigned>(total_preloaded_bytes),
+        static_cast<unsigned>(kReferenceToneHz),
+        static_cast<unsigned>(kReferenceToneBlocks),
+        static_cast<int>(kReferenceTonePeak),
         static_cast<unsigned>(channel_info.bclk_hz),
         static_cast<unsigned>(channel_info.mclk_hz),
         CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO,
@@ -387,8 +424,100 @@ bool runI2sTask(TaskContext& context) {
         CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE,
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY));
 
-    std::array<std::int16_t, kSamplesPerBlock> output{};
+    // Start physical clocks only after the ring contains silence.
+    err = i2s_channel_enable(tx_channel);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "i2s_qual: i2s_channel_enable failed: %s", esp_err_to_name(err));
+        cleanup();
+        return false;
+    }
+    channel_enabled = true;
+
+    // Anti-pop phase 2: with clocks live, run the ES8311 DAC start/power-up
+    // sequence while the DAC remains digitally muted and PA remains off.
+    if (!codec.startMutedWithClocks()) {
+        ESP_LOGE(kTag, "i2s_qual: ES8311 clocked muted start failed");
+        cleanup();
+        return false;
+    }
+
+    const auto writeExact = [&](const std::int16_t* samples,
+                                std::size_t sample_count,
+                                const char* phase) -> bool {
+        std::size_t bytes_written = 0;
+        const std::size_t bytes = sample_count * sizeof(std::int16_t);
+        const esp_err_t write_err = i2s_channel_write(
+            tx_channel,
+            samples,
+            bytes,
+            &bytes_written,
+            CONFIG_GM_SYNTH_I2S_QUAL_WRITE_TIMEOUT_MS);
+        if (write_err != ESP_OK) {
+            ESP_LOGE(kTag, "i2s_qual: %s write failed: %s",
+                     phase, esp_err_to_name(write_err));
+            return false;
+        }
+        if (bytes_written != bytes) {
+            ESP_LOGE(kTag, "i2s_qual: %s partial write expected=%u actual=%u",
+                     phase,
+                     static_cast<unsigned>(bytes),
+                     static_cast<unsigned>(bytes_written));
+            return false;
+        }
+        return true;
+    };
+
+    // Any queue pressure accumulated while clocks were running but the control
+    // path was doing I2C/readback is harmless because all ring contents are
+    // silence and PA is still off. Refill for two complete DMA windows so the
+    // driver's completed-buffer queue is synchronized before audible output.
+    const std::size_t live_prime_blocks =
+        static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM) * 2u;
+    for (std::size_t block = 0; block < live_prime_blocks; ++block) {
+        if (!writeExact(silence.data(), silence.size(), "live_prime")) {
+            cleanup();
+            return false;
+        }
+    }
+
+    const std::uint32_t startup_sent_callbacks = callback_stats.sent_events;
+    const std::uint32_t startup_send_queue_overflows = callback_stats.send_queue_overflows;
+
+    // Final anti-pop startup step. enableOutput() performs only DAC unmute and
+    // PA enable; it intentionally does not log so the producer starts at once.
+    if (!codec.enableOutput()) {
+        ESP_LOGE(kTag, "i2s_qual: ES8311 output enable/readback failed");
+        cleanup();
+        return false;
+    }
+
+    // Hardware-isolation phase: a deterministic 441 Hz triangle tone bypasses
+    // SF2, Voice DSP and effects. Hearing this tone proves I2S -> ES8311 -> PA ->
+    // speaker independently of the synth renderer.
+    std::array<std::int16_t, kI2sSamplesPerBlock> mono_output{};
+    std::uint64_t tone_frame = 0;
+    std::uint64_t tone_checksum = 1469598103934665603ull;
+    for (std::size_t block = 0; block < kReferenceToneBlocks; ++block) {
+        fillReferenceTone(mono_output, tone_frame);
+        tone_frame += kFramesPerBlock;
+        tone_checksum = updateChecksum(tone_checksum, mono_output);
+        if (!writeExact(mono_output.data(), mono_output.size(), "reference_tone")) {
+            cleanup();
+            return false;
+        }
+    }
+    const std::uint32_t tone_end_sent_callbacks = callback_stats.sent_events;
+    const std::uint32_t tone_end_send_queue_overflows = callback_stats.send_queue_overflows;
+    const std::uint32_t tone_sent_callbacks =
+        tone_end_sent_callbacks - startup_sent_callbacks;
+    const std::uint32_t tone_send_queue_overflows =
+        tone_end_send_queue_overflows - startup_send_queue_overflows;
+
+    // Immediately continue into the real synth workload; do not log or pause
+    // while the DMA producer is active.
+    std::array<std::int16_t, kRendererSamplesPerBlock> render_output{};
     std::uint64_t block_start_frame = context.block_start_frame;
+    PcmStats pcm_stats{};
     const auto renderAndWrite = [&](bool measure,
                                     LatencyStats* render_stats,
                                     LatencyStats* write_stats,
@@ -400,16 +529,16 @@ bool runI2sTask(TaskContext& context) {
                                     std::uint32_t* partial_writes,
                                     std::uint64_t* checksum) -> bool {
         const std::uint64_t cycle_start_us = platform::espRealtimeNowUs(nullptr);
-        context.renderer->render(block_start_frame, output.data());
-        downmixMonoToStereoSlots(output);
+        context.renderer->render(block_start_frame, render_output.data());
+        downmixToMono(render_output, mono_output);
         const std::uint64_t render_end_us = platform::espRealtimeNowUs(nullptr);
         block_start_frame += kFramesPerBlock;
 
         std::size_t bytes_written = 0;
         const esp_err_t write_err = i2s_channel_write(
             tx_channel,
-            output.data(),
-            sizeof(output),
+            mono_output.data(),
+            sizeof(mono_output),
             &bytes_written,
             CONFIG_GM_SYNTH_I2S_QUAL_WRITE_TIMEOUT_MS);
         const std::uint64_t write_end_us = platform::espRealtimeNowUs(nullptr);
@@ -419,10 +548,10 @@ bool runI2sTask(TaskContext& context) {
             return false;
         }
         if (write_err != ESP_OK) {
-            ESP_LOGE(kTag, "i2s_qual: write failed: %s", esp_err_to_name(write_err));
+            ESP_LOGE(kTag, "i2s_qual: synth write failed: %s", esp_err_to_name(write_err));
             return false;
         }
-        if (bytes_written != sizeof(output)) {
+        if (bytes_written != sizeof(mono_output)) {
             ++(*partial_writes);
             return false;
         }
@@ -443,7 +572,8 @@ bool runI2sTask(TaskContext& context) {
             if (cycle_us > dmaWindowUs()) {
                 ++(*producer_stalls);
             }
-            *checksum = updateChecksum(*checksum, output);
+            pcm_stats.add(mono_output);
+            *checksum = updateChecksum(*checksum, mono_output);
         }
         return true;
     };
@@ -472,6 +602,9 @@ bool runI2sTask(TaskContext& context) {
         }
     }
 
+    const std::uint32_t synth_start_sent_callbacks = callback_stats.sent_events;
+    const std::uint32_t synth_start_send_queue_overflows = callback_stats.send_queue_overflows;
+
     for (std::size_t block = 0;
          block < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS);
          ++block) {
@@ -484,29 +617,30 @@ bool runI2sTask(TaskContext& context) {
         }
     }
 
-    // Freeze callback telemetry at the exact end of the streaming window. The
-    // I2S DMA continues to run until anti-pop shutdown completes; counting EOF
-    // queue pressure during heap/log/shutdown bookkeeping would turn the test
-    // harness itself into a false underrun signal after the producer has
-    // intentionally stopped writing.
-    const std::uint32_t streaming_sent_callbacks = callback_stats.sent_events;
-    const std::uint32_t streaming_send_queue_overflows = callback_stats.send_queue_overflows;
+    // Freeze active-audio telemetry immediately after the last producer write.
+    const std::uint32_t active_end_sent_callbacks = callback_stats.sent_events;
+    const std::uint32_t active_end_send_queue_overflows = callback_stats.send_queue_overflows;
+    const std::uint32_t synth_sent_callbacks =
+        active_end_sent_callbacks - synth_start_sent_callbacks;
+    const std::uint32_t synth_send_queue_overflows =
+        active_end_send_queue_overflows - synth_start_send_queue_overflows;
+    const std::uint32_t active_send_queue_overflows =
+        active_end_send_queue_overflows - startup_send_queue_overflows;
     const std::uint64_t clipped_samples =
         context.renderer->stats().clipped_samples - clipped_before;
     const UBaseType_t stack_high_water_bytes = uxTaskGetStackHighWaterMark(nullptr);
     const InternalHeapSnapshot before_cleanup_heap = internalHeapSnapshot();
 
-    // Stop audible output before doing any potentially slow logging. The codec
-    // shutdown cuts PA first, then mutes/powers down while I2S clocks are still
-    // live, and only then the I2S channel is disabled/deleted.
+    // Stop audible output before any result logging. PA drops first, then codec
+    // mute/power-down occurs while clocks remain live, then I2S is stopped.
     cleanup();
 
     const std::uint32_t final_sent_callbacks = callback_stats.sent_events;
     const std::uint32_t final_send_queue_overflows = callback_stats.send_queue_overflows;
     const std::uint32_t shutdown_tail_callbacks =
-        final_sent_callbacks - streaming_sent_callbacks;
+        final_sent_callbacks - active_end_sent_callbacks;
     const std::uint32_t shutdown_tail_overflows =
-        final_send_queue_overflows - streaming_send_queue_overflows;
+        final_send_queue_overflows - active_end_send_queue_overflows;
     const InternalHeapSnapshot after_cleanup_heap = internalHeapSnapshot();
 
     logInternalHeap("before_cleanup", before_cleanup_heap);
@@ -514,7 +648,25 @@ bool runI2sTask(TaskContext& context) {
 
     ESP_LOGI(
         kTag,
-        "i2s_qual: RESULT blocks=%u render_us[min/avg/max]=%u/%u/%u write_wait_us[min/avg/max]=%u/%u/%u cycle_us[min/avg/max]=%u/%u/%u render_deadline_misses=%u cycle_over_budget=%u producer_stalls_over_dma_window=%u write_timeouts=%u partial_writes=%u streaming_sent_callbacks=%u streaming_send_queue_overflows=%u shutdown_tail_callbacks=%u shutdown_tail_overflows=%u clipped_samples=%llu stack_high_water_bytes=%u checksum=%016llx",
+        "i2s_qual: PATH startup_prime_blocks=%u startup_sent_callbacks=%u startup_send_queue_overflows=%u tone_hz=%u tone_blocks=%u tone_peak=%d tone_sent_callbacks=%u tone_send_queue_overflows=%u tone_checksum=%016llx synth_sent_callbacks=%u synth_send_queue_overflows=%u active_send_queue_overflows=%u shutdown_tail_callbacks=%u shutdown_tail_overflows=%u",
+        static_cast<unsigned>(live_prime_blocks),
+        static_cast<unsigned>(startup_sent_callbacks),
+        static_cast<unsigned>(startup_send_queue_overflows),
+        static_cast<unsigned>(kReferenceToneHz),
+        static_cast<unsigned>(kReferenceToneBlocks),
+        static_cast<int>(kReferenceTonePeak),
+        static_cast<unsigned>(tone_sent_callbacks),
+        static_cast<unsigned>(tone_send_queue_overflows),
+        static_cast<unsigned long long>(tone_checksum),
+        static_cast<unsigned>(synth_sent_callbacks),
+        static_cast<unsigned>(synth_send_queue_overflows),
+        static_cast<unsigned>(active_send_queue_overflows),
+        static_cast<unsigned>(shutdown_tail_callbacks),
+        static_cast<unsigned>(shutdown_tail_overflows));
+
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: RESULT blocks=%u render_us[min/avg/max]=%u/%u/%u write_wait_us[min/avg/max]=%u/%u/%u cycle_us[min/avg/max]=%u/%u/%u render_deadline_misses=%u cycle_over_budget=%u producer_stalls_over_dma_window=%u write_timeouts=%u partial_writes=%u pcm_peak_abs=%u pcm_avg_abs=%u pcm_nonzero_samples=%llu pcm_samples=%llu clipped_samples=%llu stack_high_water_bytes=%u checksum=%016llx",
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS),
         static_cast<unsigned>(render_stats.minimum()),
         static_cast<unsigned>(render_stats.average()),
@@ -530,10 +682,10 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(producer_stalls),
         static_cast<unsigned>(write_timeouts),
         static_cast<unsigned>(partial_writes),
-        static_cast<unsigned>(streaming_sent_callbacks),
-        static_cast<unsigned>(streaming_send_queue_overflows),
-        static_cast<unsigned>(shutdown_tail_callbacks),
-        static_cast<unsigned>(shutdown_tail_overflows),
+        static_cast<unsigned>(pcm_stats.peak_abs),
+        static_cast<unsigned>(pcm_stats.averageAbs()),
+        static_cast<unsigned long long>(pcm_stats.nonzero_samples),
+        static_cast<unsigned long long>(pcm_stats.samples),
         static_cast<unsigned long long>(clipped_samples),
         static_cast<unsigned>(stack_high_water_bytes),
         static_cast<unsigned long long>(checksum));
@@ -543,7 +695,11 @@ bool runI2sTask(TaskContext& context) {
         producer_stalls == 0u &&
         write_timeouts == 0u &&
         partial_writes == 0u &&
-        streaming_send_queue_overflows == 0u &&
+        tone_send_queue_overflows == 0u &&
+        synth_send_queue_overflows == 0u &&
+        active_send_queue_overflows == 0u &&
+        pcm_stats.peak_abs > 0u &&
+        pcm_stats.nonzero_samples > 0u &&
         clipped_samples == 0u &&
         stack_high_water_bytes >= CONFIG_GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES;
 
