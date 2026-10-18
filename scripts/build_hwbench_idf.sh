@@ -80,7 +80,7 @@ if [[ "$fixture_bytes" -ne 5898214 ]]; then
     exit 1
 fi
 
-echo "== Configure ESP32-S3 N16R8 M6 qualification image =="
+echo "== Configure ESP32-S3 N16R8 M6 + Korvo audio qualification image =="
 run_idf -B "$BUILD_DIR" \
     -D "SDKCONFIG=$SDKCONFIG_PATH" \
     -D "SDKCONFIG_DEFAULTS=$ROOT_DIR/sdkconfig.defaults;$ROOT_DIR/sdkconfig.hwbench.defaults" \
@@ -111,6 +111,19 @@ grep -q '^CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
 
+# The dedicated hardware image is also our CI compile gate for the real Korvo
+# V4 playback path. Fail loudly if a defaults/config merge silently disables or
+# remaps it: a green hwbench build must compile ES8311 + I2S/DMA integration.
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO=16$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO=9$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO=45$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO=8$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM=8$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM=64$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE=1$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY=20$' "$SDKCONFIG_PATH"
+
 if [[ ! -f "$BUILD_DIR/qemu_sf2.bin" ]]; then
     echo "Expected raw FATFS fixture was not generated: $BUILD_DIR/qemu_sf2.bin" >&2
     exit 1
@@ -124,7 +137,7 @@ if [[ -f "$BUILD_DIR/flash_args" ]]; then
 fi
 
 echo
-echo "N16R8 M6 qualification image is ready."
+echo "N16R8 M6 + Korvo V4 audio qualification image is ready."
 echo "  build dir : $BUILD_DIR"
 echo "  sdkconfig : $SDKCONFIG_PATH"
 echo "  compiler  : PERF (-O2 base), O3 realtime hot files, assertions enabled"
@@ -135,7 +148,8 @@ echo "  storage   : 4 MiB per chunk size (4/8/16/32/64 KiB)"
 echo "  prepare   : cold/warm + cache pressure/LRU + commit/retire/release-tail"
 echo "  render    : 1/4/8/12/16/18/20/24 Voices, 64-frame blocks"
 echo "  memory    : PSRAM + internal-SRAM snapshots before/after Prepare/Render"
-echo "  I2S       : not started by this qualification image"
+echo "  audio     : ES8311 + I2S/DMA qualification enabled"
+echo "  I2S pins  : MCLK16 / BCLK9 / WS45 / DOUT8, stereo16 frame with mono duplication"
 
 if [[ -n "$PORT" ]]; then
     echo
