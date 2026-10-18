@@ -1,5 +1,6 @@
 #include "I2sDmaQualification.h"
 
+#include "KorvoV4Es8311.h"
 #include "sdkconfig.h"
 
 #include "driver/gpio.h"
@@ -32,6 +33,9 @@ constexpr std::size_t kSamplesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock;
 constexpr std::size_t kBytesPerBlock = kSamplesPerBlock * sizeof(std::int16_t);
 constexpr std::uint32_t kInternalHeapCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+
+static_assert(kSamplesPerBlock == kFramesPerBlock * 2,
+              "physical I2S qualification requires interleaved stereo renderer output");
 
 struct LatencyStats {
     std::uint32_t min_us = std::numeric_limits<std::uint32_t>::max();
@@ -111,6 +115,19 @@ std::uint32_t elapsedUs(std::uint64_t start_us, std::uint64_t end_us) {
         std::numeric_limits<std::uint32_t>::max()));
 }
 
+void downmixMonoToStereoSlots(
+    std::array<std::int16_t, kSamplesPerBlock>& output) {
+    for (std::size_t frame = 0; frame < kFramesPerBlock; ++frame) {
+        const std::size_t index = frame * 2;
+        const std::int32_t sum =
+            static_cast<std::int32_t>(output[index]) +
+            static_cast<std::int32_t>(output[index + 1]);
+        const std::int16_t mono = static_cast<std::int16_t>(sum / 2);
+        output[index] = mono;
+        output[index + 1] = mono;
+    }
+}
+
 std::uint64_t updateChecksum(
     std::uint64_t checksum,
     const std::array<std::int16_t, kSamplesPerBlock>& output) {
@@ -148,35 +165,43 @@ bool runI2sTask(TaskContext& context) {
 
     if (CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO < 0 ||
         CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO < 0 ||
-        CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO < 0) {
+        CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO < 0 ||
+        CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO < 0) {
         ESP_LOGE(
             kTag,
-            "i2s_qual: real BCLK/WS/DOUT GPIOs must be configured before physical qualification");
+            "i2s_qual: Korvo qualification requires real MCLK/BCLK/WS/DOUT GPIOs");
         return false;
     }
 
     const InternalHeapSnapshot task_entry_heap = internalHeapSnapshot();
     logInternalHeap("task_entry", task_entry_heap);
 
+    // Anti-pop order begins here: PA OFF -> codec configured + muted. The codec
+    // stays muted until the DMA ring contains silence and I2S clocks are live.
+    KorvoV4Es8311 codec;
+    if (!codec.prepareMuted()) {
+        ESP_LOGE(kTag, "i2s_qual: ES8311 muted preparation failed");
+        return false;
+    }
+
     i2s_chan_handle_t tx_channel = nullptr;
     bool channel_enabled = false;
     const auto cleanup = [&]() {
+        // Keep clocks alive while the codec is first disconnected from the PA,
+        // muted and powered down. Only then stop/delete the I2S channel.
+        codec.shutdown();
         if (tx_channel != nullptr) {
             if (channel_enabled) {
                 const esp_err_t disable_err = i2s_channel_disable(tx_channel);
                 if (disable_err != ESP_OK) {
-                    ESP_LOGW(
-                        kTag,
-                        "i2s_qual: disable failed: %s",
-                        esp_err_to_name(disable_err));
+                    ESP_LOGW(kTag, "i2s_qual: disable failed: %s",
+                             esp_err_to_name(disable_err));
                 }
             }
             const esp_err_t delete_err = i2s_del_channel(tx_channel);
             if (delete_err != ESP_OK) {
-                ESP_LOGW(
-                    kTag,
-                    "i2s_qual: delete failed: %s",
-                    esp_err_to_name(delete_err));
+                ESP_LOGW(kTag, "i2s_qual: delete failed: %s",
+                         esp_err_to_name(delete_err));
             }
             tx_channel = nullptr;
             channel_enabled = false;
@@ -192,12 +217,9 @@ bool runI2sTask(TaskContext& context) {
     esp_err_t err = i2s_new_channel(&channel_config, &tx_channel, nullptr);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "i2s_qual: i2s_new_channel failed: %s", esp_err_to_name(err));
+        cleanup();
         return false;
     }
-
-    const gpio_num_t mclk_gpio = CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO < 0
-        ? I2S_GPIO_UNUSED
-        : static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO);
 
     i2s_std_config_t standard_config{
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate),
@@ -205,7 +227,7 @@ bool runI2sTask(TaskContext& context) {
             I2S_DATA_BIT_WIDTH_16BIT,
             I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
-            .mclk = mclk_gpio,
+            .mclk = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO),
             .bclk = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO),
             .ws = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO),
             .dout = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO),
@@ -217,13 +239,13 @@ bool runI2sTask(TaskContext& context) {
             },
         },
     };
+    // ES8311 reference clock table has an exact 44.1 kHz entry at 256*Fs.
+    standard_config.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
     err = i2s_channel_init_std_mode(tx_channel, &standard_config);
     if (err != ESP_OK) {
-        ESP_LOGE(
-            kTag,
-            "i2s_qual: i2s_channel_init_std_mode failed: %s",
-            esp_err_to_name(err));
+        ESP_LOGE(kTag, "i2s_qual: i2s_channel_init_std_mode failed: %s",
+                 esp_err_to_name(err));
         cleanup();
         return false;
     }
@@ -231,10 +253,8 @@ bool runI2sTask(TaskContext& context) {
     i2s_chan_info_t channel_info{};
     err = i2s_channel_get_info(tx_channel, &channel_info);
     if (err != ESP_OK) {
-        ESP_LOGE(
-            kTag,
-            "i2s_qual: i2s_channel_get_info failed: %s",
-            esp_err_to_name(err));
+        ESP_LOGE(kTag, "i2s_qual: i2s_channel_get_info failed: %s",
+                 esp_err_to_name(err));
         cleanup();
         return false;
     }
@@ -247,18 +267,14 @@ bool runI2sTask(TaskContext& context) {
     callbacks.on_send_q_ovf = onSendQueueOverflow;
     err = i2s_channel_register_event_callback(tx_channel, &callbacks, &callback_stats);
     if (err != ESP_OK) {
-        ESP_LOGE(
-            kTag,
-            "i2s_qual: callback registration failed: %s",
-            esp_err_to_name(err));
+        ESP_LOGE(kTag, "i2s_qual: callback registration failed: %s",
+                 esp_err_to_name(err));
         cleanup();
         return false;
     }
 
-    // Fill every available DMA buffer with silence before enabling TX. This
-    // avoids treating the driver's initially empty DMA buffers as a startup
-    // underrun and gives the realtime task the full descriptor window before
-    // the first rendered block is needed.
+    // PA OFF + codec muted are already guaranteed. Fill all available DMA
+    // buffers with stereo-slot silence before starting clocks.
     std::array<std::int16_t, kSamplesPerBlock> silence{};
     std::size_t total_preloaded_bytes = 0;
     for (std::size_t attempt = 0;
@@ -266,15 +282,9 @@ bool runI2sTask(TaskContext& context) {
          ++attempt) {
         std::size_t loaded_bytes = 0;
         err = i2s_channel_preload_data(
-            tx_channel,
-            silence.data(),
-            sizeof(silence),
-            &loaded_bytes);
+            tx_channel, silence.data(), sizeof(silence), &loaded_bytes);
         if (err != ESP_OK) {
-            ESP_LOGE(
-                kTag,
-                "i2s_qual: DMA preload failed: %s",
-                esp_err_to_name(err));
+            ESP_LOGE(kTag, "i2s_qual: DMA preload failed: %s", esp_err_to_name(err));
             cleanup();
             return false;
         }
@@ -284,20 +294,25 @@ bool runI2sTask(TaskContext& context) {
         }
     }
 
+    // Start MCLK/BCLK/LRCK only after silence is resident in DMA.
     err = i2s_channel_enable(tx_channel);
     if (err != ESP_OK) {
-        ESP_LOGE(
-            kTag,
-            "i2s_qual: i2s_channel_enable failed: %s",
-            esp_err_to_name(err));
+        ESP_LOGE(kTag, "i2s_qual: i2s_channel_enable failed: %s", esp_err_to_name(err));
         cleanup();
         return false;
     }
     channel_enabled = true;
 
+    // Complete anti-pop startup: clocks live -> codec unmute -> PA ON.
+    if (!codec.enableOutput()) {
+        ESP_LOGE(kTag, "i2s_qual: ES8311 output enable failed");
+        cleanup();
+        return false;
+    }
+
     ESP_LOGI(
         kTag,
-        "i2s_qual: START sample_rate=%u frames_per_block=%u bytes_per_block=%u dma_desc=%u dma_frames=%u dma_window_us=%u driver_dma_bytes=%u preloaded_bytes=%u bclk_hz=%u mclk_hz=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
+        "i2s_qual: START sample_rate=%u frames_per_block=%u bytes_per_block=%u frame_format=stereo16 mono_policy=avg_lr_duplicate dma_desc=%u dma_frames=%u dma_window_us=%u driver_dma_bytes=%u preloaded_bytes=%u bclk_hz=%u mclk_hz=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
         static_cast<unsigned>(kSampleRate),
         static_cast<unsigned>(kFramesPerBlock),
         static_cast<unsigned>(kBytesPerBlock),
@@ -329,6 +344,7 @@ bool runI2sTask(TaskContext& context) {
                                     std::uint64_t* checksum) -> bool {
         const std::uint64_t cycle_start_us = platform::espRealtimeNowUs(nullptr);
         context.renderer->render(block_start_frame, output.data());
+        downmixMonoToStereoSlots(output);
         const std::uint64_t render_end_us = platform::espRealtimeNowUs(nullptr);
         block_start_frame += kFramesPerBlock;
 
@@ -346,10 +362,7 @@ bool runI2sTask(TaskContext& context) {
             return false;
         }
         if (write_err != ESP_OK) {
-            ESP_LOGE(
-                kTag,
-                "i2s_qual: write failed: %s",
-                esp_err_to_name(write_err));
+            ESP_LOGE(kTag, "i2s_qual: write failed: %s", esp_err_to_name(write_err));
             return false;
         }
         if (bytes_written != sizeof(output)) {
@@ -393,17 +406,10 @@ bool runI2sTask(TaskContext& context) {
     for (std::size_t block = 0;
          block < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS);
          ++block) {
-        if (!renderAndWrite(
-                false,
-                &render_stats,
-                &write_stats,
-                &cycle_stats,
-                &render_deadline_misses,
-                &cycle_over_budget,
-                &producer_stalls,
-                &write_timeouts,
-                &partial_writes,
-                &checksum)) {
+        if (!renderAndWrite(false, &render_stats, &write_stats, &cycle_stats,
+                            &render_deadline_misses, &cycle_over_budget,
+                            &producer_stalls, &write_timeouts, &partial_writes,
+                            &checksum)) {
             cleanup();
             return false;
         }
@@ -412,17 +418,10 @@ bool runI2sTask(TaskContext& context) {
     for (std::size_t block = 0;
          block < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS);
          ++block) {
-        if (!renderAndWrite(
-                true,
-                &render_stats,
-                &write_stats,
-                &cycle_stats,
-                &render_deadline_misses,
-                &cycle_over_budget,
-                &producer_stalls,
-                &write_timeouts,
-                &partial_writes,
-                &checksum)) {
+        if (!renderAndWrite(true, &render_stats, &write_stats, &cycle_stats,
+                            &render_deadline_misses, &cycle_over_budget,
+                            &producer_stalls, &write_timeouts, &partial_writes,
+                            &checksum)) {
             cleanup();
             return false;
         }
@@ -495,11 +494,6 @@ void i2sTaskEntry(void* argument) {
 bool runOptionalI2sDmaQualification(
     realtime::ScheduledAudioBlockRenderer& renderer,
     std::uint64_t block_start_frame) {
-#ifndef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    (void)renderer;
-    (void)block_start_frame;
-    return true;
-#else
     TaskContext context{};
     context.renderer = &renderer;
     context.block_start_frame = block_start_frame;
@@ -524,7 +518,6 @@ bool runOptionalI2sDmaQualification(
     // stack/TCB before subsequent memory snapshots are taken.
     vTaskDelay(1);
     return context.success;
-#endif
 }
 
 }  // namespace gm_synth::bringup
