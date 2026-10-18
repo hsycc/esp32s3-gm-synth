@@ -1,4 +1,5 @@
 #include "EffectsTimingBenchmark.h"
+#include "I2sDmaQualification.h"
 
 #include "sdkconfig.h"
 
@@ -336,6 +337,13 @@ bool runOptionalEffectsTimingBenchmark() {
         static_cast<unsigned long long>(full_fx_checksum),
         kTimingScope,
         kPhysicalTimingEvidence);
+
+    if (!runOptionalI2sDmaQualification(renderer, block_start_frame)) {
+        ESP_LOGE(kTag, "effects_bench: physical I2S/DMA qualification FAILED");
+        voices.allSoundOff();
+        return false;
+    }
+
     voices.allSoundOff();
 
     if (directory.stats().live_voice_refs != 0u) {
