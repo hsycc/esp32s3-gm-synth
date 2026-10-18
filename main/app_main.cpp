@@ -3,6 +3,9 @@
 #include "EffectsTimingBenchmark.h"
 #include "ProgramPrepareBenchmark.h"
 #include "RenderTimingBenchmark.h"
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+#include "PhysicalCleanSf2AudibleGate.h"
+#endif
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -266,6 +269,15 @@ extern "C" void app_main(void) {
     logPsram("after Program Prepare", EspPsramArena::heapStats());
     logInternalHeap("after Program Prepare");
 
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    if (!gm_synth::bringup::runPhysicalCleanSf2AudibleGate(residency)) {
+        ESP_LOGE(kTag, "Clean real-SF2 audible qualification FAILED");
+        return;
+    }
+    logPsram("after clean SF2 audio", EspPsramArena::heapStats());
+    logInternalHeap("after clean SF2 audio");
+#endif
+
     if (!gm_synth::bringup::runOptionalRenderTimingBenchmark()) {
         ESP_LOGE(kTag, "Render timing benchmark FAILED");
         return;
@@ -294,7 +306,7 @@ extern "C" void app_main(void) {
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
     ESP_LOGI(
         kTag,
-        "M6 bring-up qualification passed including physical I2S/DMA, ES8311/PA, realtime music stress and full-FX polyphony sweep");
+        "M6 bring-up qualification passed including clean real-SF2 audio, physical I2S/DMA, ES8311/PA, realtime music stress and full-FX polyphony characterization");
 #else
     ESP_LOGI(
         kTag,
