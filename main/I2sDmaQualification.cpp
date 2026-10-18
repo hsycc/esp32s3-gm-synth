@@ -1,0 +1,461 @@
+#include "I2sDmaQualification.h"
+
+#include "sdkconfig.h"
+
+#include "driver/gpio.h"
+#include "driver/i2s_std.h"
+#include "esp_attr.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "platform/EspRealtimeClock.h"
+#include "realtime/ScheduledAudioBlockRenderer.h"
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
+namespace gm_synth::bringup {
+namespace {
+
+constexpr char kTag[] = "gm_synth";
+constexpr std::uint32_t kSampleRate = 44100;
+constexpr std::uint32_t kBlockBudgetUs = 1451;
+constexpr std::size_t kFramesPerBlock =
+    realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
+constexpr std::size_t kSamplesPerBlock =
+    realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock;
+constexpr std::size_t kBytesPerBlock = kSamplesPerBlock * sizeof(std::int16_t);
+
+struct LatencyStats {
+    std::uint32_t min_us = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t max_us = 0;
+    std::uint64_t total_us = 0;
+    std::uint32_t samples = 0;
+
+    void add(std::uint32_t value) {
+        min_us = std::min(min_us, value);
+        max_us = std::max(max_us, value);
+        total_us += value;
+        ++samples;
+    }
+
+    std::uint32_t average() const {
+        return samples == 0 ? 0 : static_cast<std::uint32_t>(total_us / samples);
+    }
+
+    std::uint32_t minimum() const {
+        return samples == 0 ? 0 : min_us;
+    }
+};
+
+struct CallbackStats {
+    volatile std::uint32_t sent_events = 0;
+    volatile std::uint32_t send_queue_overflows = 0;
+};
+
+struct TaskContext {
+    realtime::ScheduledAudioBlockRenderer* renderer = nullptr;
+    std::uint64_t block_start_frame = 0;
+    TaskHandle_t owner_task = nullptr;
+    bool success = false;
+};
+
+std::uint32_t elapsedUs(std::uint64_t start_us, std::uint64_t end_us) {
+    if (end_us < start_us) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        end_us - start_us,
+        std::numeric_limits<std::uint32_t>::max()));
+}
+
+std::uint64_t updateChecksum(
+    std::uint64_t checksum,
+    const std::array<std::int16_t, kSamplesPerBlock>& output) {
+    constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+    for (const std::int16_t value : output) {
+        checksum ^= static_cast<std::uint16_t>(value);
+        checksum *= kFnvPrime;
+    }
+    return checksum;
+}
+
+bool IRAM_ATTR onSent(
+    i2s_chan_handle_t,
+    i2s_event_data_t*,
+    void* user_context) {
+    auto* stats = static_cast<CallbackStats*>(user_context);
+    ++stats->sent_events;
+    return false;
+}
+
+bool IRAM_ATTR onSendQueueOverflow(
+    i2s_chan_handle_t,
+    i2s_event_data_t*,
+    void* user_context) {
+    auto* stats = static_cast<CallbackStats*>(user_context);
+    ++stats->send_queue_overflows;
+    return false;
+}
+
+bool runI2sTask(TaskContext& context) {
+    if (context.renderer == nullptr) {
+        ESP_LOGE(kTag, "i2s_qual: renderer is null");
+        return false;
+    }
+
+    if (CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO < 0 ||
+        CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO < 0 ||
+        CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO < 0) {
+        ESP_LOGE(
+            kTag,
+            "i2s_qual: real BCLK/WS/DOUT GPIOs must be configured before physical qualification");
+        return false;
+    }
+
+    i2s_chan_handle_t tx_channel = nullptr;
+    bool channel_enabled = false;
+    const auto cleanup = [&]() {
+        if (tx_channel != nullptr) {
+            if (channel_enabled) {
+                const esp_err_t disable_err = i2s_channel_disable(tx_channel);
+                if (disable_err != ESP_OK) {
+                    ESP_LOGW(
+                        kTag,
+                        "i2s_qual: disable failed: %s",
+                        esp_err_to_name(disable_err));
+                }
+            }
+            const esp_err_t delete_err = i2s_del_channel(tx_channel);
+            if (delete_err != ESP_OK) {
+                ESP_LOGW(
+                    kTag,
+                    "i2s_qual: delete failed: %s",
+                    esp_err_to_name(delete_err));
+            }
+        }
+    };
+
+    i2s_chan_config_t channel_config = I2S_CHANNEL_DEFAULT_CONFIG(
+        I2S_NUM_AUTO,
+        I2S_ROLE_MASTER);
+    channel_config.dma_desc_num = CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM;
+    channel_config.dma_frame_num = CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM;
+
+    esp_err_t err = i2s_new_channel(&channel_config, &tx_channel, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "i2s_qual: i2s_new_channel failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    const gpio_num_t mclk_gpio = CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO < 0
+        ? I2S_GPIO_UNUSED
+        : static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO);
+
+    i2s_std_config_t standard_config{
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+            I2S_DATA_BIT_WIDTH_16BIT,
+            I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = mclk_gpio,
+            .bclk = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO),
+            .ws = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO),
+            .dout = static_cast<gpio_num_t>(CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO),
+            .din = I2S_GPIO_UNUSED,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
+    };
+
+    err = i2s_channel_init_std_mode(tx_channel, &standard_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            kTag,
+            "i2s_qual: i2s_channel_init_std_mode failed: %s",
+            esp_err_to_name(err));
+        cleanup();
+        return false;
+    }
+
+    CallbackStats callback_stats{};
+    i2s_event_callbacks_t callbacks{};
+    callbacks.on_sent = onSent;
+    callbacks.on_send_q_ovf = onSendQueueOverflow;
+    err = i2s_channel_register_event_callback(tx_channel, &callbacks, &callback_stats);
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            kTag,
+            "i2s_qual: callback registration failed: %s",
+            esp_err_to_name(err));
+        cleanup();
+        return false;
+    }
+
+    // Fill every available DMA buffer with silence before enabling TX. This
+    // avoids treating the driver's initially empty DMA buffers as a startup
+    // underrun and gives the realtime task the full descriptor window before
+    // the first rendered block is needed.
+    std::array<std::int16_t, kSamplesPerBlock> silence{};
+    std::size_t total_preloaded_bytes = 0;
+    for (std::size_t attempt = 0;
+         attempt < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM) + 1u;
+         ++attempt) {
+        std::size_t loaded_bytes = 0;
+        err = i2s_channel_preload_data(
+            tx_channel,
+            silence.data(),
+            sizeof(silence),
+            &loaded_bytes);
+        if (err != ESP_OK) {
+            ESP_LOGE(
+                kTag,
+                "i2s_qual: DMA preload failed: %s",
+                esp_err_to_name(err));
+            cleanup();
+            return false;
+        }
+        total_preloaded_bytes += loaded_bytes;
+        if (loaded_bytes < sizeof(silence)) {
+            break;
+        }
+    }
+
+    err = i2s_channel_enable(tx_channel);
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            kTag,
+            "i2s_qual: i2s_channel_enable failed: %s",
+            esp_err_to_name(err));
+        cleanup();
+        return false;
+    }
+    channel_enabled = true;
+
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: START sample_rate=%u frames_per_block=%u bytes_per_block=%u dma_desc=%u dma_frames=%u dma_window_us=%u preloaded_bytes=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
+        static_cast<unsigned>(kSampleRate),
+        static_cast<unsigned>(kFramesPerBlock),
+        static_cast<unsigned>(kBytesPerBlock),
+        static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM),
+        static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM),
+        static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM * kBlockBudgetUs),
+        static_cast<unsigned>(total_preloaded_bytes),
+        CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO,
+        CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO,
+        CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO,
+        CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO,
+        CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE,
+        static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY));
+
+    std::array<std::int16_t, kSamplesPerBlock> output{};
+    std::uint64_t block_start_frame = context.block_start_frame;
+    const auto renderAndWrite = [&](bool measure,
+                                    LatencyStats* render_stats,
+                                    LatencyStats* write_stats,
+                                    LatencyStats* cycle_stats,
+                                    std::uint32_t* render_deadline_misses,
+                                    std::uint32_t* cycle_over_budget,
+                                    std::uint32_t* producer_stalls,
+                                    std::uint32_t* write_timeouts,
+                                    std::uint32_t* partial_writes,
+                                    std::uint64_t* checksum) -> bool {
+        const std::uint64_t cycle_start_us = platform::espRealtimeNowUs(nullptr);
+        context.renderer->render(block_start_frame, output.data());
+        const std::uint64_t render_end_us = platform::espRealtimeNowUs(nullptr);
+        block_start_frame += kFramesPerBlock;
+
+        std::size_t bytes_written = 0;
+        const esp_err_t write_err = i2s_channel_write(
+            tx_channel,
+            output.data(),
+            sizeof(output),
+            &bytes_written,
+            CONFIG_GM_SYNTH_I2S_QUAL_WRITE_TIMEOUT_MS);
+        const std::uint64_t write_end_us = platform::espRealtimeNowUs(nullptr);
+
+        if (write_err == ESP_ERR_TIMEOUT) {
+            ++(*write_timeouts);
+            return false;
+        }
+        if (write_err != ESP_OK) {
+            ESP_LOGE(
+                kTag,
+                "i2s_qual: write failed: %s",
+                esp_err_to_name(write_err));
+            return false;
+        }
+        if (bytes_written != sizeof(output)) {
+            ++(*partial_writes);
+            return false;
+        }
+
+        if (measure) {
+            const std::uint32_t render_us = elapsedUs(cycle_start_us, render_end_us);
+            const std::uint32_t write_us = elapsedUs(render_end_us, write_end_us);
+            const std::uint32_t cycle_us = elapsedUs(cycle_start_us, write_end_us);
+            render_stats->add(render_us);
+            write_stats->add(write_us);
+            cycle_stats->add(cycle_us);
+            if (render_us > kBlockBudgetUs) {
+                ++(*render_deadline_misses);
+            }
+            if (cycle_us > kBlockBudgetUs) {
+                ++(*cycle_over_budget);
+            }
+            const std::uint32_t dma_window_us =
+                CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM * kBlockBudgetUs;
+            if (cycle_us > dma_window_us) {
+                ++(*producer_stalls);
+            }
+            *checksum = updateChecksum(*checksum, output);
+        }
+        return true;
+    };
+
+    std::uint32_t render_deadline_misses = 0;
+    std::uint32_t cycle_over_budget = 0;
+    std::uint32_t producer_stalls = 0;
+    std::uint32_t write_timeouts = 0;
+    std::uint32_t partial_writes = 0;
+    std::uint64_t checksum = 1469598103934665603ull;
+    LatencyStats render_stats{};
+    LatencyStats write_stats{};
+    LatencyStats cycle_stats{};
+
+    const std::uint64_t clipped_before = context.renderer->stats().clipped_samples;
+
+    for (std::size_t block = 0;
+         block < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS);
+         ++block) {
+        if (!renderAndWrite(
+                false,
+                &render_stats,
+                &write_stats,
+                &cycle_stats,
+                &render_deadline_misses,
+                &cycle_over_budget,
+                &producer_stalls,
+                &write_timeouts,
+                &partial_writes,
+                &checksum)) {
+            cleanup();
+            return false;
+        }
+    }
+
+    for (std::size_t block = 0;
+         block < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS);
+         ++block) {
+        if (!renderAndWrite(
+                true,
+                &render_stats,
+                &write_stats,
+                &cycle_stats,
+                &render_deadline_misses,
+                &cycle_over_budget,
+                &producer_stalls,
+                &write_timeouts,
+                &partial_writes,
+                &checksum)) {
+            cleanup();
+            return false;
+        }
+    }
+
+    const std::uint64_t clipped_samples =
+        context.renderer->stats().clipped_samples - clipped_before;
+    const UBaseType_t stack_high_water_bytes = uxTaskGetStackHighWaterMark(nullptr);
+
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: RESULT blocks=%u render_us[min/avg/max]=%u/%u/%u write_wait_us[min/avg/max]=%u/%u/%u cycle_us[min/avg/max]=%u/%u/%u render_deadline_misses=%u cycle_over_budget=%u producer_stalls_over_dma_window=%u write_timeouts=%u partial_writes=%u sent_callbacks=%u send_event_queue_overflows=%u clipped_samples=%llu stack_high_water_bytes=%u checksum=%016llx",
+        static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS),
+        static_cast<unsigned>(render_stats.minimum()),
+        static_cast<unsigned>(render_stats.average()),
+        static_cast<unsigned>(render_stats.max_us),
+        static_cast<unsigned>(write_stats.minimum()),
+        static_cast<unsigned>(write_stats.average()),
+        static_cast<unsigned>(write_stats.max_us),
+        static_cast<unsigned>(cycle_stats.minimum()),
+        static_cast<unsigned>(cycle_stats.average()),
+        static_cast<unsigned>(cycle_stats.max_us),
+        static_cast<unsigned>(render_deadline_misses),
+        static_cast<unsigned>(cycle_over_budget),
+        static_cast<unsigned>(producer_stalls),
+        static_cast<unsigned>(write_timeouts),
+        static_cast<unsigned>(partial_writes),
+        static_cast<unsigned>(callback_stats.sent_events),
+        static_cast<unsigned>(callback_stats.send_queue_overflows),
+        static_cast<unsigned long long>(clipped_samples),
+        static_cast<unsigned>(stack_high_water_bytes),
+        static_cast<unsigned long long>(checksum));
+
+    const bool pass =
+        render_deadline_misses == 0u &&
+        producer_stalls == 0u &&
+        write_timeouts == 0u &&
+        partial_writes == 0u &&
+        callback_stats.send_queue_overflows == 0u &&
+        clipped_samples == 0u &&
+        stack_high_water_bytes >= CONFIG_GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES;
+
+    cleanup();
+    ESP_LOGI(kTag, "i2s_qual: %s", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+void i2sTaskEntry(void* argument) {
+    auto* context = static_cast<TaskContext*>(argument);
+    context->success = runI2sTask(*context);
+    xTaskNotifyGive(context->owner_task);
+    vTaskDelete(nullptr);
+}
+
+}  // namespace
+
+bool runOptionalI2sDmaQualification(
+    realtime::ScheduledAudioBlockRenderer& renderer,
+    std::uint64_t block_start_frame) {
+#ifndef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    (void)renderer;
+    (void)block_start_frame;
+    return true;
+#else
+    TaskContext context{};
+    context.renderer = &renderer;
+    context.block_start_frame = block_start_frame;
+    context.owner_task = xTaskGetCurrentTaskHandle();
+
+    TaskHandle_t task = nullptr;
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        i2sTaskEntry,
+        "gm_i2s_qual",
+        CONFIG_GM_SYNTH_I2S_QUAL_TASK_STACK_BYTES,
+        &context,
+        CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY,
+        &task,
+        CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE);
+    if (created != pdPASS || task == nullptr) {
+        ESP_LOGE(kTag, "i2s_qual: failed to create audio qualification task");
+        return false;
+    }
+
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // Let the pinned core's idle task reclaim the dynamically-created task
+    // stack/TCB before subsequent memory snapshots are taken.
+    vTaskDelay(1);
+    return context.success;
+#endif
+}
+
+}  // namespace gm_synth::bringup
