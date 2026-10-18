@@ -138,8 +138,32 @@ jobs:
       - name: Build physical N16R8 M6 qualification image
         shell: bash
         run: |
-          set -euo pipefail
-          bash scripts/build_hwbench_idf.sh
+          set -uo pipefail
+          mkdir -p reports
+          set +e
+          bash scripts/build_hwbench_idf.sh 2>&1 | tee reports/physical-build.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "${status}" -ne 0 ]]; then
+            diagnostics="$(grep -E -C 3 'fatal error:|error:|undefined reference|CMake Error|FAILED:|ninja: build stopped' reports/physical-build.log | tail -n 240 || true)"
+            {
+              echo "### Physical N16R8 build diagnostics"
+              echo '```text'
+              if [[ -n "${diagnostics}" ]]; then
+                printf '%s\n' "${diagnostics}"
+              else
+                tail -n 120 reports/physical-build.log
+              fi
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+
+            while IFS= read -r line; do
+              [[ -n "${line}" ]] && echo "::error title=Physical ESP-IDF build::${line}"
+            done < <(grep -E 'fatal error:|error:|undefined reference|CMake Error|ninja: build stopped' reports/physical-build.log | tail -n 20 || true)
+          fi
+
+          exit "${status}"
 
       - name: Upload QEMU diagnostics
         if: always()
@@ -152,6 +176,7 @@ jobs:
             reports/qemu-sf2-flash-preflight.log
             reports/qemu-program-prepare.md
             reports/qemu-render-timing.md
+            reports/physical-build.log
             build-qemu-sf2/esp32s3_gm_synth.elf
             build-qemu-sf2/esp32s3_gm_synth.map
             sdkconfig.qemu
