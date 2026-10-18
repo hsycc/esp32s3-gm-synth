@@ -258,23 +258,66 @@ void VoicePool::renderAddWithEffects(
                     chunk_frames);
             } else {
                 result = voice.renderAddRealtime(scratch.data(), chunk_frames);
-                for (std::size_t index = 0; index < chunk_samples; ++index) {
-                    const std::int32_t value = scratch[index];
-                    scratch[index] = 0;
-                    interleaved_stereo[sample_offset + index] += value;
-                    if (shared_send_scale) {
+
+                std::int32_t* scratch_ptr = scratch.data();
+                std::int32_t* dry_ptr = interleaved_stereo + sample_offset;
+                std::int32_t* reverb_ptr = reverb_active
+                    ? reverb_send_stereo + sample_offset
+                    : nullptr;
+                std::int32_t* chorus_ptr = chorus_active
+                    ? chorus_send_stereo + sample_offset
+                    : nullptr;
+
+                if (shared_send_scale && reverb_units == kMaxEffectsSendUnits / 2) {
+                    // The physical/QEMU 500/500 diagnostic is also a common SF2
+                    // setting. Hoist all routing decisions out of the sample
+                    // loop and keep the exact signed half-away-from-zero scale.
+                    for (std::size_t index = 0; index < chunk_samples; ++index) {
+                        const std::int32_t value = *scratch_ptr;
+                        *scratch_ptr++ = 0;
+                        *dry_ptr++ += value;
+                        const std::int32_t scaled = value / 2 + value % 2;
+                        *reverb_ptr++ += scaled;
+                        *chorus_ptr++ += scaled;
+                    }
+                } else if (shared_send_scale && reverb_units == kMaxEffectsSendUnits) {
+                    for (std::size_t index = 0; index < chunk_samples; ++index) {
+                        const std::int32_t value = *scratch_ptr;
+                        *scratch_ptr++ = 0;
+                        *dry_ptr++ += value;
+                        *reverb_ptr++ += value;
+                        *chorus_ptr++ += value;
+                    }
+                } else if (shared_send_scale) {
+                    for (std::size_t index = 0; index < chunk_samples; ++index) {
+                        const std::int32_t value = *scratch_ptr;
+                        *scratch_ptr++ = 0;
+                        *dry_ptr++ += value;
                         const std::int32_t scaled = scaleSend(value, reverb_units);
-                        reverb_send_stereo[sample_offset + index] += scaled;
-                        chorus_send_stereo[sample_offset + index] += scaled;
-                    } else {
-                        if (reverb_active) {
-                            reverb_send_stereo[sample_offset + index] +=
-                                scaleSend(value, reverb_units);
-                        }
-                        if (chorus_active) {
-                            chorus_send_stereo[sample_offset + index] +=
-                                scaleSend(value, chorus_units);
-                        }
+                        *reverb_ptr++ += scaled;
+                        *chorus_ptr++ += scaled;
+                    }
+                } else if (reverb_active && chorus_active) {
+                    for (std::size_t index = 0; index < chunk_samples; ++index) {
+                        const std::int32_t value = *scratch_ptr;
+                        *scratch_ptr++ = 0;
+                        *dry_ptr++ += value;
+                        *reverb_ptr++ += scaleSend(value, reverb_units);
+                        *chorus_ptr++ += scaleSend(value, chorus_units);
+                    }
+                } else if (reverb_active) {
+                    for (std::size_t index = 0; index < chunk_samples; ++index) {
+                        const std::int32_t value = *scratch_ptr;
+                        *scratch_ptr++ = 0;
+                        *dry_ptr++ += value;
+                        *reverb_ptr++ += scaleSend(value, reverb_units);
+                    }
+                } else {
+                    for (std::size_t index = 0; index < chunk_samples; ++index) {
+                        const std::int32_t value = *scratch_ptr;
+                        *scratch_ptr++ = 0;
+                        *dry_ptr++ += value;
+                        *chorus_ptr++ += scaleSend(value, chorus_units);
                     }
                 }
             }
