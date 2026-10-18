@@ -147,8 +147,10 @@ void GlobalEffectsProcessor::processAdd(
         const std::int32_t chorus_input = averageStereo(chorus_bus, frame);
         chorus_delay_[chorus_write_] = clampI16(chorus_input);
         const std::int32_t lfo_q15 = triangleQ15(chorus_phase_q32_);
-        const std::int32_t modulation = static_cast<std::int32_t>(
-            (static_cast<std::int64_t>(lfo_q15) * kChorusDepthFrames) / kQ15Unity);
+        // lfo_q15 is +/-32767 and depth is 96, so this exact product remains
+        // well inside int32 while preserving C++ signed division semantics.
+        const std::int32_t modulation =
+            (lfo_q15 * static_cast<std::int32_t>(kChorusDepthFrames)) / kQ15Unity;
         const std::size_t left_delay = static_cast<std::size_t>(
             static_cast<std::int32_t>(kChorusBaseDelayFrames) + modulation);
         const std::size_t right_delay = static_cast<std::size_t>(
