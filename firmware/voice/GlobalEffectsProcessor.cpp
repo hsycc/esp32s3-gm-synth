@@ -56,15 +56,10 @@ std::int32_t GlobalEffectsProcessor::scaleQ15(
     if (value == 0 || gain_q15 == 0) {
         return 0;
     }
-
-    // All callers feed either int16 delay samples or the all-pass output.
-    // The latter is bounded by delayed(int16) - input(int16)/2, i.e. roughly
-    // +/-49151. With the largest gain here (23800), the product stays well
-    // inside int32, so widening to int64 only adds Xtensa cost.
-    const std::int32_t product = value * gain_q15;
+    const std::int64_t product = static_cast<std::int64_t>(value) * gain_q15;
     return product >= 0
-        ? (product + (std::int32_t{1} << 14)) >> 15
-        : -((-product + (std::int32_t{1} << 14)) >> 15);
+        ? static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15)
+        : -static_cast<std::int32_t>(((-product) + (std::int64_t{1} << 14)) >> 15);
 }
 
 std::int32_t GlobalEffectsProcessor::averageStereo(
@@ -152,10 +147,8 @@ void GlobalEffectsProcessor::processAdd(
         const std::int32_t chorus_input = averageStereo(chorus_bus, frame);
         chorus_delay_[chorus_write_] = clampI16(chorus_input);
         const std::int32_t lfo_q15 = triangleQ15(chorus_phase_q32_);
-        // lfo_q15 is +/-32767 and depth is 96, so this product is safely
-        // inside int32. Keep the exact signed integer-division semantics.
-        const std::int32_t modulation =
-            (lfo_q15 * static_cast<std::int32_t>(kChorusDepthFrames)) / kQ15Unity;
+        const std::int32_t modulation = static_cast<std::int32_t>(
+            (static_cast<std::int64_t>(lfo_q15) * kChorusDepthFrames) / kQ15Unity);
         const std::size_t left_delay = static_cast<std::size_t>(
             static_cast<std::int32_t>(kChorusBaseDelayFrames) + modulation);
         const std::size_t right_delay = static_cast<std::size_t>(
