@@ -92,13 +92,16 @@ config GM_SYNTH_I2S_QUAL_ENABLE
     depends on GM_SYNTH_RENDER_BENCHMARK_ENABLE
     help
         Dedicated physical-audio qualification path for KS_S3_KORVO_V4 /
-        ESP32-S3-Korvo-2 routing. A Core-pinned realtime task renders 44.1 kHz
-        audio into standard 16-bit stereo Philips I2S frames; renderer L/R is
-        averaged to mono and duplicated into both slots for the single ES8311
-        DAC / mono speaker path. The codec is held muted with PA off until DMA
-        silence has been preloaded and MCLK/BCLK/LRCK are running. Keep this
-        disabled in normal and QEMU images; sdkconfig.hwbench.defaults enables
-        it with the verified board pin map as the physical compile/runtime gate.
+        ESP32-S3-Korvo-2 routing. A Core-pinned realtime task drives 44.1 kHz
+        standard 16-bit Philips I2S using the same mono application-buffer
+        layout as Espressif's Korvo-2 BSP; renderer L/R is averaged to mono for
+        the single ES8311 DAC / mono speaker path. The codec is held muted with
+        PA off while DMA silence is preloaded, then its DAC start sequence runs
+        only after MCLK/BCLK/LRCK are live. Muted live-DMA priming is followed
+        by an audible 441 Hz hardware-isolation tone before the synth workload.
+        Keep this disabled in normal and QEMU images; sdkconfig.hwbench.defaults
+        enables it with the verified board pin map as the physical compile/
+        runtime gate.
 
 config GM_SYNTH_I2S_QUAL_BCLK_GPIO
     int "I2S BCLK GPIO (-1 = unconfigured)"
@@ -145,7 +148,7 @@ config GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM
     default 64
     range 16 511
     help
-        Stereo audio frames per DMA descriptor. The qualification default is
+        Audio frames per DMA descriptor. The qualification default is
         intentionally one synth render block (64 frames).
 
 config GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS
