@@ -29,6 +29,7 @@ private:
 
     i2c_master_bus_handle_t bus_ = nullptr;
     i2c_master_dev_handle_t device_ = nullptr;
+    bool owns_bus_ = false;
     bool prepared_ = false;
     bool output_enabled_ = false;
 };
