@@ -6,6 +6,7 @@
 #include "driver/i2s_std.h"
 #include "esp_attr.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -30,6 +31,7 @@ constexpr std::size_t kFramesPerBlock =
 constexpr std::size_t kSamplesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock;
 constexpr std::size_t kBytesPerBlock = kSamplesPerBlock * sizeof(std::int16_t);
+constexpr std::uint32_t kInternalHeapCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 
 struct LatencyStats {
     std::uint32_t min_us = std::numeric_limits<std::uint32_t>::max();
@@ -53,6 +55,12 @@ struct LatencyStats {
     }
 };
 
+struct InternalHeapSnapshot {
+    std::uint32_t free_bytes = 0;
+    std::uint32_t largest_block_bytes = 0;
+    std::uint32_t minimum_free_bytes = 0;
+};
+
 struct CallbackStats {
     volatile std::uint32_t sent_events = 0;
     volatile std::uint32_t send_queue_overflows = 0;
@@ -64,6 +72,35 @@ struct TaskContext {
     TaskHandle_t owner_task = nullptr;
     bool success = false;
 };
+
+InternalHeapSnapshot internalHeapSnapshot() {
+    InternalHeapSnapshot result{};
+    result.free_bytes = static_cast<std::uint32_t>(
+        heap_caps_get_free_size(kInternalHeapCaps));
+    result.largest_block_bytes = static_cast<std::uint32_t>(
+        heap_caps_get_largest_free_block(kInternalHeapCaps));
+    result.minimum_free_bytes = static_cast<std::uint32_t>(
+        heap_caps_get_minimum_free_size(kInternalHeapCaps));
+    return result;
+}
+
+void logInternalHeap(const char* phase, const InternalHeapSnapshot& stats) {
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: INTERNAL_HEAP phase=%s free=%u largest=%u minimum_free=%u bytes",
+        phase,
+        static_cast<unsigned>(stats.free_bytes),
+        static_cast<unsigned>(stats.largest_block_bytes),
+        static_cast<unsigned>(stats.minimum_free_bytes));
+}
+
+std::uint32_t dmaWindowUs() {
+    const std::uint64_t frames =
+        static_cast<std::uint64_t>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM) *
+        CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM;
+    return static_cast<std::uint32_t>(
+        (frames * 1000000ull + kSampleRate - 1u) / kSampleRate);
+}
 
 std::uint32_t elapsedUs(std::uint64_t start_us, std::uint64_t end_us) {
     if (end_us < start_us) {
@@ -118,6 +155,9 @@ bool runI2sTask(TaskContext& context) {
         return false;
     }
 
+    const InternalHeapSnapshot task_entry_heap = internalHeapSnapshot();
+    logInternalHeap("task_entry", task_entry_heap);
+
     i2s_chan_handle_t tx_channel = nullptr;
     bool channel_enabled = false;
     const auto cleanup = [&]() {
@@ -138,6 +178,8 @@ bool runI2sTask(TaskContext& context) {
                     "i2s_qual: delete failed: %s",
                     esp_err_to_name(delete_err));
             }
+            tx_channel = nullptr;
+            channel_enabled = false;
         }
     };
 
@@ -185,6 +227,19 @@ bool runI2sTask(TaskContext& context) {
         cleanup();
         return false;
     }
+
+    i2s_chan_info_t channel_info{};
+    err = i2s_channel_get_info(tx_channel, &channel_info);
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            kTag,
+            "i2s_qual: i2s_channel_get_info failed: %s",
+            esp_err_to_name(err));
+        cleanup();
+        return false;
+    }
+    const InternalHeapSnapshot dma_ready_heap = internalHeapSnapshot();
+    logInternalHeap("dma_ready", dma_ready_heap);
 
     CallbackStats callback_stats{};
     i2s_event_callbacks_t callbacks{};
@@ -242,14 +297,17 @@ bool runI2sTask(TaskContext& context) {
 
     ESP_LOGI(
         kTag,
-        "i2s_qual: START sample_rate=%u frames_per_block=%u bytes_per_block=%u dma_desc=%u dma_frames=%u dma_window_us=%u preloaded_bytes=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
+        "i2s_qual: START sample_rate=%u frames_per_block=%u bytes_per_block=%u dma_desc=%u dma_frames=%u dma_window_us=%u driver_dma_bytes=%u preloaded_bytes=%u bclk_hz=%u mclk_hz=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
         static_cast<unsigned>(kSampleRate),
         static_cast<unsigned>(kFramesPerBlock),
         static_cast<unsigned>(kBytesPerBlock),
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM),
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM),
-        static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM * kBlockBudgetUs),
+        static_cast<unsigned>(dmaWindowUs()),
+        static_cast<unsigned>(channel_info.total_dma_buf_size),
         static_cast<unsigned>(total_preloaded_bytes),
+        static_cast<unsigned>(channel_info.bclk_hz),
+        static_cast<unsigned>(channel_info.mclk_hz),
         CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO,
         CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO,
         CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO,
@@ -312,9 +370,7 @@ bool runI2sTask(TaskContext& context) {
             if (cycle_us > kBlockBudgetUs) {
                 ++(*cycle_over_budget);
             }
-            const std::uint32_t dma_window_us =
-                CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM * kBlockBudgetUs;
-            if (cycle_us > dma_window_us) {
+            if (cycle_us > dmaWindowUs()) {
                 ++(*producer_stalls);
             }
             *checksum = updateChecksum(*checksum, output);
@@ -375,6 +431,8 @@ bool runI2sTask(TaskContext& context) {
     const std::uint64_t clipped_samples =
         context.renderer->stats().clipped_samples - clipped_before;
     const UBaseType_t stack_high_water_bytes = uxTaskGetStackHighWaterMark(nullptr);
+    const InternalHeapSnapshot before_cleanup_heap = internalHeapSnapshot();
+    logInternalHeap("before_cleanup", before_cleanup_heap);
 
     ESP_LOGI(
         kTag,
@@ -410,6 +468,17 @@ bool runI2sTask(TaskContext& context) {
         stack_high_water_bytes >= CONFIG_GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES;
 
     cleanup();
+    const InternalHeapSnapshot after_cleanup_heap = internalHeapSnapshot();
+    logInternalHeap("after_cleanup", after_cleanup_heap);
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: MEMORY task_entry_free=%u dma_ready_free=%u before_cleanup_free=%u after_cleanup_free=%u dma_alloc_delta=%d cleanup_recovered=%d",
+        static_cast<unsigned>(task_entry_heap.free_bytes),
+        static_cast<unsigned>(dma_ready_heap.free_bytes),
+        static_cast<unsigned>(before_cleanup_heap.free_bytes),
+        static_cast<unsigned>(after_cleanup_heap.free_bytes),
+        static_cast<int>(task_entry_heap.free_bytes) - static_cast<int>(dma_ready_heap.free_bytes),
+        static_cast<int>(after_cleanup_heap.free_bytes) - static_cast<int>(before_cleanup_heap.free_bytes));
     ESP_LOGI(kTag, "i2s_qual: %s", pass ? "PASS" : "FAIL");
     return pass;
 }
