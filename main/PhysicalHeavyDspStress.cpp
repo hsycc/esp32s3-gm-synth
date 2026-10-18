@@ -96,14 +96,14 @@ std::uint64_t updateChecksum(
     std::uint64_t checksum,
     const std::array<std::int16_t, kSamplesPerBlock>& output) {
     constexpr std::uint64_t kFnvPrime = 1099511628211ull;
-    for (const std::int16_t sample : output) {
-        checksum ^= static_cast<std::uint16_t>(sample);
+    for (const std::int16_t value : output) {
+        checksum ^= static_cast<std::uint16_t>(value);
         checksum *= kFnvPrime;
     }
     return checksum;
 }
 
-void recordFailure(
+void recordBoundary(
     PhysicalHeavyDspStressResult* result,
     std::size_t voices,
     std::size_t active_voices,
@@ -121,21 +121,21 @@ void recordFailure(
     result->first_failed_active_voices = active_voices;
     result->first_failed_deadline_misses = deadline_misses;
     result->first_failed_clipped_samples = clipped_samples;
+    result->boundary_reached = true;
 }
 
 void logResult(const PhysicalHeavyDspStressResult& result) {
     ESP_LOGI(
         kTag,
-        "physical_heavy_dsp: RESULT max_stable_voices=%u minimum_required=%u first_failed_voices=%u first_failed_active=%u first_failed_deadline_misses=%u first_failed_clipped_samples=%llu failure_flags=0x%08x hard_cap=%u %s",
+        "physical_heavy_dsp: RESULT max_stable_voices=%u first_failed_voices=%u first_failed_active=%u first_failed_deadline_misses=%u first_failed_clipped_samples=%llu failure_flags=0x%08x boundary_reached=%u hard_cap=%u CHARACTERIZED",
         static_cast<unsigned>(result.max_stable_voices),
-        static_cast<unsigned>(result.minimum_required_voices),
         static_cast<unsigned>(result.first_failed_voices),
         static_cast<unsigned>(result.first_failed_active_voices),
         static_cast<unsigned>(result.first_failed_deadline_misses),
         static_cast<unsigned long long>(result.first_failed_clipped_samples),
         static_cast<unsigned>(result.failure_flags),
-        static_cast<unsigned>(voice::VoicePool::kHardVoiceCap),
-        result.pass() ? "PASS" : "FAIL");
+        result.boundary_reached ? 1u : 0u,
+        static_cast<unsigned>(voice::VoicePool::kHardVoiceCap));
 }
 
 gm::PlaybackZone makeHeavyZone() {
@@ -151,8 +151,8 @@ gm::PlaybackZone makeHeavyZone() {
     zone.root_phase_increment_q32 = voice::kPhaseOneQ32;
     zone.loop_mode = voice::LoopMode::Continuous;
 
-    // 24 dB of static attenuation keeps a 32-Voice coherent synthetic fixture
-    // away from clipping while preserving the exact DSP work per Voice.
+    // Keep the coherent synthetic fixture away from clipping while preserving
+    // the exact per-Voice DSP work.
     zone.note_on_gain.enabled = true;
     zone.note_on_gain.initial_attenuation_cb = 240;
     zone.note_on_gain.velocity_to_attenuation_cb = 0;
@@ -166,14 +166,11 @@ gm::PlaybackZone makeHeavyZone() {
     zone.envelope.sustain_q15 = voice::kQ15Unity;
     zone.envelope.release_frames = 4410;
 
-    // Based on the already-qualified filter/resonance runtime test shape.
     zone.note_on_filter.enabled = true;
     zone.note_on_filter.initial_cutoff_cents = 8000;
     zone.note_on_filter.velocity_to_cutoff_cents = 0;
     zone.note_on_filter.resonance_cb = 100;
 
-    // Realistic-rate Vibrato-LFO with live controller routes retained in the
-    // resolved realtime-control state.
     zone.vibrato_lfo.enabled = true;
     zone.vibrato_lfo.delay_frames = 0;
     zone.vibrato_lfo.phase_step_q32 = std::uint32_t{1} << 19u;
@@ -181,8 +178,6 @@ gm::PlaybackZone makeHeavyZone() {
     zone.vibrato_lfo.channel_pressure_to_pitch_cents = 50;
     zone.vibrato_lfo.modulation_wheel_to_pitch_cents = 50;
 
-    // One Mod-LFO simultaneously drives pitch, dynamic filter and nonlinear
-    // gain. This deliberately prevents the simple continuous-Voice fast path.
     zone.mod_lfo.enabled = true;
     zone.mod_lfo.delay_frames = 0;
     zone.mod_lfo.phase_step_q32 = std::uint32_t{1} << 20u;
@@ -190,8 +185,6 @@ gm::PlaybackZone makeHeavyZone() {
     zone.mod_lfo.filter_depth_cents = 1200;
     zone.mod_lfo.volume_depth_cb = 120;
 
-    // Mod-Envelope contributes another independent pitch/filter source so the
-    // combined DynamicLowpassTable interpolation path is active.
     zone.mod_envelope.enabled = true;
     zone.mod_envelope.envelope.attack_frames = 128;
     zone.mod_envelope.envelope.hold_frames = 64;
@@ -260,10 +253,6 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
     channel_state.expression = 127;
     channel_state.pan = 64;
 
-    // ResolvedVoiceBatch contains storage for the hard-cap number of complete
-    // VoiceStartParams and is far too large for app_main's stack. Resolution is
-    // performed only before each measured polyphony step, never in the timed
-    // render loop, so PSRAM is the correct place for this diagnostic scratch.
     void* batch_storage = heap_caps_malloc(
         sizeof(gm::ResolvedVoiceBatch),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -277,6 +266,7 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
         logResult(result);
         return result;
     }
+
     auto* batch = new (batch_storage) gm::ResolvedVoiceBatch{};
     ESP_LOGI(
         kTag,
@@ -288,11 +278,10 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
     std::array<std::int16_t, kSamplesPerBlock> output{};
     std::array<std::uint32_t, kMeasuredBlocks> timings{};
     std::size_t started = 0;
-    bool lower_steps_stable = true;
 
     ESP_LOGI(
         kTag,
-        "physical_heavy_dsp: START steps=1,2,4,8,12,16,20,24,28,32 warmup_blocks=%u measured_blocks=%u budget_us=%u features=resonant_filter,vibrato_lfo,mod_lfo_pitch_filter_volume,mod_env_pitch_filter,full_fx",
+        "physical_heavy_dsp: START steps=1,2,4,8,12,16,20,24,28,32 warmup_blocks=%u measured_blocks=%u budget_us=%u stop_policy=first_unstable features=resonant_filter,vibrato_lfo,mod_lfo_pitch_filter_volume,mod_env_pitch_filter,full_fx",
         static_cast<unsigned>(kWarmupBlocks),
         static_cast<unsigned>(kMeasuredBlocks),
         static_cast<unsigned>(kBlockBudgetUs));
@@ -356,13 +345,7 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
             }
 
             if (setup_failure_flags != 0u) {
-                recordFailure(
-                    &result,
-                    target,
-                    voices.activeVoiceCount(),
-                    0,
-                    0,
-                    setup_failure_flags);
+                result.failure_flags |= setup_failure_flags;
                 ESP_LOGE(
                     kTag,
                     "physical_heavy_dsp: FIXTURE_FAIL target=%u started=%u status=%u resolved=%u lowpass=%u dynamic_lowpass=%u vibrato=%u mod_lfo=%u mod_env=%u voice_start=%u active=%u failure_flags=0x%08x",
@@ -406,6 +389,7 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
         const TimingSummary timing = summarize(timings);
         const std::uint64_t clipped = renderer.stats().clipped_samples - clipped_before;
         const std::size_t active_voices = voices.activeVoiceCount();
+
         std::uint32_t step_failure_flags = 0;
         if (active_voices != target) {
             step_failure_flags |= kFailureActiveVoiceCount;
@@ -417,21 +401,6 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
             step_failure_flags |= kFailureClipping;
         }
         const bool stable = step_failure_flags == 0u;
-
-        if (stable && lower_steps_stable) {
-            result.max_stable_voices = target;
-        } else {
-            if (!stable) {
-                recordFailure(
-                    &result,
-                    target,
-                    active_voices,
-                    timing.deadline_misses,
-                    clipped,
-                    step_failure_flags);
-            }
-            lower_steps_stable = false;
-        }
 
         ESP_LOGI(
             kTag,
@@ -448,6 +417,26 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
             static_cast<unsigned long long>(checksum),
             static_cast<unsigned>(step_failure_flags),
             stable ? 1u : 0u);
+
+        if (stable) {
+            result.max_stable_voices = target;
+            continue;
+        }
+
+        recordBoundary(
+            &result,
+            target,
+            active_voices,
+            timing.deadline_misses,
+            clipped,
+            step_failure_flags);
+        ESP_LOGI(
+            kTag,
+            "physical_heavy_dsp: BOUNDARY stable_max=%u first_unstable=%u reason_flags=0x%08x stopping_sweep=1",
+            static_cast<unsigned>(result.max_stable_voices),
+            static_cast<unsigned>(target),
+            static_cast<unsigned>(step_failure_flags));
+        break;
     }
 
     voices.allSoundOff();
