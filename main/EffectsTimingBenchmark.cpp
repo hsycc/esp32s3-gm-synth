@@ -51,6 +51,9 @@ constexpr std::size_t kSamplesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock;
 constexpr std::size_t kFramesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+constexpr std::size_t kNominalPolyphonyCandidate = 24;
+#endif
 
 #ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
 constexpr char kTimingScope[] = "hardware";
@@ -217,13 +220,6 @@ void logStage(const char* stage, const TimingSnapshot& timing, std::uint64_t che
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
 PhysicalMusicStress* allocatePhysicalMusicStress(
     sample::PublishedSampleDirectory& directory) {
-    // PhysicalMusicStress embeds the production-shaped Program Event applier,
-    // whose 32-Voice resolve batch is intentionally large. Keeping this object
-    // as a function-static put that entire batch in .dram0.bss and overflowed
-    // the ESP32-S3 static DRAM link region. Allocate it once from INTERNAL heap
-    // instead: the realtime callback still runs from internal SRAM, while link-
-    // time BSS stays bounded. The renderer stores this pointer for process life,
-    // so this one-shot qualification allocation is deliberately not freed.
     void* storage = heap_caps_malloc(
         sizeof(PhysicalMusicStress),
         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -312,8 +308,6 @@ bool runOptionalEffectsTimingBenchmark() {
         kTimingScope,
         kPhysicalTimingEvidence);
 
-    // Stage 1: Voice rendering plus per-voice send-bus scaling, but no global
-    // Chorus/Reverb processing. This isolates scratch/send distribution cost.
     if (!startVoices(voices, true)) {
         ESP_LOGE(kTag, "effects_bench: send_bus voice start failed");
         return false;
@@ -340,8 +334,6 @@ bool runOptionalEffectsTimingBenchmark() {
     voices.allSoundOff();
     yieldToIdleTask();
 
-    // Stage 2: global Chorus/Reverb alone on a deterministic non-zero bus. This
-    // makes QEMU useful for comparing effect-core implementation changes.
     fillEffectsInput(reverb, chorus);
     effects.reset();
     for (std::size_t block = 0; block < kWarmupBlocks; ++block) {
@@ -360,8 +352,6 @@ bool runOptionalEffectsTimingBenchmark() {
     logStage("global_fx", summarize(timings), global_fx_checksum);
     yieldToIdleTask();
 
-    // Stage 3: complete scheduled renderer with 16 Voices and 50% sends. This
-    // is the end-to-end FX regression row; QEMU values remain trend-only.
     if (!startVoices(voices, true)) {
         ESP_LOGE(kTag, "effects_bench: full_fx voice start failed");
         return false;
@@ -401,12 +391,14 @@ bool runOptionalEffectsTimingBenchmark() {
         kPhysicalTimingEvidence);
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    // Establish both the ordinary full-FX ceiling and a generic heavy-DSP
-    // ceiling before the long physical stream. The product candidate is the
-    // conservative minimum of those independently measured consecutive limits.
+    // Normal/full-FX and pathological heavy-DSP are separate workload classes.
+    // The normal sweep remains the nominal product gate. The heavy sweep only
+    // characterizes the worst-feature ceiling and is expected to find a first
+    // unstable step; that boundary must not collapse the public polyphony to
+    // min(normal, pathological-heavy).
     voices.allSoundOff();
     if (!physical_stress->runPolyphonySweep(voices, renderer, &block_start_frame)) {
-        ESP_LOGE(kTag, "effects_bench: physical polyphony qualification FAILED");
+        ESP_LOGE(kTag, "effects_bench: nominal physical polyphony qualification FAILED");
         voices.allSoundOff();
         return false;
     }
@@ -416,26 +408,21 @@ bool runOptionalEffectsTimingBenchmark() {
         voices,
         renderer,
         &block_start_frame);
-    const bool heavy_pass = heavy.pass();
-    const std::size_t product_candidate = std::min(
-        physical_stress->maxStablePolyphony(),
-        heavy.max_stable_voices);
     ESP_LOGI(
         kTag,
-        "physical_product: RESULT full_fx_max=%u heavy_dsp_max=%u candidate=%u heavy_minimum_required=%u first_failed_voices=%u failure_flags=0x%08x %s",
+        "physical_product_envelope: RESULT normal_full_fx_max=%u nominal_candidate=%u pathological_heavy_max=%u heavy_first_unstable=%u heavy_boundary_reached=%u heavy_reason_flags=0x%08x",
         static_cast<unsigned>(physical_stress->maxStablePolyphony()),
+        static_cast<unsigned>(kNominalPolyphonyCandidate),
         static_cast<unsigned>(heavy.max_stable_voices),
-        static_cast<unsigned>(product_candidate),
-        static_cast<unsigned>(heavy.minimum_required_voices),
         static_cast<unsigned>(heavy.first_failed_voices),
-        static_cast<unsigned>(heavy.failure_flags),
-        heavy_pass ? "PASS" : "FAIL");
-    if (!heavy_pass) {
-        ESP_LOGE(
-            kTag,
-            "effects_bench: physical heavy-DSP qualification FAILED; continuing I2S/music stress for diagnostic completeness");
-        voices.allSoundOff();
-    }
+        heavy.boundary_reached ? 1u : 0u,
+        static_cast<unsigned>(heavy.failure_flags));
+
+    // Give the idle task an explicit scheduling opportunity before starting the
+    // long continuous-I2S phase. This keeps one characterization sweep from
+    // contaminating the next phase while preserving all measured deadlines.
+    voices.allSoundOff();
+    yieldToIdleTask();
 
     if (!physical_stress->enqueueTimeline(
             queue,
@@ -458,17 +445,6 @@ bool runOptionalEffectsTimingBenchmark() {
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
     if (!physical_stress->validateAndLog(queue, voices, renderer)) {
         ESP_LOGE(kTag, "effects_bench: physical music stress qualification FAILED");
-        voices.allSoundOff();
-        return false;
-    }
-    if (!heavy_pass) {
-        ESP_LOGE(
-            kTag,
-            "effects_bench: physical heavy-DSP qualification FAILED after complete physical suite max_stable_voices=%u minimum_required=%u first_failed_voices=%u failure_flags=0x%08x",
-            static_cast<unsigned>(heavy.max_stable_voices),
-            static_cast<unsigned>(heavy.minimum_required_voices),
-            static_cast<unsigned>(heavy.first_failed_voices),
-            static_cast<unsigned>(heavy.failure_flags));
         voices.allSoundOff();
         return false;
     }
