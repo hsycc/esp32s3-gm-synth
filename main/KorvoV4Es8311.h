@@ -12,11 +12,15 @@ public:
     KorvoV4Es8311(const KorvoV4Es8311&) = delete;
     KorvoV4Es8311& operator=(const KorvoV4Es8311&) = delete;
 
-    // Keep PA disabled and DAC digitally muted while the I2S DMA ring is
-    // configured and preloaded with silence.
+    // Keep PA disabled, configure the ES8311 control plane, and hold the DAC
+    // digitally muted while the I2S DMA ring is configured/preloaded.
     bool prepareMuted();
 
-    // Call only after the I2S channel is enabled and clocks are running.
+    // Call only after the I2S channel is enabled and MCLK/BCLK/LRCK are live.
+    // This performs the ES8311 DAC power-up/start sequence while remaining muted.
+    bool startMutedWithClocks();
+
+    // Final anti-pop startup step after the live DMA queue has been stabilized.
     bool enableOutput();
 
     // Anti-pop shutdown: PA off first, then mute/power-down codec, then free I2C.
@@ -31,6 +35,7 @@ private:
     i2c_master_dev_handle_t device_ = nullptr;
     bool owns_bus_ = false;
     bool prepared_ = false;
+    bool started_ = false;
     bool output_enabled_ = false;
 };
 
