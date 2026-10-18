@@ -32,8 +32,8 @@ CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y
 
 # Physical I2S/DMA qualification on KS_S3_KORVO_V4 / ESP32-S3-Korvo-2 audio
-# routing. The frame remains standard 16-bit stereo; the renderer is downmixed
-# to mono and duplicated into both slots before transmission to the ES8311.
+# routing. Keep the Espressif Korvo-2 style standard 16-bit Philips wire frame,
+# with a mono application buffer feeding the single ES8311 DAC/speaker path.
 CONFIG_GM_SYNTH_I2S_QUAL_ENABLE=y
 CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO=16
 CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO=9
@@ -43,6 +43,8 @@ CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM=8
 CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM=64
 CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE=1
 CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY=20
+# 16384 * 64 / 44100 = 23.78 s of measured continuous physical streaming.
+CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS=16384
 
 # Historical name retained for compatibility: this mounts the generated raw
 # flash FATFS fixture and is intentionally shared by QEMU and physical builds.
