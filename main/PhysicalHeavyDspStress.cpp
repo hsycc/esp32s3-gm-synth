@@ -27,7 +27,22 @@ constexpr std::size_t kFramesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
 constexpr std::size_t kSamplesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kSamplesPerBlock;
-constexpr std::array<std::size_t, 7> kSteps{8, 12, 16, 20, 24, 28, 32};
+constexpr std::array<std::size_t, 10> kSteps{1, 2, 4, 8, 12, 16, 20, 24, 28, 32};
+
+constexpr std::uint32_t kFailureNullBlockStart = 1u << 0u;
+constexpr std::uint32_t kFailureInvalidFixture = 1u << 1u;
+constexpr std::uint32_t kFailureScratchAllocation = 1u << 2u;
+constexpr std::uint32_t kFailureResolveStatus = 1u << 3u;
+constexpr std::uint32_t kFailureResolveCount = 1u << 4u;
+constexpr std::uint32_t kFailureLowpass = 1u << 5u;
+constexpr std::uint32_t kFailureDynamicLowpass = 1u << 6u;
+constexpr std::uint32_t kFailureVibrato = 1u << 7u;
+constexpr std::uint32_t kFailureModLfo = 1u << 8u;
+constexpr std::uint32_t kFailureModEnvelope = 1u << 9u;
+constexpr std::uint32_t kFailureVoiceStart = 1u << 10u;
+constexpr std::uint32_t kFailureActiveVoiceCount = 1u << 11u;
+constexpr std::uint32_t kFailureDeadline = 1u << 12u;
+constexpr std::uint32_t kFailureClipping = 1u << 13u;
 
 struct TimingSummary {
     std::uint32_t min_us = 0;
@@ -86,6 +101,41 @@ std::uint64_t updateChecksum(
         checksum *= kFnvPrime;
     }
     return checksum;
+}
+
+void recordFailure(
+    PhysicalHeavyDspStressResult* result,
+    std::size_t voices,
+    std::size_t active_voices,
+    std::uint32_t deadline_misses,
+    std::uint64_t clipped_samples,
+    std::uint32_t flags) {
+    if (result == nullptr || flags == 0u) {
+        return;
+    }
+    result->failure_flags |= flags;
+    if (result->first_failed_voices != 0u) {
+        return;
+    }
+    result->first_failed_voices = voices;
+    result->first_failed_active_voices = active_voices;
+    result->first_failed_deadline_misses = deadline_misses;
+    result->first_failed_clipped_samples = clipped_samples;
+}
+
+void logResult(const PhysicalHeavyDspStressResult& result) {
+    ESP_LOGI(
+        kTag,
+        "physical_heavy_dsp: RESULT max_stable_voices=%u minimum_required=%u first_failed_voices=%u first_failed_active=%u first_failed_deadline_misses=%u first_failed_clipped_samples=%llu failure_flags=0x%08x hard_cap=%u %s",
+        static_cast<unsigned>(result.max_stable_voices),
+        static_cast<unsigned>(result.minimum_required_voices),
+        static_cast<unsigned>(result.first_failed_voices),
+        static_cast<unsigned>(result.first_failed_active_voices),
+        static_cast<unsigned>(result.first_failed_deadline_misses),
+        static_cast<unsigned long long>(result.first_failed_clipped_samples),
+        static_cast<unsigned>(result.failure_flags),
+        static_cast<unsigned>(voice::VoicePool::kHardVoiceCap),
+        result.pass() ? "PASS" : "FAIL");
 }
 
 gm::PlaybackZone makeHeavyZone() {
@@ -182,6 +232,9 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
     std::uint64_t* block_start_frame) {
     PhysicalHeavyDspStressResult result{};
     if (block_start_frame == nullptr) {
+        result.failure_flags |= kFailureNullBlockStart;
+        ESP_LOGE(kTag, "physical_heavy_dsp: null block_start_frame");
+        logResult(result);
         return result;
     }
 
@@ -190,7 +243,14 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
         &zone,
         directory.bankGeneration());
     if (!zone.valid() || !program.valid()) {
-        ESP_LOGE(kTag, "physical_heavy_dsp: invalid synthetic heavy zone/program");
+        result.failure_flags |= kFailureInvalidFixture;
+        ESP_LOGE(
+            kTag,
+            "physical_heavy_dsp: invalid synthetic heavy zone/program zone_valid=%u program_valid=%u bank_generation=%u",
+            zone.valid() ? 1u : 0u,
+            program.valid() ? 1u : 0u,
+            static_cast<unsigned>(directory.bankGeneration()));
+        logResult(result);
         return result;
     }
 
@@ -208,10 +268,13 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
         sizeof(gm::ResolvedVoiceBatch),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (batch_storage == nullptr) {
+        result.failure_flags |= kFailureScratchAllocation;
         ESP_LOGE(
             kTag,
-            "physical_heavy_dsp: PSRAM scratch allocation failed bytes=%u",
-            static_cast<unsigned>(sizeof(gm::ResolvedVoiceBatch)));
+            "physical_heavy_dsp: PSRAM scratch allocation failed bytes=%u free_psram=%u",
+            static_cast<unsigned>(sizeof(gm::ResolvedVoiceBatch)),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+        logResult(result);
         return result;
     }
     auto* batch = new (batch_storage) gm::ResolvedVoiceBatch{};
@@ -229,7 +292,7 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
 
     ESP_LOGI(
         kTag,
-        "physical_heavy_dsp: START steps=8,12,16,20,24,28,32 warmup_blocks=%u measured_blocks=%u budget_us=%u features=resonant_filter,vibrato_lfo,mod_lfo_pitch_filter_volume,mod_env_pitch_filter,full_fx",
+        "physical_heavy_dsp: START steps=1,2,4,8,12,16,20,24,28,32 warmup_blocks=%u measured_blocks=%u budget_us=%u features=resonant_filter,vibrato_lfo,mod_lfo_pitch_filter_volume,mod_env_pitch_filter,full_fx",
         static_cast<unsigned>(kWarmupBlocks),
         static_cast<unsigned>(kMeasuredBlocks),
         static_cast<unsigned>(kBlockBudgetUs));
@@ -246,23 +309,79 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
                 100,
                 static_cast<std::uint32_t>(started + 1u),
                 batch);
-            if (status != gm::ZoneResolveStatus::Ok || batch->count != 1 ||
-                !batch->voices[0].lowpass.enabled ||
-                !batch->voices[0].dynamic_lowpass_table.enabled ||
-                !batch->voices[0].vibrato_lfo.enabled ||
-                !batch->voices[0].mod_lfo.enabled ||
-                !batch->voices[0].mod_envelope.enabled ||
-                !voices.start(batch->voices[0])) {
+
+            std::uint32_t setup_failure_flags = 0;
+            if (status != gm::ZoneResolveStatus::Ok) {
+                setup_failure_flags |= kFailureResolveStatus;
+            }
+            const bool resolved_one = batch->count == 1u;
+            if (!resolved_one) {
+                setup_failure_flags |= kFailureResolveCount;
+            }
+
+            bool lowpass = false;
+            bool dynamic_lowpass = false;
+            bool vibrato = false;
+            bool mod_lfo = false;
+            bool mod_envelope = false;
+            if (resolved_one) {
+                lowpass = batch->voices[0].lowpass.enabled;
+                dynamic_lowpass = batch->voices[0].dynamic_lowpass_table.enabled;
+                vibrato = batch->voices[0].vibrato_lfo.enabled;
+                mod_lfo = batch->voices[0].mod_lfo.enabled;
+                mod_envelope = batch->voices[0].mod_envelope.enabled;
+                if (!lowpass) {
+                    setup_failure_flags |= kFailureLowpass;
+                }
+                if (!dynamic_lowpass) {
+                    setup_failure_flags |= kFailureDynamicLowpass;
+                }
+                if (!vibrato) {
+                    setup_failure_flags |= kFailureVibrato;
+                }
+                if (!mod_lfo) {
+                    setup_failure_flags |= kFailureModLfo;
+                }
+                if (!mod_envelope) {
+                    setup_failure_flags |= kFailureModEnvelope;
+                }
+            }
+
+            bool voice_start_ok = false;
+            if (setup_failure_flags == 0u) {
+                voice_start_ok = voices.start(batch->voices[0]);
+                if (!voice_start_ok) {
+                    setup_failure_flags |= kFailureVoiceStart;
+                }
+            }
+
+            if (setup_failure_flags != 0u) {
+                recordFailure(
+                    &result,
+                    target,
+                    voices.activeVoiceCount(),
+                    0,
+                    0,
+                    setup_failure_flags);
                 ESP_LOGE(
                     kTag,
-                    "physical_heavy_dsp: resolve/start failed target=%u started=%u status=%u resolved=%u",
+                    "physical_heavy_dsp: FIXTURE_FAIL target=%u started=%u status=%u resolved=%u lowpass=%u dynamic_lowpass=%u vibrato=%u mod_lfo=%u mod_env=%u voice_start=%u active=%u failure_flags=0x%08x",
                     static_cast<unsigned>(target),
                     static_cast<unsigned>(started),
                     static_cast<unsigned>(status),
-                    static_cast<unsigned>(batch->count));
+                    static_cast<unsigned>(batch->count),
+                    lowpass ? 1u : 0u,
+                    dynamic_lowpass ? 1u : 0u,
+                    vibrato ? 1u : 0u,
+                    mod_lfo ? 1u : 0u,
+                    mod_envelope ? 1u : 0u,
+                    voice_start_ok ? 1u : 0u,
+                    static_cast<unsigned>(voices.activeVoiceCount()),
+                    static_cast<unsigned>(setup_failure_flags));
                 voices.allSoundOff();
                 batch->~ResolvedVoiceBatch();
                 heap_caps_free(batch_storage);
+                logResult(result);
                 return result;
             }
             ++started;
@@ -286,21 +405,39 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
 
         const TimingSummary timing = summarize(timings);
         const std::uint64_t clipped = renderer.stats().clipped_samples - clipped_before;
-        const bool stable =
-            voices.activeVoiceCount() == target &&
-            timing.deadline_misses == 0 &&
-            clipped == 0;
+        const std::size_t active_voices = voices.activeVoiceCount();
+        std::uint32_t step_failure_flags = 0;
+        if (active_voices != target) {
+            step_failure_flags |= kFailureActiveVoiceCount;
+        }
+        if (timing.deadline_misses != 0u) {
+            step_failure_flags |= kFailureDeadline;
+        }
+        if (clipped != 0u) {
+            step_failure_flags |= kFailureClipping;
+        }
+        const bool stable = step_failure_flags == 0u;
 
-        if (lower_steps_stable && stable) {
+        if (stable && lower_steps_stable) {
             result.max_stable_voices = target;
         } else {
+            if (!stable) {
+                recordFailure(
+                    &result,
+                    target,
+                    active_voices,
+                    timing.deadline_misses,
+                    clipped,
+                    step_failure_flags);
+            }
             lower_steps_stable = false;
         }
 
         ESP_LOGI(
             kTag,
-            "physical_heavy_dsp: voices=%u min_us=%u avg_us=%u p95_us=%u p99_us=%u max_us=%u deadline_misses=%u clipped_samples=%llu checksum=%016llx stable=%u",
+            "physical_heavy_dsp: voices=%u active_voices=%u min_us=%u avg_us=%u p95_us=%u p99_us=%u max_us=%u deadline_misses=%u clipped_samples=%llu checksum=%016llx failure_flags=0x%08x stable=%u",
             static_cast<unsigned>(target),
+            static_cast<unsigned>(active_voices),
             static_cast<unsigned>(timing.min_us),
             static_cast<unsigned>(timing.avg_us),
             static_cast<unsigned>(timing.p95_us),
@@ -309,19 +446,14 @@ PhysicalHeavyDspStressResult runPhysicalHeavyDspStress(
             static_cast<unsigned>(timing.deadline_misses),
             static_cast<unsigned long long>(clipped),
             static_cast<unsigned long long>(checksum),
+            static_cast<unsigned>(step_failure_flags),
             stable ? 1u : 0u);
     }
 
     voices.allSoundOff();
     batch->~ResolvedVoiceBatch();
     heap_caps_free(batch_storage);
-    ESP_LOGI(
-        kTag,
-        "physical_heavy_dsp: RESULT max_stable_voices=%u minimum_required=%u hard_cap=%u %s",
-        static_cast<unsigned>(result.max_stable_voices),
-        static_cast<unsigned>(result.minimum_required_voices),
-        static_cast<unsigned>(voice::VoicePool::kHardVoiceCap),
-        result.pass() ? "PASS" : "FAIL");
+    logResult(result);
     return result;
 }
 
