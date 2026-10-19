@@ -13,6 +13,7 @@ on:
       - "tests/test_sf2_release_report.py"
       - "tools/sf2_release/**"
       - "scripts/run_m7_sf2_release_matrix.sh"
+      - "scripts/run_m7_sf2_robustness.sh"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "assets/sf2/full/GeneralUser-GS.sf2"
       - "assets/sf2/full/FluidR3_GM.sf2"
@@ -29,6 +30,7 @@ on:
       - "tests/test_sf2_release_report.py"
       - "tools/sf2_release/**"
       - "scripts/run_m7_sf2_release_matrix.sh"
+      - "scripts/run_m7_sf2_robustness.sh"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "assets/sf2/full/GeneralUser-GS.sf2"
       - "assets/sf2/full/FluidR3_GM.sf2"
@@ -89,12 +91,26 @@ jobs:
           mkdir -p build/m7-sf2-release
           bash scripts/run_m7_sf2_release_matrix.sh 2>&1 | tee build/m7-sf2-release/qualification.log
 
+      - name: Run malformed-SF2 rejection contract
+        shell: bash
+        run: |
+          bash scripts/run_m7_sf2_robustness.sh 2>&1 | tee build/m7-sf2-release/robustness-report.txt
+
       - name: Publish M7 portfolio summary
         if: always()
         shell: bash
         run: |
           if [[ -f build/m7-sf2-release/sf2-release-portfolio.md ]]; then
             cat build/m7-sf2-release/sf2-release-portfolio.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f build/m7-sf2-release/robustness-report.txt ]]; then
+            {
+              echo
+              echo '## Malformed SF2 rejection contract'
+              echo '```text'
+              grep '^M7_SF2_ROBUSTNESS' build/m7-sf2-release/robustness-report.txt || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload M7 native-SF2 qualification artifact
