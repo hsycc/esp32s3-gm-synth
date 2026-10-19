@@ -45,15 +45,44 @@ run_asset() {
   local required="$4"
   local source_kind="$5"
   local log="${BUILD_DIR}/${asset}.log"
+  local raw_log="${BUILD_DIR}/${asset}.raw.log"
 
   printf '\n[M7] asset=%s source=%s path=%s profile=%s required_accept=%s\n' \
     "${asset}" "${source_kind}" "${path}" "${profile}" "${required}"
+
+  set +e
   "${SCANNER}" "${path}" "${asset}" "${profile}" "${required}" "${source_kind}" \
-    2>&1 | tee "${log}"
+    2>&1 | tee "${raw_log}"
+  local scanner_status=${PIPESTATUS[0]}
+  set -e
+
+  if [[ "${scanner_status}" -eq 0 ]]; then
+    cp "${raw_log}" "${log}"
+    return 0
+  fi
+
+  # Sf2SampleSource error 6 is TooManySamples. The current runtime keeps a
+  # bounded 512-entry sample metadata table, so an otherwise parseable user
+  # SoundFont that exceeds this limit is an explicit compatibility rejection,
+  # not a qualification-runner failure. Preserve the raw scanner log and write
+  # a normalized asset-level classification for the portfolio reporter.
+  if [[ "${required}" == "0" ]] && \
+     grep -Fq "M7_SF2_FATAL asset=${asset} reason=sample_source_open error=6" "${raw_log}"; then
+    local file_bytes
+    file_bytes="$(wc -c < "${path}" | tr -d ' ')"
+    printf '%s\n' \
+      "M7_SF2_ASSET_REJECTED asset=${asset} profile=${profile} required_accept=${required} source_kind=${source_kind} path=${path} reason=runtime_sample_table_limit file_bytes=${file_bytes} sample_source_error=6 runtime_limit=512" \
+      | tee "${log}"
+    return 0
+  fi
+
+  cp "${raw_log}" "${log}"
+  return "${scanner_status}"
 }
 
 FM_PATH="assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
-GENERALUSER_PATH="assets/sf2/full/GeneralUser-GS.sf2"
+GENERALUSER_FULL_PATH="assets/sf2/full/GeneralUser-GS.sf2"
+GENERALUSER_SUBSET_PATH="assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2"
 FLUID_FULL_PATH="assets/sf2/full/FluidR3_GM.sf2"
 FLUID_SUBSET_PATH="assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2"
 
@@ -61,8 +90,14 @@ if ! is_real_sf2 "${FM_PATH}"; then
   echo "required tracked FM/GM asset is unavailable or not an SF2: ${FM_PATH}" >&2
   exit 1
 fi
-if ! is_real_sf2 "${GENERALUSER_PATH}"; then
-  echo "GeneralUser GS asset is unavailable or not an SF2: ${GENERALUSER_PATH}" >&2
+
+GENERALUSER_PATH="${GENERALUSER_SUBSET_PATH}"
+GENERALUSER_SOURCE_KIND="subset"
+if is_real_sf2 "${GENERALUSER_FULL_PATH}"; then
+  GENERALUSER_PATH="${GENERALUSER_FULL_PATH}"
+  GENERALUSER_SOURCE_KIND="full"
+elif ! is_real_sf2 "${GENERALUSER_SUBSET_PATH}"; then
+  echo "neither full nor subset GeneralUser GS asset is available" >&2
   exit 1
 fi
 
@@ -77,7 +112,7 @@ elif ! is_real_sf2 "${FLUID_SUBSET_PATH}"; then
 fi
 
 run_asset "${FM_PATH}" "fm_gm_open" "gm128" 1 "full"
-run_asset "${GENERALUSER_PATH}" "generaluser_gs" "native" 0 "full"
+run_asset "${GENERALUSER_PATH}" "generaluser_gs" "native" 0 "${GENERALUSER_SOURCE_KIND}"
 run_asset "${FLUID_PATH}" "fluidr3_gm" "native" 0 "${FLUID_SOURCE_KIND}"
 
 python -m tools.sf2_release.report \

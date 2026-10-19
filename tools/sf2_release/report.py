@@ -20,6 +20,19 @@ class AssetHeader:
 
 
 @dataclass(frozen=True)
+class AssetRejection:
+    asset: str
+    profile: str
+    required_accept: int
+    source_kind: str
+    path: str
+    reason: str
+    file_bytes: int
+    sample_source_error: int
+    runtime_limit: int
+
+
+@dataclass(frozen=True)
 class ProgramRow:
     asset: str
     bank: int
@@ -84,19 +97,22 @@ class AssetReport:
     header: AssetHeader | None
     programs: list[ProgramRow]
     summary: AssetSummary | None
+    rejection: AssetRejection | None
     errors: list[str]
 
     @property
     def asset(self) -> str:
         if self.summary is not None:
             return self.summary.asset
+        if self.rejection is not None:
+            return self.rejection.asset
         if self.header is not None:
             return self.header.asset
         return "unknown"
 
     @property
     def scanned(self) -> bool:
-        return not self.errors and self.summary is not None
+        return not self.errors and (self.summary is not None or self.rejection is not None)
 
     @property
     def accepted(self) -> bool:
@@ -104,7 +120,11 @@ class AssetReport:
 
     @property
     def required_accept(self) -> bool:
-        return bool(self.summary.required_accept) if self.summary is not None else False
+        if self.summary is not None:
+            return bool(self.summary.required_accept)
+        if self.rejection is not None:
+            return bool(self.rejection.required_accept)
+        return False
 
     @property
     def passed(self) -> bool:
@@ -151,6 +171,20 @@ def _header(fields: dict[str, str]) -> AssetHeader:
         file_bytes=_int(fields, "file_bytes"),
         presets=_int(fields, "presets"),
         samples=_int(fields, "samples"),
+    )
+
+
+def _rejection(fields: dict[str, str]) -> AssetRejection:
+    return AssetRejection(
+        asset=fields["asset"],
+        profile=fields["profile"],
+        required_accept=_int(fields, "required_accept"),
+        source_kind=fields["source_kind"],
+        path=fields["path"],
+        reason=fields["reason"],
+        file_bytes=_int(fields, "file_bytes"),
+        sample_source_error=_int(fields, "sample_source_error"),
+        runtime_limit=_int(fields, "runtime_limit"),
     )
 
 
@@ -224,12 +258,15 @@ def parse_asset_log(text: str) -> AssetReport:
     headers: list[AssetHeader] = []
     programs: list[ProgramRow] = []
     summaries: list[AssetSummary] = []
+    rejections: list[AssetRejection] = []
     errors: list[str] = []
 
     for raw in text.splitlines():
         line = raw.strip()
         try:
-            if line.startswith("M7_SF2_ASSET "):
+            if line.startswith("M7_SF2_ASSET_REJECTED "):
+                rejections.append(_rejection(_parse_fields(line)))
+            elif line.startswith("M7_SF2_ASSET "):
                 headers.append(_header(_parse_fields(line)))
             elif line.startswith("M7_SF2_PROGRAM "):
                 programs.append(_program(_parse_fields(line)))
@@ -239,6 +276,22 @@ def parse_asset_log(text: str) -> AssetReport:
                 errors.append(line)
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(f"invalid M7 SF2 line: {exc}")
+
+    if rejections:
+        if len(rejections) != 1:
+            errors.append(f"expected exactly one asset rejection, found {len(rejections)}")
+        if headers or summaries or programs:
+            errors.append("asset-level rejection must not mix with per-program records")
+        rejection = rejections[0] if len(rejections) == 1 else None
+        if rejection is not None and rejection.required_accept:
+            errors.append(f"required asset rejected: {rejection.asset}")
+        return AssetReport(
+            header=None,
+            programs=[],
+            summary=None,
+            rejection=rejection,
+            errors=errors,
+        )
 
     if len(headers) != 1:
         errors.append(f"expected exactly one M7_SF2_ASSET, found {len(headers)}")
@@ -298,7 +351,13 @@ def parse_asset_log(text: str) -> AssetReport:
         if summary.required_accept and summary.classification != "ACCEPTED":
             errors.append(f"required asset rejected: {summary.asset}")
 
-    return AssetReport(header=header, programs=programs, summary=summary, errors=errors)
+    return AssetReport(
+        header=header,
+        programs=programs,
+        summary=summary,
+        rejection=None,
+        errors=errors,
+    )
 
 
 def parse_portfolio(logs: Iterable[str], min_assets: int = 1) -> PortfolioReport:
@@ -328,23 +387,47 @@ def render_markdown(
         [
             "## Asset classifications",
             "",
-            "| Asset | Source | Profile | Required | Classification | Presets | Banks | Rejected rows | Max PCM | Max overlap |",
-            "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+            "| Asset | Source | Profile | Required | Classification | Reason | Presets | Banks | Rejected rows | Max PCM | Max overlap |",
+            "| --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for report in portfolio.assets:
+        if report.rejection is not None:
+            rejection = report.rejection
+            lines.append(
+                f"| {rejection.asset} | {rejection.source_kind} | {rejection.profile} | "
+                f"{rejection.required_accept} | REJECTED | {rejection.reason} | ? | ? | ? | ? | ? |"
+            )
+            continue
         if report.summary is None:
-            lines.append(f"| {report.asset} | ? | ? | ? | INVALID | ? | ? | ? | ? | ? |")
+            lines.append(f"| {report.asset} | ? | ? | ? | INVALID | report_error | ? | ? | ? | ? | ? |")
             continue
         summary = report.summary
         lines.append(
             f"| {summary.asset} | {summary.source_kind} | {summary.profile} | "
-            f"{summary.required_accept} | {summary.classification} | {summary.presets} | "
+            f"{summary.required_accept} | {summary.classification} | per-program | {summary.presets} | "
             f"{summary.banks} | {summary.rejected_rows} | {summary.max_aligned_pcm_bytes} | "
             f"{summary.max_representative_overlap} |"
         )
 
     for report in portfolio.assets:
+        if report.rejection is not None:
+            rejection = report.rejection
+            lines.extend(
+                [
+                    "",
+                    f"## {rejection.asset}",
+                    "",
+                    "- classification: **REJECTED**",
+                    f"- reason: `{rejection.reason}`",
+                    f"- source: `{rejection.source_kind}` / `{rejection.path}`",
+                    f"- file bytes: `{rejection.file_bytes}`",
+                    f"- sample-source error: `{rejection.sample_source_error}`",
+                    f"- runtime sample metadata limit: `{rejection.runtime_limit}`",
+                    "- this is an explicit compatibility classification, not a qualification-runner crash.",
+                ]
+            )
+            continue
         if report.summary is None:
             continue
         summary = report.summary
@@ -419,6 +502,7 @@ def report_json(portfolio: PortfolioReport) -> dict[str, object]:
                 "errors": asset.errors,
                 "header": asdict(asset.header) if asset.header is not None else None,
                 "summary": asdict(asset.summary) if asset.summary is not None else None,
+                "rejection": asdict(asset.rejection) if asset.rejection is not None else None,
                 "programs": [asdict(row) for row in asset.programs],
             }
             for asset in portfolio.assets
