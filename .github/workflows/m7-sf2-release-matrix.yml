@@ -11,6 +11,7 @@ on:
       - "firmware/voice/**"
       - "tests/gm/test_sf2_id_space.cpp"
       - "tests/gm/test_sf2_release_matrix.cpp"
+      - "tests/sample/test_large_sample_id.cpp"
       - "tests/test_sf2_release_report.py"
       - "tools/sf2_release/**"
       - "scripts/run_m7_sf2_release_matrix.sh"
@@ -29,6 +30,7 @@ on:
       - "firmware/voice/**"
       - "tests/gm/test_sf2_id_space.cpp"
       - "tests/gm/test_sf2_release_matrix.cpp"
+      - "tests/sample/test_large_sample_id.cpp"
       - "tests/test_sf2_release_report.py"
       - "tools/sf2_release/**"
       - "scripts/run_m7_sf2_release_matrix.sh"
@@ -86,6 +88,22 @@ jobs:
 
       - name: Run report parser unit tests
         run: python -m unittest tests.test_sf2_release_report -v
+
+      - name: Run large bank-local SampleId regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/m7-sf2-release
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencySourceLoad.cpp \
+            firmware/sample/SampleResidencyView.cpp \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            firmware/sample/ProgramPrepareController.cpp \
+            tests/sample/test_large_sample_id.cpp \
+            -o build/m7-sf2-release/test_large_sample_id
+          build/m7-sf2-release/test_large_sample_id
 
       - name: Run representative native-SF2 release classification
         shell: bash

@@ -72,6 +72,12 @@ struct PublicationStats {
 // The control/storage domain owns ResidentRecord objects and PSRAM allocation.
 // Audio only touches this directory, immutable ResidentRecord fields and PCM.
 //
+// The table capacity is the maximum number of simultaneously published samples,
+// NOT the bank-local SampleId range. Slots are a bounded pointer-only hash table
+// keyed by record->descriptor.id, so a bank may use arbitrary 32-bit SampleIds
+// while the internal-SRAM footprint stays the same order as the old 512-entry
+// direct-index table.
+//
 // Important reclamation rule:
 //   unpublish(record) -> wait until canReclaim(record) -> free/reuse record+PCM
 //
@@ -93,7 +99,7 @@ public:
     }
 
     // Release-publishes a fully initialized record. Re-publishing the same
-    // pointer is idempotent; replacing a live pointer is rejected and requires
+    // pointer is idempotent; replacing a live SampleId is rejected and requires
     // explicit unpublish first.
     bool publish(SampleId sample_id, const ResidentRecord* record);
 
@@ -101,7 +107,8 @@ public:
     // retiring state conceptually; it is NOT yet safe to free.
     const ResidentRecord* unpublish(SampleId sample_id);
 
-    // Bounded audio-side acquire. No allocation, storage I/O, mutex or scan.
+    // Bounded audio-side acquire. No allocation, storage I/O, mutex or unbounded
+    // scan. The hash probe is capped at kMaxSamples slots.
     PublishedVoiceRef acquire(SampleId sample_id);
     bool release(PublishedVoiceRef& ref);
 
@@ -119,8 +126,11 @@ private:
         std::atomic<const ResidentRecord*> published;
     };
 
-    bool validSampleId(SampleId sample_id) const {
-        return static_cast<std::size_t>(sample_id) < slots_.size();
+    static_assert((kMaxSamples & (kMaxSamples - 1u)) == 0u,
+                  "PublishedSampleDirectory slot count must be a power of two");
+
+    static std::size_t hashIndex(SampleId sample_id) {
+        return (static_cast<std::size_t>(sample_id) * 2654435761u) & (kMaxSamples - 1u);
     }
     bool anyPublished() const;
     bool isRecordPublished(const ResidentRecord* record) const;

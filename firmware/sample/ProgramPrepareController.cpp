@@ -51,16 +51,12 @@ bool ProgramPrepareController::dependencyListIsValid(
     }
 
     // Prepare is a control-domain operation and dependency lists are bounded at
-    // 512 entries. An O(n^2) duplicate check avoids a 512-byte automatic
-    // scratch array on the small ESP-IDF control/main task stack. Real program
-    // dependency sets are normally far smaller than the upper bound.
+    // 512 entries. SampleId itself is bank-local and may be much larger than
+    // the simultaneous resident count. An O(n^2) duplicate check avoids extra
+    // automatic scratch on the small ESP-IDF control/main task stack.
     for (std::size_t i = 0; i < dependency_count; ++i) {
-        const SampleId sample_id = dependencies[i];
-        if (static_cast<std::size_t>(sample_id) >= SampleResidencyManager::kMaxResidentSamples) {
-            return false;
-        }
         for (std::size_t previous = 0; previous < i; ++previous) {
-            if (dependencies[previous] == sample_id) {
+            if (dependencies[previous] == dependencies[i]) {
                 return false;
             }
         }
@@ -68,25 +64,51 @@ bool ProgramPrepareController::dependencyListIsValid(
     return true;
 }
 
+ResidentRecord* ProgramPrepareController::findRecord(SampleId sample_id) {
+    for (ResidentRecord& record : records_) {
+        if (record.sample_generation != 0 && record.descriptor.id == sample_id) {
+            return &record;
+        }
+    }
+    return nullptr;
+}
+
+ResidentRecord* ProgramPrepareController::selectReusableRecord() {
+    for (ResidentRecord& record : records_) {
+        if (record.sample_generation == 0) {
+            return &record;
+        }
+    }
+    for (ResidentRecord& record : records_) {
+        if (directory_.canReclaim(&record)) {
+            return &record;
+        }
+    }
+    return nullptr;
+}
+
 bool ProgramPrepareController::evictOneSafeCacheSample() {
-    SampleId victim = static_cast<SampleId>(SampleResidencyManager::kMaxResidentSamples);
+    SampleId victim = 0;
+    bool found_victim = false;
     std::uint64_t oldest_touch = std::numeric_limits<std::uint64_t>::max();
     std::size_t victim_bytes = 0;
 
     for (std::size_t index = 0; index < SampleResidencyManager::kMaxResidentSamples; ++index) {
-        const SampleId sample_id = static_cast<SampleId>(index);
-        const ResidentSampleView view = residency_.residentView(sample_id);
+        const ResidentSampleView view = residency_.residentViewAt(index);
         if (!view.valid() || view.pin_count != 0 || view.phase_a_voice_ref_count != 0) {
             continue;
         }
+
+        const SampleId sample_id = view.sample_id;
         if (directory_.published(sample_id) != nullptr) {
             continue;
         }
 
-        // records_[sample_id] may be a never-published zero-initialized record
-        // or a retired publication record. canReclaim() safely accepts either;
-        // a live release-tail Voice Ref makes it return false.
-        if (!directory_.canReclaim(&records_[sample_id])) {
+        // A direct-to-residency cache entry may never have been published and
+        // therefore may have no ResidentRecord. If a record exists, release-tail
+        // ownership must be fully reclaimed before its PCM can be evicted.
+        ResidentRecord* record = findRecord(sample_id);
+        if (record != nullptr && !directory_.canReclaim(record)) {
             continue;
         }
 
@@ -94,13 +116,11 @@ bool ProgramPrepareController::evictOneSafeCacheSample() {
             oldest_touch = view.touch_sequence;
             victim = sample_id;
             victim_bytes = view.allocated_bytes;
+            found_victim = true;
         }
     }
 
-    if (static_cast<std::size_t>(victim) >= SampleResidencyManager::kMaxResidentSamples) {
-        return false;
-    }
-    if (!residency_.evict(victim)) {
+    if (!found_victim || !residency_.evict(victim)) {
         return false;
     }
 
@@ -220,18 +240,17 @@ void ProgramPrepareController::initializeRecord(
 bool ProgramPrepareController::ensurePublished(
     const ResidentSampleView& view,
     bool* newly_published) {
-    if (!view.valid() || newly_published == nullptr ||
-        static_cast<std::size_t>(view.sample_id) >= records_.size()) {
+    if (!view.valid() || newly_published == nullptr) {
         setError(ProgramPrepareError::InvalidArgument);
         return false;
     }
 
     *newly_published = false;
-    ResidentRecord& record = records_[view.sample_id];
+    ResidentRecord* record = findRecord(view.sample_id);
     const ResidentRecord* existing = directory_.published(view.sample_id);
 
     if (existing != nullptr) {
-        if (existing != &record || !recordMatchesView(record, view)) {
+        if (record == nullptr || existing != record || !recordMatchesView(*record, view)) {
             setError(ProgramPrepareError::PublicationConflict);
             return false;
         }
@@ -239,21 +258,25 @@ bool ProgramPrepareController::ensurePublished(
         return true;
     }
 
-    if (record.sample_generation != 0) {
-        if (!recordMatchesView(record, view)) {
-            if (!directory_.canReclaim(&record)) {
-                setError(ProgramPrepareError::RetiringGenerationBusy);
-                return false;
-            }
-            initializeRecord(record, view);
+    if (record == nullptr) {
+        record = selectReusableRecord();
+        if (record == nullptr) {
+            setError(ProgramPrepareError::RetiringGenerationBusy);
+            return false;
         }
-        // Same immutable record may be republished while old release-tail refs
-        // still exist. No storage is being reclaimed or reused in that case.
-    } else {
-        initializeRecord(record, view);
+        initializeRecord(*record, view);
+    } else if (!recordMatchesView(*record, view)) {
+        if (!directory_.canReclaim(record)) {
+            setError(ProgramPrepareError::RetiringGenerationBusy);
+            return false;
+        }
+        initializeRecord(*record, view);
     }
 
-    if (!directory_.publish(view.sample_id, &record)) {
+    // The same immutable record may be republished while an old release-tail
+    // owns it only when it still matches the exact resident generation. A
+    // different generation is never installed until canReclaim(record) is true.
+    if (!directory_.publish(view.sample_id, record)) {
         setError(ProgramPrepareError::PublicationConflict);
         return false;
     }
@@ -282,8 +305,9 @@ void ProgramPrepareController::rollbackPinsAndPublications(
 
         const SampleId sample_id = working_snapshot.sample_ids[i];
         const ResidentSampleView view = residency_.residentView(sample_id);
-        if (view.valid() && view.pin_count == 0 &&
-            directory_.published(sample_id) == &records_[sample_id]) {
+        ResidentRecord* record = findRecord(sample_id);
+        if (view.valid() && view.pin_count == 0 && record != nullptr &&
+            directory_.published(sample_id) == record) {
             (void)directory_.unpublish(sample_id);
         }
     }
@@ -448,7 +472,8 @@ bool ProgramPrepareController::retireSnapshot(const ProgramSnapshot& snapshot) {
         if (!view.valid() || view.pin_count != 0) {
             continue;
         }
-        if (directory_.published(sample_id) == &records_[sample_id]) {
+        ResidentRecord* record = findRecord(sample_id);
+        if (record != nullptr && directory_.published(sample_id) == record) {
             if (directory_.unpublish(sample_id) != nullptr) {
                 ++stats_.samples_unpublished_after_retire;
             }

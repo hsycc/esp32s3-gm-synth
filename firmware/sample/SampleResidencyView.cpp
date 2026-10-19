@@ -12,13 +12,21 @@ ResidentSampleView SampleResidencyManager::residentView(SampleId sample_id) cons
     if (index < 0) {
         return view;
     }
+    return residentViewAt(static_cast<std::size_t>(index));
+}
 
-    const Entry& entry = entries_[static_cast<std::size_t>(index)];
+ResidentSampleView SampleResidencyManager::residentViewAt(std::size_t metadata_index) const {
+    ResidentSampleView view{};
+    if (!initialized_ || metadata_index >= entries_.size()) {
+        return view;
+    }
+
+    const Entry& entry = entries_[metadata_index];
     if (!entry.occupied) {
         return view;
     }
 
-    view.sample_id = sample_id;
+    view.sample_id = entry.descriptor.id;
     view.generation = entry.generation;
     view.pcm = reinterpret_cast<const std::int16_t*>(arena_ + entry.offset);
     view.descriptor = entry.descriptor;

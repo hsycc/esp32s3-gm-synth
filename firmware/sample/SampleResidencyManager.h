@@ -136,6 +136,11 @@ public:
     // select safe cache victims without traversing private allocator state.
     ResidentSampleView residentView(SampleId sample_id) const;
 
+    // Control-only bounded enumeration by resident-metadata slot. This is NOT
+    // SampleId indexing: the returned view carries the arbitrary bank-local
+    // SampleId stored in that slot. Empty/out-of-range slots return invalid.
+    ResidentSampleView residentViewAt(std::size_t metadata_index) const;
+
     // Program/channel residency ownership. A pinned sample is not evictable.
     bool pin(SampleId sample_id);
     bool unpin(SampleId sample_id);

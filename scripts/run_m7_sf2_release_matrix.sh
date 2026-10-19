@@ -76,17 +76,15 @@ run_asset() {
     return 0
   fi
 
-  # Sf2SampleSource error 6 is TooManySamples. The current runtime keeps a
-  # bounded 512-entry sample metadata table, so an otherwise parseable user
-  # SoundFont that exceeds this limit is an explicit compatibility rejection,
-  # not a qualification-runner failure. Preserve the raw scanner log and write
-  # a normalized asset-level classification for the portfolio reporter.
+  # Error 6 is now reserved for a source bank exceeding the SF2 16-bit sample
+  # index space. It is deliberately independent from the 512 simultaneous
+  # resident/publication-record capacity.
   if [[ "${required}" == "0" ]] && \
      grep -Fq "M7_SF2_FATAL asset=${asset} reason=sample_source_open error=6" "${raw_log}"; then
     local file_bytes
     file_bytes="$(wc -c < "${path}" | tr -d ' ')"
     printf '%s\n' \
-      "M7_SF2_ASSET_REJECTED asset=${asset} profile=${profile} required_accept=${required} source_kind=${source_kind} path=${path} reason=runtime_sample_table_limit file_bytes=${file_bytes} sample_source_error=6 runtime_limit=512" \
+      "M7_SF2_ASSET_REJECTED asset=${asset} profile=${profile} required_accept=${required} source_kind=${source_kind} path=${path} reason=source_sample_id_space_limit file_bytes=${file_bytes} sample_source_error=6 runtime_limit=65536" \
       | tee "${log}"
     return 0
   fi
