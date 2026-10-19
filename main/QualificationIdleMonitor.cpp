@@ -45,9 +45,10 @@ bool initializeQualificationIdleMonitor() {
     }
 
     g_initialized = true;
-    ESP_LOGI(kTag, "INIT core=%u window_ticks=%u",
+    ESP_LOGI(kTag, "INIT core=%u window_ticks=%u main_stack_bytes=%u",
              static_cast<unsigned>(kMonitoredCore),
-             static_cast<unsigned>(kIdleWindowTicks));
+             static_cast<unsigned>(kIdleWindowTicks),
+             static_cast<unsigned>(CONFIG_ESP_MAIN_TASK_STACK_SIZE));
     return true;
 }
 
@@ -63,9 +64,16 @@ bool verifiedQualificationIdleWindow(const char* phase) {
     const bool observed = delta != 0u;
     g_healthy = g_healthy && observed;
 
+    // ESP-IDF's Xtensa FreeRTOS port uses an 8-bit StackType_t, so the high
+    // water mark is directly expressed in bytes. Because it is a lifetime
+    // minimum, the clean_after_sample_source and clean_after_prepare windows
+    // bracket the deep real-SF2 prepare call without adding instrumentation to
+    // the resolver itself.
+    const configSTACK_DEPTH_TYPE stack_hwm_bytes = uxTaskGetStackHighWaterMark2(nullptr);
+
     ESP_LOGI(
         kTag,
-        "WINDOW phase=%s core=%u ticks=%u idle_before=%u idle_after=%u idle_delta=%u observed=%u sticky_healthy=%u",
+        "WINDOW phase=%s core=%u ticks=%u idle_before=%u idle_after=%u idle_delta=%u observed=%u stack_hwm_bytes=%u sticky_healthy=%u",
         phase != nullptr ? phase : "unknown",
         static_cast<unsigned>(kMonitoredCore),
         static_cast<unsigned>(kIdleWindowTicks),
@@ -73,6 +81,7 @@ bool verifiedQualificationIdleWindow(const char* phase) {
         static_cast<unsigned>(after),
         static_cast<unsigned>(delta),
         observed ? 1u : 0u,
+        static_cast<unsigned>(stack_hwm_bytes),
         g_healthy ? 1u : 0u);
 
     return g_healthy;

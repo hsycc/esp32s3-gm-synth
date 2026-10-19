@@ -31,6 +31,15 @@ CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y
 
+# The real-SF2 clean-audio gate nests Sf2PlaybackProgramPreparer::prepare()
+# and Sf2ResolvedZoneResolver::resolveProgram(). The 4aec425 ELF shows those
+# two frames alone exceed the ESP-IDF default 3584-byte main-task stack, before
+# accounting for the outer gate and Flash/FATFS/IPC frames. Give the physical
+# diagnostic image explicit headroom and arm the end-of-stack watchpoint so a
+# future regression fails at the overwrite instead of corrupting another task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
 # This diagnostic image must stop at the first CPU starvation event. Repeated
 # non-panic TWDT ISR output obscures the original failure site and can interrupt
 # SPI-flash/cache critical sections repeatedly. Keep the production/default
