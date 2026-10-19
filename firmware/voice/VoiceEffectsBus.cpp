@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace gm_synth::voice {
 namespace {
@@ -215,56 +216,165 @@ VoiceRenderResult Voice::renderAddRealtime(
                     loop_length_frames);
             }
         } else {
-            // Attack/hold/decay/release still use the canonical envelope helper
-            // so level and finish timing remain identical to renderAdd().
-            for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
-                const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
-                if (index >= end_frame) {
-                    phase_q32_ = phase;
-                    finish();
-                    break;
+            // Release is the dominant non-sustain physical stress state. The
+            // canonical envelope computes release_start * remaining / total on
+            // every sample. For the overwhelmingly common range where that
+            // numerator fits uint32, compute one exact divmod at segment start
+            // and advance quotient/remainder with a Bresenham-style recurrence.
+            // This preserves every Q15 envelope value and finish boundary while
+            // removing 63 of 64 divisions per Voice from a normal audio block.
+            const bool release_stage =
+                envelope_stage_ == EnvelopeStage::Release &&
+                active_release_frames_ != 0u &&
+                envelope_stage_frame_ < active_release_frames_ &&
+                release_start_level_q15_ > 0;
+            const std::uint32_t release_start = release_stage
+                ? static_cast<std::uint32_t>(clampQ15(release_start_level_q15_))
+                : 0u;
+            const std::uint32_t release_remaining = release_stage
+                ? active_release_frames_ - envelope_stage_frame_
+                : 0u;
+            const std::uint64_t release_numerator_wide =
+                static_cast<std::uint64_t>(release_start) * release_remaining;
+            const bool release_fast_path =
+                release_stage &&
+                release_numerator_wide <= std::numeric_limits<std::uint32_t>::max();
+
+            if (release_fast_path) {
+                const std::uint32_t total = active_release_frames_;
+                const std::uint32_t numerator =
+                    static_cast<std::uint32_t>(release_numerator_wide);
+                std::int32_t envelope = static_cast<std::int32_t>(numerator / total);
+                std::uint32_t remainder =
+                    numerator - static_cast<std::uint32_t>(envelope) * total;
+                const std::uint32_t step_whole = release_start / total;
+                const std::uint32_t step_remainder =
+                    release_start - step_whole * total;
+
+                for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
+                    const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
+                    if (index >= end_frame) {
+                        phase_q32_ = phase;
+                        finish();
+                        break;
+                    }
+
+                    envelope_level_q15_ = envelope;
+                    ++envelope_stage_frame_;
+                    if (envelope_stage_frame_ >= total) {
+                        envelope_stage_ = EnvelopeStage::Done;
+                    }
+                    if (envelope_stage_ == EnvelopeStage::Done && envelope <= 0) {
+                        phase_q32_ = phase;
+                        finish();
+                        break;
+                    }
+
+                    std::uint32_t next_index = index + 1u;
+                    if (index >= loop_start && next_index >= loop_end) {
+                        next_index = loop_start;
+                    } else if (next_index >= end_frame) {
+                        next_index = end_frame - 1u;
+                    }
+
+                    const std::int32_t a = pcm[index];
+                    const std::int32_t b = pcm[next_index];
+                    const std::uint32_t fraction =
+                        static_cast<std::uint32_t>(phase & 0xffffffffu);
+                    const std::int64_t delta = static_cast<std::int64_t>(b) - a;
+                    const std::int32_t mono = static_cast<std::int32_t>(
+                        static_cast<std::int64_t>(a) +
+                        ((delta * static_cast<std::int64_t>(fraction)) >> 32));
+
+                    const std::int32_t left_gain =
+                        multiplyQ15(current_gain_left_q15_, envelope);
+                    const std::int32_t right_gain =
+                        multiplyQ15(current_gain_right_q15_, envelope);
+                    output[0] += scaleSampleQ15Fast(mono, left_gain);
+                    output[1] += scaleSampleQ15Fast(mono, right_gain);
+                    output += kChannels;
+                    ++result.frames_rendered;
+
+                    const bool release_finishes_after_frame =
+                        envelope_stage_ == EnvelopeStage::Done;
+                    phase += phase_increment;
+                    phase = wrapContinuousPhase(
+                        phase,
+                        loop_start_q32,
+                        loop_end_q32,
+                        loop_length_frames);
+                    if (release_finishes_after_frame && active_) {
+                        phase_q32_ = phase;
+                        finish();
+                    }
+                    if (!active_) {
+                        break;
+                    }
+
+                    if (remainder >= step_remainder) {
+                        envelope -= static_cast<std::int32_t>(step_whole);
+                        remainder -= step_remainder;
+                    } else {
+                        envelope -= static_cast<std::int32_t>(step_whole + 1u);
+                        remainder = remainder + total - step_remainder;
+                    }
                 }
+            } else {
+                // Attack/hold/decay and extremely long releases keep using the
+                // canonical helper. That makes the optimization correctness-
+                // preserving even when release_start * remaining exceeds u32.
+                for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
+                    const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
+                    if (index >= end_frame) {
+                        phase_q32_ = phase;
+                        finish();
+                        break;
+                    }
 
-                const std::int32_t envelope = nextEnvelopeLevel();
-                if (envelope_stage_ == EnvelopeStage::Done && envelope <= 0) {
-                    phase_q32_ = phase;
-                    finish();
-                    break;
-                }
+                    const std::int32_t envelope = nextEnvelopeLevel();
+                    if (envelope_stage_ == EnvelopeStage::Done && envelope <= 0) {
+                        phase_q32_ = phase;
+                        finish();
+                        break;
+                    }
 
-                std::uint32_t next_index = index + 1u;
-                if (index >= loop_start && next_index >= loop_end) {
-                    next_index = loop_start;
-                } else if (next_index >= end_frame) {
-                    next_index = end_frame - 1u;
-                }
+                    std::uint32_t next_index = index + 1u;
+                    if (index >= loop_start && next_index >= loop_end) {
+                        next_index = loop_start;
+                    } else if (next_index >= end_frame) {
+                        next_index = end_frame - 1u;
+                    }
 
-                const std::int32_t a = pcm[index];
-                const std::int32_t b = pcm[next_index];
-                const std::uint32_t fraction = static_cast<std::uint32_t>(phase & 0xffffffffu);
-                const std::int64_t delta = static_cast<std::int64_t>(b) - a;
-                const std::int32_t mono = static_cast<std::int32_t>(
-                    static_cast<std::int64_t>(a) +
-                    ((delta * static_cast<std::int64_t>(fraction)) >> 32));
+                    const std::int32_t a = pcm[index];
+                    const std::int32_t b = pcm[next_index];
+                    const std::uint32_t fraction =
+                        static_cast<std::uint32_t>(phase & 0xffffffffu);
+                    const std::int64_t delta = static_cast<std::int64_t>(b) - a;
+                    const std::int32_t mono = static_cast<std::int32_t>(
+                        static_cast<std::int64_t>(a) +
+                        ((delta * static_cast<std::int64_t>(fraction)) >> 32));
 
-                const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
-                const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
-                output[0] += scaleSampleQ15Fast(mono, left_gain);
-                output[1] += scaleSampleQ15Fast(mono, right_gain);
-                output += kChannels;
-                ++result.frames_rendered;
+                    const std::int32_t left_gain =
+                        multiplyQ15(current_gain_left_q15_, envelope);
+                    const std::int32_t right_gain =
+                        multiplyQ15(current_gain_right_q15_, envelope);
+                    output[0] += scaleSampleQ15Fast(mono, left_gain);
+                    output[1] += scaleSampleQ15Fast(mono, right_gain);
+                    output += kChannels;
+                    ++result.frames_rendered;
 
-                const bool release_finishes_after_frame =
-                    envelope_stage_ == EnvelopeStage::Done;
-                phase += phase_increment;
-                phase = wrapContinuousPhase(
-                    phase,
-                    loop_start_q32,
-                    loop_end_q32,
-                    loop_length_frames);
-                if (release_finishes_after_frame && active_) {
-                    phase_q32_ = phase;
-                    finish();
+                    const bool release_finishes_after_frame =
+                        envelope_stage_ == EnvelopeStage::Done;
+                    phase += phase_increment;
+                    phase = wrapContinuousPhase(
+                        phase,
+                        loop_start_q32,
+                        loop_end_q32,
+                        loop_length_frames);
+                    if (release_finishes_after_frame && active_) {
+                        phase_q32_ = phase;
+                        finish();
+                    }
                 }
             }
         }
