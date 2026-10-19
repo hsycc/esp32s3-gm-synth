@@ -51,7 +51,9 @@ void testConsecutiveOverrunsAreCharacterized() {
     assert(stats.max_consecutive_work_overruns == 2u);
     assert(stats.max_backlog_us == 348u);
     assert(stats.final_backlog_us == 0u);
-    assert(stats.max_backlog_recovery_blocks == 1u);
+    // Debt starts on block 1 and is cleared by block 3, so two subsequent
+    // blocks elapse before the producer is fully caught up.
+    assert(stats.max_backlog_recovery_blocks == 2u);
     assert(stats.backlogHealthy());
 }
 
