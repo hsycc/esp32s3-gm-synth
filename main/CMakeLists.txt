@@ -1,5 +1,6 @@
 set(GM_SYNTH_MAIN_SRCS
     "app_main.cpp"
+    "QualificationIdleMonitor.cpp"
     "ProgramPrepareBenchmark.cpp"
     "RenderTimingBenchmark.cpp"
     "DspStageTimingBenchmark.cpp"
@@ -19,6 +20,7 @@ set(GM_SYNTH_MAIN_REQUIRES
 )
 set(GM_SYNTH_MAIN_PRIV_REQUIRES
     fatfs
+    esp_system
     esp_driver_gpio
     esp_driver_i2s
 )

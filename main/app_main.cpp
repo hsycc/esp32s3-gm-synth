@@ -3,6 +3,7 @@
 #include "DspStageTimingBenchmark.h"
 #include "EffectsTimingBenchmark.h"
 #include "ProgramPrepareBenchmark.h"
+#include "QualificationIdleMonitor.h"
 #include "RenderTimingBenchmark.h"
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
 #include "PhysicalCleanSf2AudibleGate.h"
@@ -12,8 +13,6 @@
 #include "esp_log.h"
 #include "esp_psram.h"
 #include "esp_system.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
 #include "esp_err.h"
@@ -58,12 +57,10 @@ void logInternalHeap(const char* phase) {
         static_cast<unsigned>(heap_caps_get_minimum_free_size(kCaps)));
 }
 
-void yieldToIdleTask() {
-    // Qualification stages can synchronously occupy CPU0 for several seconds
-    // while scanning Flash or preparing samples. A one-tick blocked interval
-    // lets IDLE0 run and service the task watchdog without changing benchmark
-    // timing inside any measured stage.
-    vTaskDelay(1);
+bool storageBetweenCaseIdle(std::size_t chunk_size, void*) {
+    ESP_LOGI(kTag, "Storage benchmark case complete: chunk=%u; verifying CPU0 idle progress",
+             static_cast<unsigned>(chunk_size));
+    return gm_synth::bringup::verifiedQualificationIdleWindow("storage_case");
 }
 
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
@@ -89,7 +86,7 @@ bool mountQemuSf2Fixture() {
 }
 #endif
 
-void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
+bool runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
 #ifdef CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE
     using gm_synth::platform::EspStorageBenchmarkSweepResult;
     using gm_synth::platform::runEspStorageBenchmarkSweep;
@@ -105,7 +102,7 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             kTag,
             "Storage benchmark enabled but VFS path cannot be opened: %s (filesystem must already be mounted)",
             path);
-        return;
+        return false;
     }
 
     ESP_LOGI(
@@ -126,7 +123,7 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             "Storage benchmark SF2 parse failed: path=%s error=%u",
             path,
             static_cast<unsigned>(source.lastError()));
-        return;
+        return false;
     }
 
     ESP_LOGI(
@@ -140,7 +137,7 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             kTag,
             "Benchmark SF2 fixture sample-count mismatch: expected=67 actual=%u",
             static_cast<unsigned>(source.sampleCount()));
-        return;
+        return false;
     }
 #endif
 
@@ -151,7 +148,7 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
 
     if (benchmark_bytes == 0u) {
         ESP_LOGE(kTag, "Storage benchmark has no readable smpl payload bytes");
-        return;
+        return false;
     }
 
     ESP_LOGI(
@@ -169,12 +166,25 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             arena.capacity(),
             source.smplPayloadOffset(),
             benchmark_bytes,
-            &sweep)) {
-        ESP_LOGW(kTag, "One or more storage benchmark chunk-size passes failed");
+            &sweep,
+            &storageBetweenCaseIdle,
+            nullptr)) {
+        ESP_LOGE(kTag, "Storage benchmark sweep or between-case idle verification failed");
+        return false;
     }
+    return true;
 #else
     (void)arena;
+    return true;
 #endif
+}
+
+bool requireIdleWindow(const char* phase) {
+    if (gm_synth::bringup::verifiedQualificationIdleWindow(phase)) {
+        return true;
+    }
+    ESP_LOGE(kTag, "Physical qualification idle verification FAILED: phase=%s", phase);
+    return false;
 }
 
 }  // namespace
@@ -188,6 +198,12 @@ extern "C" void app_main(void) {
     ESP_LOGI(
         kTag,
         "Reference module: ESP32-S3-WROOM-1-N16R8 (16 MiB flash / 8 MiB octal PSRAM)");
+
+    if (!gm_synth::bringup::initializeQualificationIdleMonitor() ||
+        !requireIdleWindow("startup")) {
+        ESP_LOGE(kTag, "Qualification idle monitor failed before benchmarks");
+        return;
+    }
 
     const std::size_t detected_psram_bytes = esp_psram_get_size();
     ESP_LOGI(
@@ -251,8 +267,10 @@ extern "C" void app_main(void) {
     }
 #endif
 
-    runOptionalStorageBenchmark(arena);
-    yieldToIdleTask();
+    if (!runOptionalStorageBenchmark(arena) || !requireIdleWindow("after_storage")) {
+        ESP_LOGE(kTag, "Storage qualification FAILED");
+        return;
+    }
 
     if (!residency.begin(arena.data(), arena.capacity())) {
         ESP_LOGE(kTag, "SampleResidencyManager failed to initialize over PSRAM arena");
@@ -280,7 +298,9 @@ extern "C" void app_main(void) {
 
     logPsram("after Program Prepare", EspPsramArena::heapStats());
     logInternalHeap("after Program Prepare");
-    yieldToIdleTask();
+    if (!requireIdleWindow("after_program_prepare")) {
+        return;
+    }
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
     if (!gm_synth::bringup::runPhysicalCleanSf2AudibleGate(residency)) {
@@ -289,29 +309,42 @@ extern "C" void app_main(void) {
     }
     logPsram("after clean SF2 audio", EspPsramArena::heapStats());
     logInternalHeap("after clean SF2 audio");
-    yieldToIdleTask();
+    if (!requireIdleWindow("after_clean_sf2")) {
+        return;
+    }
 #endif
 
     if (!gm_synth::bringup::runOptionalRenderTimingBenchmark()) {
         ESP_LOGE(kTag, "Render timing benchmark FAILED");
         return;
     }
-    yieldToIdleTask();
+    if (!requireIdleWindow("after_render_benchmark")) {
+        return;
+    }
 
     if (!gm_synth::bringup::runOptionalDspStageTimingBenchmark()) {
         ESP_LOGE(kTag, "DSP stage timing benchmark FAILED");
         return;
     }
-    yieldToIdleTask();
+    if (!requireIdleWindow("after_dsp_stage_benchmark")) {
+        return;
+    }
 
     if (!gm_synth::bringup::runOptionalEffectsTimingBenchmark()) {
         ESP_LOGE(kTag, "Effects timing benchmark FAILED");
         return;
     }
-    yieldToIdleTask();
+    if (!requireIdleWindow("after_effects_benchmark")) {
+        return;
+    }
 
     logPsram("after render benchmark", EspPsramArena::heapStats());
     logInternalHeap("after render benchmark");
+
+    if (!gm_synth::bringup::qualificationIdleMonitorHealthy()) {
+        ESP_LOGE(kTag, "Qualification idle monitor sticky health is FAILED");
+        return;
+    }
 
     const auto final_residency = residency.stats();
     ESP_LOGI(

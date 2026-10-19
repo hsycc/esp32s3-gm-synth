@@ -31,6 +31,16 @@ CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y
 
+# This diagnostic image must stop at the first CPU starvation event. Repeated
+# non-panic TWDT ISR output obscures the original failure site and can interrupt
+# SPI-flash/cache critical sections repeatedly. Keep the production/default
+# watchdog policy independent from this physical qualification policy.
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+
 # Physical I2S/DMA qualification on KS_S3_KORVO_V4 / ESP32-S3-Korvo-2 audio
 # routing. Keep the Espressif Korvo-2 style standard 16-bit Philips wire frame,
 # with a mono application buffer feeding the single ES8311 DAC/speaker path.

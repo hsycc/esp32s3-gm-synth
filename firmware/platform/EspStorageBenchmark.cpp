@@ -62,7 +62,9 @@ bool runEspStorageBenchmarkSweep(
     std::size_t psram_capacity,
     std::uint64_t source_offset,
     std::size_t bytes_to_read,
-    EspStorageBenchmarkSweepResult* sweep_result) {
+    EspStorageBenchmarkSweepResult* sweep_result,
+    EspStorageBenchmarkBetweenCaseHook between_case_hook,
+    void* between_case_context) {
     if (sweep_result == nullptr) {
         return false;
     }
@@ -103,6 +105,13 @@ bool runEspStorageBenchmarkSweep(
         sweep_result->statuses[i] = status;
         logResult(config.chunk_size, status, result);
         all_ok = all_ok && status == gm_synth::storage::StorageBenchmarkStatus::Ok;
+
+        if (between_case_hook != nullptr &&
+            !between_case_hook(config.chunk_size, between_case_context)) {
+            ESP_LOGE(kTag, "between-case hook failed after chunk=%u",
+                     static_cast<unsigned>(config.chunk_size));
+            return false;
+        }
     }
 
     return all_ok;

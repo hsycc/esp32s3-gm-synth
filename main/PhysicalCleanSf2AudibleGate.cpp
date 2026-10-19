@@ -1,10 +1,12 @@
 #include "PhysicalCleanSf2AudibleGate.h"
 
 #include "I2sDmaQualification.h"
+#include "QualificationIdleMonitor.h"
 #include "sdkconfig.h"
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "gm/PlaybackProgramSnapshot.h"
 #include "gm/ZoneResolver.h"
@@ -39,6 +41,38 @@ constexpr std::uint64_t kHalfSecondFrames = kFramesPerSecond / 2u;
 constexpr std::uint64_t kFramesPerBlock =
     realtime::ScheduledAudioBlockRenderer::kFramesPerBlock;
 constexpr std::uint32_t kInternalCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+
+void logStepStart(const char* phase, std::int64_t gate_start_us) {
+    const std::int64_t now = esp_timer_get_time();
+    ESP_LOGI(
+        kTag,
+        "clean_sf2: STEP phase=%s state=START total_us=%lld",
+        phase,
+        static_cast<long long>(now - gate_start_us));
+}
+
+void logStepDone(
+    const char* phase,
+    bool ok,
+    std::int64_t gate_start_us,
+    std::int64_t step_start_us) {
+    const std::int64_t now = esp_timer_get_time();
+    ESP_LOGI(
+        kTag,
+        "clean_sf2: STEP phase=%s state=DONE ok=%u step_us=%lld total_us=%lld",
+        phase,
+        ok ? 1u : 0u,
+        static_cast<long long>(now - step_start_us),
+        static_cast<long long>(now - gate_start_us));
+}
+
+bool requireCleanIdleWindow(const char* phase) {
+    if (verifiedQualificationIdleWindow(phase)) {
+        return true;
+    }
+    ESP_LOGE(kTag, "clean_sf2: idle verification FAILED phase=%s", phase);
+    return false;
+}
 
 struct SourceFillContext {
     sf2::Sf2SampleSource* source = nullptr;
@@ -251,6 +285,7 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
     ESP_LOGE(kTag, "clean_sf2: storage fixture path is unavailable in this build");
     return false;
 #else
+    const std::int64_t gate_start_us = esp_timer_get_time();
     const char* path = CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH;
     ESP_LOGI(
         kTag,
@@ -261,14 +296,22 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         static_cast<unsigned>(kChannel));
 
     storage::VfsRandomAccessReader reader;
-    if (!reader.open(path)) {
+    std::int64_t step_start_us = esp_timer_get_time();
+    logStepStart("reader_open", gate_start_us);
+    const bool reader_ok = reader.open(path);
+    logStepDone("reader_open", reader_ok, gate_start_us, step_start_us);
+    if (!reader_ok) {
         ESP_LOGE(kTag, "clean_sf2: cannot open %s", path);
         return false;
     }
 
+    step_start_us = esp_timer_get_time();
+    logStepStart("workspace_alloc", gate_start_us);
     void* workspace_storage = heap_caps_malloc(
         sizeof(CleanPrepareWorkspace),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const bool workspace_ok = workspace_storage != nullptr;
+    logStepDone("workspace_alloc", workspace_ok, gate_start_us, step_start_us);
     if (workspace_storage == nullptr) {
         ESP_LOGE(
             kTag,
@@ -284,12 +327,39 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         heap_caps_free(workspace_storage);
     };
 
+    if (!requireCleanIdleWindow("clean_before_parse")) {
+        free_workspace();
+        return false;
+    }
+
     sf2::Sf2PdtaReader pdta;
-    if (!pdta.begin(reader) || !workspace->source.begin(reader)) {
+    step_start_us = esp_timer_get_time();
+    logStepStart("pdta_begin", gate_start_us);
+    const bool pdta_ok = pdta.begin(reader);
+    logStepDone("pdta_begin", pdta_ok, gate_start_us, step_start_us);
+    if (!pdta_ok) {
+        ESP_LOGE(kTag, "clean_sf2: pdta parse failed");
+        free_workspace();
+        return false;
+    }
+    if (!requireCleanIdleWindow("clean_after_pdta")) {
+        free_workspace();
+        return false;
+    }
+
+    step_start_us = esp_timer_get_time();
+    logStepStart("sample_source_begin", gate_start_us);
+    const bool source_ok = workspace->source.begin(reader);
+    logStepDone("sample_source_begin", source_ok, gate_start_us, step_start_us);
+    if (!source_ok) {
         ESP_LOGE(
             kTag,
-            "clean_sf2: real SF2 parse failed sample_error=%u",
+            "clean_sf2: sample-source parse failed sample_error=%u",
             static_cast<unsigned>(workspace->source.lastError()));
+        free_workspace();
+        return false;
+    }
+    if (!requireCleanIdleWindow("clean_after_sample_source")) {
         free_workspace();
         return false;
     }
@@ -313,9 +383,13 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
     request.dependency_capacity = workspace->dependencies.size();
     request.snapshot = &snapshot;
 
+    step_start_us = esp_timer_get_time();
+    logStepStart("program_prepare", gate_start_us);
     const sf2::PlaybackPrepareResult prepared =
         sf2::Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
-    if (!prepared.ok() || !snapshot.valid()) {
+    const bool prepare_ok = prepared.ok() && snapshot.valid();
+    logStepDone("program_prepare", prepare_ok, gate_start_us, step_start_us);
+    if (!prepare_ok) {
         ESP_LOGE(
             kTag,
             "clean_sf2: program prepare failed status=%u resolve=%u mod=%u zones=%u required_zones=%u dependencies=%u required_dependencies=%u issues=0x%llx",
@@ -327,6 +401,10 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             static_cast<unsigned>(prepared.dependency_count),
             static_cast<unsigned>(prepared.required_dependency_capacity),
             static_cast<unsigned long long>(prepared.issue_union));
+        free_workspace();
+        return false;
+    }
+    if (!requireCleanIdleWindow("clean_after_prepare")) {
         free_workspace();
         return false;
     }
@@ -347,7 +425,11 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
     }
 
     CleanRuntime runtime{};
-    if (!runtime.allocate()) {
+    step_start_us = esp_timer_get_time();
+    logStepStart("runtime_alloc", gate_start_us);
+    const bool runtime_alloc_ok = runtime.allocate();
+    logStepDone("runtime_alloc", runtime_alloc_ok, gate_start_us, step_start_us);
+    if (!runtime_alloc_ok) {
         ESP_LOGE(
             kTag,
             "clean_sf2: split internal runtime allocation failed total_bytes=%u free=%u largest=%u sizes[dir/voices/queue/scheduler/programs/applier/renderer/ownership]=%u/%u/%u/%u/%u/%u/%u/%u",
@@ -362,6 +444,11 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             static_cast<unsigned>(sizeof(gm::RealtimeProgramEventApplier)),
             static_cast<unsigned>(sizeof(realtime::ScheduledAudioBlockRenderer)),
             static_cast<unsigned>(sizeof(CleanOwnership)));
+        runtime.release();
+        free_workspace();
+        return false;
+    }
+    if (!requireCleanIdleWindow("clean_after_runtime_alloc")) {
         runtime.release();
         free_workspace();
         return false;
@@ -398,6 +485,15 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             setup_ok = false;
             break;
         }
+
+        const std::int64_t dependency_start_us = esp_timer_get_time();
+        ESP_LOGI(
+            kTag,
+            "clean_sf2: DEPENDENCY state=START index=%u sample=%u pcm_bytes=%u total_us=%lld",
+            static_cast<unsigned>(index),
+            static_cast<unsigned>(sample_id),
+            static_cast<unsigned>(descriptor.pcm_bytes),
+            static_cast<long long>(dependency_start_us - gate_start_us));
 
         SourceFillContext fill{&workspace->source, sample_id};
         if (!residency.loadFromSource(descriptor, &fillDependency, &fill)) {
@@ -438,6 +534,19 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
             break;
         }
         runtime.ownership->published[index] = true;
+
+        const std::int64_t dependency_done_us = esp_timer_get_time();
+        ESP_LOGI(
+            kTag,
+            "clean_sf2: DEPENDENCY state=DONE index=%u sample=%u elapsed_us=%lld total_us=%lld",
+            static_cast<unsigned>(index),
+            static_cast<unsigned>(sample_id),
+            static_cast<long long>(dependency_done_us - dependency_start_us),
+            static_cast<long long>(dependency_done_us - gate_start_us));
+        if (!requireCleanIdleWindow("clean_dependency")) {
+            setup_ok = false;
+            break;
+        }
     }
 
     if (setup_ok && !runtime.programs->setInitialActive(&snapshot)) {
@@ -452,6 +561,11 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
     }
 
     if (!setup_ok) {
+        cleanup();
+        return false;
+    }
+
+    if (!requireCleanIdleWindow("clean_ready")) {
         cleanup();
         return false;
     }
@@ -476,7 +590,10 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         static_cast<unsigned>(sizeof(realtime::ScheduledAudioBlockRenderer)),
         static_cast<unsigned>(sizeof(CleanOwnership)));
 
+    step_start_us = esp_timer_get_time();
+    logStepStart("i2s_qualification", gate_start_us);
     const bool i2s_ok = runOptionalI2sDmaQualification(*runtime.renderer, kStartFrame);
+    logStepDone("i2s_qualification", i2s_ok, gate_start_us, step_start_us);
     const auto renderer_stats = runtime.renderer->stats();
     const auto event_stats = runtime.event_applier->stats();
     const auto queue_after = runtime.queue->stats();
@@ -498,7 +615,7 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
 
     ESP_LOGI(
         kTag,
-        "clean_sf2: RESULT i2s_ok=%u runtime_ok=%u events_applied=%llu voices_started=%llu missing_program=%llu no_match=%llu resolve_overflows=%llu voice_start_failures=%llu clipped_samples=%llu queue_remaining=%u %s",
+        "clean_sf2: RESULT i2s_ok=%u runtime_ok=%u events_applied=%llu voices_started=%llu missing_program=%llu no_match=%llu resolve_overflows=%llu voice_start_failures=%llu clipped_samples=%llu queue_remaining=%u total_us=%lld %s",
         i2s_ok ? 1u : 0u,
         runtime_ok ? 1u : 0u,
         static_cast<unsigned long long>(renderer_stats.events_applied),
@@ -509,13 +626,14 @@ bool runPhysicalCleanSf2AudibleGate(sample::SampleResidencyManager& residency) {
         static_cast<unsigned long long>(event_stats.voice_start_failures),
         static_cast<unsigned long long>(renderer_stats.clipped_samples),
         static_cast<unsigned>(runtime.queue->size()),
+        static_cast<long long>(esp_timer_get_time() - gate_start_us),
         (i2s_ok && runtime_ok) ? "PASS" : "FAIL");
 
     cleanup();
     if (!cleanup_ok) {
         ESP_LOGE(kTag, "clean_sf2: cleanup ownership invariant failed");
     }
-    return i2s_ok && runtime_ok && cleanup_ok;
+    return i2s_ok && runtime_ok && cleanup_ok && qualificationIdleMonitorHealthy();
 #endif
 }
 
