@@ -26,6 +26,20 @@ public:
         std::int32_t* interleaved_stereo,
         std::size_t frame_count);
 
+    // Isolated component paths used by DSP cost characterization. They execute
+    // the exact same chorus/reverb algorithms and state updates as processAdd()
+    // but only for the selected effect. Production processAdd() intentionally
+    // remains the original interleaved single-loop implementation so adding
+    // benchmark visibility does not perturb the normal full-FX hot path.
+    void processChorusAdd(
+        const std::int32_t* chorus_bus,
+        std::int32_t* interleaved_stereo,
+        std::size_t frame_count);
+    void processReverbAdd(
+        const std::int32_t* reverb_bus,
+        std::int32_t* interleaved_stereo,
+        std::size_t frame_count);
+
 private:
     static std::int16_t clampI16(std::int32_t value);
     static std::int32_t scaleQ15(std::int32_t value, std::int32_t gain_q15);

@@ -2,6 +2,7 @@ set(GM_SYNTH_MAIN_SRCS
     "app_main.cpp"
     "ProgramPrepareBenchmark.cpp"
     "RenderTimingBenchmark.cpp"
+    "DspStageTimingBenchmark.cpp"
     "EffectsTimingBenchmark.cpp"
 )
 

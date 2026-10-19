@@ -134,6 +134,87 @@ std::int32_t GlobalEffectsProcessor::chorusTap(std::size_t delay_frames) const {
     return chorus_delay_[read];
 }
 
+void GlobalEffectsProcessor::processChorusAdd(
+    const std::int32_t* chorus_bus,
+    std::int32_t* interleaved_stereo,
+    std::size_t frame_count) {
+    if (interleaved_stereo == nullptr || frame_count == 0) {
+        return;
+    }
+
+    for (std::size_t frame = 0; frame < frame_count; ++frame) {
+        const std::int32_t chorus_input = averageStereo(chorus_bus, frame);
+        chorus_delay_[chorus_write_] = clampI16(chorus_input);
+        const std::int32_t lfo_q15 = triangleQ15(chorus_phase_q32_);
+        const std::int32_t modulation =
+            (lfo_q15 * static_cast<std::int32_t>(kChorusDepthFrames)) / kQ15Unity;
+        const std::size_t left_delay = static_cast<std::size_t>(
+            static_cast<std::int32_t>(kChorusBaseDelayFrames) + modulation);
+        const std::size_t right_delay = static_cast<std::size_t>(
+            static_cast<std::int32_t>(kChorusBaseDelayFrames) - modulation);
+        const std::int32_t chorus_left =
+            scaleQ15(chorusTap(left_delay), kChorusWetGainQ15);
+        const std::int32_t chorus_right =
+            scaleQ15(chorusTap(right_delay), kChorusWetGainQ15);
+        advanceRingIndex(&chorus_write_, chorus_delay_.size());
+        chorus_phase_q32_ += kChorusPhaseStepQ32;
+
+        interleaved_stereo[frame * 2u] += chorus_left;
+        interleaved_stereo[frame * 2u + 1u] += chorus_right;
+    }
+}
+
+void GlobalEffectsProcessor::processReverbAdd(
+    const std::int32_t* reverb_bus,
+    std::int32_t* interleaved_stereo,
+    std::size_t frame_count) {
+    if (interleaved_stereo == nullptr || frame_count == 0) {
+        return;
+    }
+
+    for (std::size_t frame = 0; frame < frame_count; ++frame) {
+        const std::int32_t reverb_input = averageStereo(reverb_bus, frame);
+        const std::int32_t comb_a = processComb(
+            reverb_input,
+            reverb_comb_a_.data(),
+            reverb_comb_a_.size(),
+            &reverb_comb_a_index_,
+            kReverbFeedbackAQ15);
+        const std::int32_t comb_b = processComb(
+            reverb_input,
+            reverb_comb_b_.data(),
+            reverb_comb_b_.size(),
+            &reverb_comb_b_index_,
+            kReverbFeedbackBQ15);
+        const std::int32_t comb_c = processComb(
+            reverb_input,
+            reverb_comb_c_.data(),
+            reverb_comb_c_.size(),
+            &reverb_comb_c_index_,
+            kReverbFeedbackCQ15);
+
+        const std::int32_t reverb_left_seed = (comb_a + comb_b + comb_c) / 3;
+        const std::int32_t reverb_right_seed = (comb_a - comb_b + comb_c) / 3;
+        const std::int32_t reverb_left = scaleQ15(
+            processAllpass(
+                reverb_left_seed,
+                reverb_allpass_l_.data(),
+                reverb_allpass_l_.size(),
+                &reverb_allpass_l_index_),
+            kReverbWetGainQ15);
+        const std::int32_t reverb_right = scaleQ15(
+            processAllpass(
+                reverb_right_seed,
+                reverb_allpass_r_.data(),
+                reverb_allpass_r_.size(),
+                &reverb_allpass_r_index_),
+            kReverbWetGainQ15);
+
+        interleaved_stereo[frame * 2u] += reverb_left;
+        interleaved_stereo[frame * 2u + 1u] += reverb_right;
+    }
+}
+
 void GlobalEffectsProcessor::processAdd(
     const std::int32_t* chorus_bus,
     const std::int32_t* reverb_bus,
@@ -143,6 +224,9 @@ void GlobalEffectsProcessor::processAdd(
         return;
     }
 
+    // Keep the production full-FX path interleaved in one frame loop. The
+    // isolated public methods above intentionally duplicate the same arithmetic
+    // for profiling without changing this hot path's iteration structure.
     for (std::size_t frame = 0; frame < frame_count; ++frame) {
         const std::int32_t chorus_input = averageStereo(chorus_bus, frame);
         chorus_delay_[chorus_write_] = clampI16(chorus_input);
@@ -155,8 +239,10 @@ void GlobalEffectsProcessor::processAdd(
             static_cast<std::int32_t>(kChorusBaseDelayFrames) + modulation);
         const std::size_t right_delay = static_cast<std::size_t>(
             static_cast<std::int32_t>(kChorusBaseDelayFrames) - modulation);
-        const std::int32_t chorus_left = scaleQ15(chorusTap(left_delay), kChorusWetGainQ15);
-        const std::int32_t chorus_right = scaleQ15(chorusTap(right_delay), kChorusWetGainQ15);
+        const std::int32_t chorus_left =
+            scaleQ15(chorusTap(left_delay), kChorusWetGainQ15);
+        const std::int32_t chorus_right =
+            scaleQ15(chorusTap(right_delay), kChorusWetGainQ15);
         advanceRingIndex(&chorus_write_, chorus_delay_.size());
         chorus_phase_q32_ += kChorusPhaseStepQ32;
 

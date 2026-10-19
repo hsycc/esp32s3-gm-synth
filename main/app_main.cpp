@@ -1,5 +1,6 @@
 #include "sdkconfig.h"
 
+#include "DspStageTimingBenchmark.h"
 #include "EffectsTimingBenchmark.h"
 #include "ProgramPrepareBenchmark.h"
 #include "RenderTimingBenchmark.h"
@@ -280,6 +281,11 @@ extern "C" void app_main(void) {
 
     if (!gm_synth::bringup::runOptionalRenderTimingBenchmark()) {
         ESP_LOGE(kTag, "Render timing benchmark FAILED");
+        return;
+    }
+
+    if (!gm_synth::bringup::runOptionalDspStageTimingBenchmark()) {
+        ESP_LOGE(kTag, "DSP stage timing benchmark FAILED");
         return;
     }
 
