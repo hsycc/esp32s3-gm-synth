@@ -301,8 +301,12 @@ std::int32_t Voice::multiplyQ15(std::int32_t a, std::int32_t b) {
         return a;
     }
 
-    const std::int64_t product = static_cast<std::int64_t>(a) * b;
-    return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
+    // Both operands are clamped to 0..32767, so the largest product plus the
+    // Q15 rounding bias is 1,073,692,673: safely inside signed int32. Keeping
+    // this hot-path multiply 32-bit is bit-identical and avoids unnecessary
+    // wide arithmetic on Xtensa.
+    const std::int32_t product = a * b;
+    return (product + (std::int32_t{1} << 14)) >> 15;
 }
 
 std::uint32_t Voice::playbackStartFrame() const {
@@ -1200,14 +1204,39 @@ void VoicePool::recordStartedVoice(std::size_t slot, std::size_t active_before) 
 }
 
 void VoicePool::refreshTailStats() {
-    stats_.active_steal_tails = activeStealTailCount();
-    stats_.active_exclusive_tails = activeExclusiveTailCount();
-    stats_.active_fast_release_tails = activeFastReleaseTailCount();
+    // Tail categories are mutually tracked over the same fixed 32-Voice pool.
+    // Keep one pass instead of re-reading the pool three times at every block
+    // boundary and MIDI release operation.
+    std::size_t steal_tails = 0;
+    std::size_t exclusive_tails = 0;
+    std::size_t fast_release_tails = 0;
+    for (const Voice& voice : voices_) {
+        if (!voice.active()) {
+            continue;
+        }
+        if (voice.stealTail()) {
+            ++steal_tails;
+        }
+        if (voice.exclusiveTail()) {
+            ++exclusive_tails;
+        }
+        if (voice.fastReleaseTail()) {
+            ++fast_release_tails;
+        }
+    }
+    stats_.active_steal_tails = steal_tails;
+    stats_.active_exclusive_tails = exclusive_tails;
+    stats_.active_fast_release_tails = fast_release_tails;
 }
 
 bool VoicePool::start(const VoiceStartParams& params) {
     util::saturatingIncrement(stats_.start_attempts);
-    const std::size_t active = activeVoiceCount();
+
+    // active_voices is maintained on every start/finish/reset/render boundary.
+    // Reusing it here avoids rescanning all 32 Voice objects for every NoteOn;
+    // this matters for sample-accurate chord bursts with 16-24 events in one
+    // 64-frame block.
+    const std::size_t active = stats_.active_voices;
 
     // Preserve the hard-cap meaning: a 33rd active Voice is never created,
     // including for semantic exclusive-class replacement.
@@ -1267,7 +1296,11 @@ bool VoicePool::start(const VoiceStartParams& params) {
         }
 
         recordStartedVoice(target, active);
-        refreshTailStats();
+        // A normal start adds no steal/exclusive tail, so the cached tail
+        // counters remain exact. Only semantic replacement needs a rescan.
+        if (exclusive_victims != 0) {
+            refreshTailStats();
+        }
         return true;
     }
 

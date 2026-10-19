@@ -179,6 +179,7 @@ VoiceRenderResult Voice::renderAddRealtime(
             envelope_level_q15_ = envelope;
             const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
             const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
+            const bool shared_gain = left_gain == right_gain;
 
             for (std::size_t frame = 0; frame < frame_count; ++frame) {
                 const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
@@ -203,8 +204,14 @@ VoiceRenderResult Voice::renderAddRealtime(
                     static_cast<std::int64_t>(a) +
                     ((delta * static_cast<std::int64_t>(fraction)) >> 32));
 
-                output[0] += scaleSampleQ15Fast(mono, left_gain);
-                output[1] += scaleSampleQ15Fast(mono, right_gain);
+                if (shared_gain) {
+                    const std::int32_t scaled = scaleSampleQ15Fast(mono, left_gain);
+                    output[0] += scaled;
+                    output[1] += scaled;
+                } else {
+                    output[0] += scaleSampleQ15Fast(mono, left_gain);
+                    output[1] += scaleSampleQ15Fast(mono, right_gain);
+                }
                 output += kChannels;
                 ++result.frames_rendered;
 
@@ -250,6 +257,8 @@ VoiceRenderResult Voice::renderAddRealtime(
                 const std::uint32_t step_whole = release_start / total;
                 const std::uint32_t step_remainder =
                     release_start - step_whole * total;
+                const bool shared_base_gain =
+                    current_gain_left_q15_ == current_gain_right_q15_;
 
                 for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
                     const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
@@ -288,10 +297,16 @@ VoiceRenderResult Voice::renderAddRealtime(
 
                     const std::int32_t left_gain =
                         multiplyQ15(current_gain_left_q15_, envelope);
-                    const std::int32_t right_gain =
-                        multiplyQ15(current_gain_right_q15_, envelope);
-                    output[0] += scaleSampleQ15Fast(mono, left_gain);
-                    output[1] += scaleSampleQ15Fast(mono, right_gain);
+                    if (shared_base_gain) {
+                        const std::int32_t scaled = scaleSampleQ15Fast(mono, left_gain);
+                        output[0] += scaled;
+                        output[1] += scaled;
+                    } else {
+                        const std::int32_t right_gain =
+                            multiplyQ15(current_gain_right_q15_, envelope);
+                        output[0] += scaleSampleQ15Fast(mono, left_gain);
+                        output[1] += scaleSampleQ15Fast(mono, right_gain);
+                    }
                     output += kChannels;
                     ++result.frames_rendered;
 
@@ -356,10 +371,16 @@ VoiceRenderResult Voice::renderAddRealtime(
 
                     const std::int32_t left_gain =
                         multiplyQ15(current_gain_left_q15_, envelope);
-                    const std::int32_t right_gain =
-                        multiplyQ15(current_gain_right_q15_, envelope);
-                    output[0] += scaleSampleQ15Fast(mono, left_gain);
-                    output[1] += scaleSampleQ15Fast(mono, right_gain);
+                    if (current_gain_left_q15_ == current_gain_right_q15_) {
+                        const std::int32_t scaled = scaleSampleQ15Fast(mono, left_gain);
+                        output[0] += scaled;
+                        output[1] += scaled;
+                    } else {
+                        const std::int32_t right_gain =
+                            multiplyQ15(current_gain_right_q15_, envelope);
+                        output[0] += scaleSampleQ15Fast(mono, left_gain);
+                        output[1] += scaleSampleQ15Fast(mono, right_gain);
+                    }
                     output += kChannels;
                     ++result.frames_rendered;
 
@@ -446,9 +467,15 @@ VoiceRenderResult Voice::renderAddRealtime(
                 ((delta * static_cast<std::int64_t>(fraction)) >> 32));
             const std::int32_t mono = applyLowpass(interpolated);
             const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
-            const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
-            output[0] += scaleSampleQ15Wide(mono, left_gain);
-            output[1] += scaleSampleQ15Wide(mono, right_gain);
+            if (current_gain_left_q15_ == current_gain_right_q15_) {
+                const std::int32_t scaled = scaleSampleQ15Wide(mono, left_gain);
+                output[0] += scaled;
+                output[1] += scaled;
+            } else {
+                const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
+                output[0] += scaleSampleQ15Wide(mono, left_gain);
+                output[1] += scaleSampleQ15Wide(mono, right_gain);
+            }
             output += kChannels;
             ++result.frames_rendered;
 
