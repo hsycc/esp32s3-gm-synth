@@ -13,7 +13,10 @@ on:
       - "tests/gm/test_full_gm128_stress.cpp"
       - "tests/gm/test_full_gm128_capacity.cpp"
       - "tests/gm/test_full_gm128_soak.cpp"
+      - "tests/gm/test_gm128_release_matrix.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
+      - "tests/test_gm128_release_report.py"
+      - "tools/gm128_release/**"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_gm128_full_bank_tests.sh"
       - ".github/workflows/gm128-full-bank.yml"
@@ -27,7 +30,10 @@ on:
       - "tests/gm/test_full_gm128_stress.cpp"
       - "tests/gm/test_full_gm128_capacity.cpp"
       - "tests/gm/test_full_gm128_soak.cpp"
+      - "tests/gm/test_gm128_release_matrix.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
+      - "tests/test_gm128_release_report.py"
+      - "tools/gm128_release/**"
       - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
       - "scripts/run_gm128_full_bank_tests.sh"
       - ".github/workflows/gm128-full-bank.yml"
@@ -48,15 +54,30 @@ jobs:
         run: |
           mkdir -p build/gm128-full-bank
           bash scripts/run_gm128_full_bank_tests.sh 2>&1 | tee build/gm128-full-bank/qualification-report.txt
-      - name: Publish qualification summary
+      - name: Render M7 release program matrix
         if: always()
         shell: bash
         run: |
           if test -f build/gm128-full-bank/qualification-report.txt; then
+            python3 -m tools.gm128_release.report \
+              --log build/gm128-full-bank/qualification-report.txt \
+              --json build/gm128-full-bank/m7-release-program-matrix.json \
+              --markdown build/gm128-full-bank/m7-release-program-matrix.md
+          fi
+      - name: Publish qualification summary
+        if: always()
+        shell: bash
+        run: |
+          if test -f build/gm128-full-bank/m7-release-program-matrix.md; then
+            cat build/gm128-full-bank/m7-release-program-matrix.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if test -f build/gm128-full-bank/qualification-report.txt; then
             {
-              echo '## Full FM GM128 qualification'
+              echo
+              echo '## Existing GM128 host gates'
               echo '```text'
-              grep -E '^(GM128_|Full FM GM128)' build/gm128-full-bank/qualification-report.txt || true
+              grep -E '^(GM128_(QUALIFICATION|COVERAGE_SUMMARY|FAILURE_SUMMARY|STRESS_|CAPACITY_|SOAK_)|Full FM GM128)' \
+                build/gm128-full-bank/qualification-report.txt || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -65,5 +86,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gm128-full-bank-qualification
-          path: build/gm128-full-bank/qualification-report.txt
+          path: |
+            build/gm128-full-bank/qualification-report.txt
+            build/gm128-full-bank/m7-release-program-matrix.json
+            build/gm128-full-bank/m7-release-program-matrix.md
           if-no-files-found: error
