@@ -103,6 +103,10 @@ grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_SPEED_80M=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_TIMEOUT_S=5$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_PANIC=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
@@ -124,6 +128,9 @@ grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM=8$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM=64$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE=1$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY=20$' "$SDKCONFIG_PATH"
+
+echo "== Physical watchdog configuration =="
+grep -E '^CONFIG_ESP_TASK_WDT_(TIMEOUT_S|CHECK_IDLE_TASK_CPU0|CHECK_IDLE_TASK_CPU1|PANIC)=' "$SDKCONFIG_PATH"
 
 if [[ ! -f "$BUILD_DIR/qemu_sf2.bin" ]]; then
     echo "Expected raw FATFS fixture was not generated: $BUILD_DIR/qemu_sf2.bin" >&2
@@ -149,6 +156,7 @@ echo "  storage   : 4 MiB per chunk size (4/8/16/32/64 KiB)"
 echo "  prepare   : cold/warm + cache pressure/LRU + commit/retire/release-tail"
 echo "  render    : 1/4/8/12/16/18/20/24 Voices, 64-frame blocks"
 echo "  memory    : PSRAM + internal-SRAM snapshots before/after Prepare/Render"
+echo "  watchdog  : TWDT 5 s, CPU0+CPU1 Idle watched, panic enabled"
 echo "  audio     : ES8311 + I2S/DMA qualification enabled"
 echo "  I2S pins  : MCLK16 / BCLK9 / WS45 / DOUT8, stereo16 frame with mono duplication"
 
