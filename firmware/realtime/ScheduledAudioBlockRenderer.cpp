@@ -78,17 +78,12 @@ bool ScheduledAudioBlockRenderer::inspectProfileVoice(
         incrementProfileCount(snapshot->realtime_control);
     }
 
-    // Read-only inspection. Returning false means updateActiveVoices() does
-    // not account this visit as a runtime-control mutation.
     return false;
 }
 
 ScheduledWorstBlockVoiceContext ScheduledAudioBlockRenderer::captureProfileVoices() {
     ScheduledWorstBlockVoiceContext snapshot{};
 #if defined(ESP_PLATFORM)
-    // updateActiveVoices() lives in the target-only runtime-control translation
-    // unit in several small host test links. Keep the physical profiler from
-    // creating an otherwise-unused host link dependency.
     for (std::uint8_t channel = 0; channel < 16; ++channel) {
         (void)voices_.updateActiveVoices(
             channel,
@@ -142,6 +137,13 @@ void ScheduledAudioBlockRenderer::recordWorstBlock(
     std::uint64_t block_start_frame,
     std::uint32_t render_us,
     const BlockEventBatch& batch) {
+    // Profiling may be armed before the I2S helper runs its warmup. Keep those
+    // warmup blocks completely outside the measured Top-N/candidate window so
+    // the profiler and realtime-health counters describe the same block range.
+    if (block_start_frame < worst_profile_first_frame_) {
+        return;
+    }
+
     ScheduledWorstBlockEventContext event_context{};
     for (std::size_t index = 0; index < batch.count; ++index) {
         const RealtimeEvent& event = batch.events[index].event;
@@ -203,10 +205,8 @@ void ScheduledAudioBlockRenderer::recordWorstBlock(
     ScheduledWorstBlockEntry entry{};
     entry.valid = true;
     entry.block_start_frame = block_start_frame;
-    if (block_start_frame >= worst_profile_first_frame_) {
-        entry.stream_block = static_cast<std::size_t>(
-            (block_start_frame - worst_profile_first_frame_) / kFramesPerBlock);
-    }
+    entry.stream_block = static_cast<std::size_t>(
+        (block_start_frame - worst_profile_first_frame_) / kFramesPerBlock);
     entry.render_us = render_us;
     entry.events = event_context;
     entry.voices = captureProfileVoices();
@@ -285,8 +285,6 @@ void ScheduledAudioBlockRenderer::render(
             cursor = offset;
         }
 
-        // Apply all equal-offset events before rendering the frame at that
-        // offset. FIFO is inherited from the SPSC queue and scheduler batch.
         while (event_index < batch.count &&
                batch.events[event_index].frame_offset == offset) {
             util::saturatingIncrement(stats_.events_attempted);
@@ -319,10 +317,6 @@ void ScheduledAudioBlockRenderer::render(
             std::min<std::uint64_t>(
                 elapsed,
                 std::numeric_limits<std::uint32_t>::max()));
-        // Publish the exact same pure-render measurement used by the Top-N
-        // profiler before any snapshot/bookkeeping is performed. Physical I2S
-        // qualification consumes this value so its soft-overrun count and the
-        // profiler candidate count have one timing scope.
         last_profiled_render_us_ = render_us;
         recordWorstBlock(block_start_frame, render_us, batch);
     }
