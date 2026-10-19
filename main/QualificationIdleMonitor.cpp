@@ -3,11 +3,12 @@
 #include "sdkconfig.h"
 
 #ifdef CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_err.h"
 #include "esp_freertos_hooks.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #include <cstdint>
 
