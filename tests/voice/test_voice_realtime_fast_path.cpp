@@ -357,6 +357,82 @@ void testComplexContinuousDspFastPathIsBitExact() {
     assert(realtime_fixture.directory.stats().live_voice_refs == 0);
 }
 
+VoiceStartParams heavyContinuousParams(bool wide_dynamic_span) {
+    VoiceStartParams params = complexContinuousParams();
+    params.phase_increment_q32 = kPhaseOneQ32 + kPhaseOneQ32 / 7u;
+    params.envelope.sustain_q15 = kQ15Unity;
+    params.envelope.release_frames = 4410;
+
+    params.dynamic_lowpass_table.min_offset_cents = wide_dynamic_span ? -20000 : -1500;
+    params.dynamic_lowpass_table.max_offset_cents = wide_dynamic_span ? 20000 : 1500;
+    for (std::size_t index = 0; index < params.dynamic_lowpass_table.points.size(); ++index) {
+        auto& filter = params.dynamic_lowpass_table.points[index];
+        filter.enabled = true;
+        filter.a0_q24 = (std::int32_t{1} << 22) + static_cast<std::int32_t>(index * 12288u);
+        filter.a1_q24 = (std::int32_t{1} << 21) + static_cast<std::int32_t>(index * 6144u);
+        filter.b1_q24 = 0;
+        filter.b2_q24 = 0;
+    }
+
+    params.vibrato_lfo.phase_step_q32 = std::uint32_t{1} << 19u;
+    params.vibrato_lfo.pitch_depth_cents = 50;
+    params.mod_lfo.phase_step_q32 = std::uint32_t{1} << 20u;
+    params.mod_lfo.pitch_depth_cents = 100;
+    params.mod_lfo.filter_depth_cents = 1200;
+    params.mod_envelope.envelope.sustain_q15 = kQ15Unity / 2;
+    params.mod_envelope.pitch_depth_cents = 600;
+    params.mod_envelope.filter_depth_cents = 600;
+    return params;
+}
+
+void runHeavyScaleComparison(bool wide_dynamic_span) {
+    constexpr std::array<std::int16_t, 13> pcm{
+        -12000, -7000, -2000, 3000, 8000, 13000, 9000,
+        4000, -1000, -6000, -11000, -5000, 2000};
+
+    Fixture generic_fixture;
+    Fixture realtime_fixture;
+    assert(generic_fixture.publish(pcm.data(), pcm.size(), 1, 12));
+    assert(realtime_fixture.publish(pcm.data(), pcm.size(), 1, 12));
+
+    const VoiceStartParams params = heavyContinuousParams(wide_dynamic_span);
+    assert(params.dynamic_lowpass_table.valid());
+    Voice generic;
+    Voice realtime;
+    assert(generic.start(generic_fixture.directory, params));
+    assert(realtime.start(realtime_fixture.directory, params));
+
+    // 4096 frames give the Mod-LFO one complete cycle. This covers positive
+    // and negative Q15 scaling, every 16-frame control tick, the physical-heavy
+    // pitch/filter depth range, and many continuous-loop wraps.
+    constexpr std::size_t kBlockFrames = 64;
+    constexpr std::size_t kBlocks = 64;
+    for (std::size_t block = 0; block < kBlocks; ++block) {
+        std::array<std::int32_t, kBlockFrames * 2> generic_mix{};
+        std::array<std::int32_t, kBlockFrames * 2> realtime_mix{};
+        const auto generic_result = generic.renderAdd(generic_mix.data(), kBlockFrames);
+        const auto realtime_result = realtime.renderAddRealtime(
+            realtime_mix.data(), kBlockFrames);
+        assert(generic_mix == realtime_mix);
+        assertSameRenderState(generic, realtime, generic_result, realtime_result);
+        assert(!generic_result.finished);
+    }
+
+    generic.reset();
+    realtime.reset();
+}
+
+void testHeavyFixtureScaleRangesAreBitExact() {
+    // 3000-cent dynamic span exercises the common 32-bit ratio fast path.
+    runHeavyScaleComparison(false);
+}
+
+void testWideDynamicFilterSpanFallbackIsBitExact() {
+    // 40000 cents is intentionally wider than the safe direct-product limit,
+    // forcing the exact binary-ratio fallback with no 64-bit divide.
+    runHeavyScaleComparison(true);
+}
+
 void testUntilReleaseModeFallsBackBitExact() {
     constexpr std::array<std::int16_t, 9> pcm{
         700, -1400, 2800, -5600, 11200, -5600, 2800, -1400, 700};
@@ -396,6 +472,8 @@ int main() {
     testSimpleAttackDecayFastPathIsBitExact();
     testSimpleReleaseFastPathIsBitExact();
     testComplexContinuousDspFastPathIsBitExact();
+    testHeavyFixtureScaleRangesAreBitExact();
+    testWideDynamicFilterSpanFallbackIsBitExact();
     testUntilReleaseModeFallsBackBitExact();
     std::cout << "Voice realtime fast-path checks passed\n";
     return 0;

@@ -1,4 +1,5 @@
 #include "VoiceRenderer.h"
+#include "RealtimeModulationMath.h"
 
 #include "util/SaturatingCounter.h"
 
@@ -17,6 +18,11 @@ constexpr std::size_t kChannels = 2;
 // metadata is hoisted out of the per-frame path.
 constexpr std::uint8_t kRealtimeModulationControlFrames = 16;
 
+std::uint32_t magnitudeI32(std::int32_t value) {
+    const std::uint32_t bits = static_cast<std::uint32_t>(value);
+    return value < 0 ? 0u - bits : bits;
+}
+
 std::int32_t scaleSend(std::int32_t sample, std::int32_t units) {
     const std::int32_t clamped = std::clamp<std::int32_t>(units, 0, kMaxEffectsSendUnits);
     if (sample == 0 || clamped == 0) {
@@ -31,12 +37,21 @@ std::int32_t scaleSend(std::int32_t sample, std::int32_t units) {
         // C++ signed / and % truncate toward zero, so q+r is exact here.
         return sample / 2 + sample % 2;
     }
-    const std::int64_t product = static_cast<std::int64_t>(sample) * clamped;
-    return product >= 0
-        ? static_cast<std::int32_t>((product + kMaxEffectsSendUnits / 2) /
-                                    kMaxEffectsSendUnits)
-        : -static_cast<std::int32_t>(((-product) + kMaxEffectsSendUnits / 2) /
-                                     kMaxEffectsSendUnits);
+
+    // Exact decomposition of round(abs(sample) * units / 1000). Splitting the
+    // sample magnitude first keeps every divide and product 32-bit, avoiding
+    // Xtensa __divdi3 while preserving the previous half-away-from-zero result.
+    const std::uint32_t magnitude = magnitudeI32(sample);
+    const std::uint32_t whole = magnitude / static_cast<std::uint32_t>(kMaxEffectsSendUnits);
+    const std::uint32_t remainder =
+        magnitude - whole * static_cast<std::uint32_t>(kMaxEffectsSendUnits);
+    const std::uint32_t scaled =
+        whole * static_cast<std::uint32_t>(clamped) +
+        (remainder * static_cast<std::uint32_t>(clamped) +
+         static_cast<std::uint32_t>(kMaxEffectsSendUnits / 2)) /
+            static_cast<std::uint32_t>(kMaxEffectsSendUnits);
+    return sample < 0 ? -static_cast<std::int32_t>(scaled)
+                      : static_cast<std::int32_t>(scaled);
 }
 
 std::int32_t scaleSampleQ15Fast(std::int32_t sample, std::int32_t gain_q15) {
@@ -77,6 +92,34 @@ std::int32_t scaleSampleQ15Wide(std::int32_t sample, std::int32_t gain_q15) {
     return -static_cast<std::int32_t>(((-product) + (std::int64_t{1} << 14)) >> 15);
 }
 
+std::uint64_t wrapContinuousPhase(
+    std::uint64_t phase,
+    std::uint64_t loop_start_q32,
+    std::uint64_t loop_end_q32,
+    std::uint32_t loop_length_frames) {
+    if (phase < loop_end_q32 || loop_length_frames == 0u) {
+        return phase;
+    }
+
+    const std::uint64_t loop_length_q32 =
+        static_cast<std::uint64_t>(loop_length_frames) << 32u;
+    const std::uint64_t overshoot = phase - loop_end_q32;
+    if (overshoot < loop_length_q32) {
+        return loop_start_q32 + overshoot;
+    }
+
+    // The loop modulus is always an integer-frame span (N << 32). Decompose
+    // the Q32 delta into whole frames + fractional bits, perform only a 32-bit
+    // frame modulo, then reassemble. This is exactly delta % (N << 32) without
+    // pulling __umoddi3 into the realtime continuous-loop object.
+    const std::uint64_t delta = phase - loop_start_q32;
+    const std::uint32_t whole_frames = static_cast<std::uint32_t>(delta >> 32u);
+    const std::uint32_t wrapped_frames = whole_frames % loop_length_frames;
+    const std::uint32_t fraction = static_cast<std::uint32_t>(delta);
+    return loop_start_q32 +
+        (static_cast<std::uint64_t>(wrapped_frames) << 32u) + fraction;
+}
+
 }  // namespace
 
 VoiceRenderResult Voice::renderAddRealtime(
@@ -108,8 +151,8 @@ VoiceRenderResult Voice::renderAddRealtime(
     const std::int16_t* const pcm = ref_.record->pcm;
     const std::uint64_t loop_start_q32 = static_cast<std::uint64_t>(loop_start) << 32;
     const std::uint64_t loop_end_q32 = static_cast<std::uint64_t>(loop_end) << 32;
-    const std::uint64_t loop_length_q32 = loop_end_q32 - loop_start_q32;
-    if (loop_length_q32 == 0) {
+    const std::uint32_t loop_length_frames = loop_end - loop_start;
+    if (loop_length_frames == 0u) {
         return renderAdd(interleaved_stereo, frame_count);
     }
 
@@ -165,15 +208,11 @@ VoiceRenderResult Voice::renderAddRealtime(
                 ++result.frames_rendered;
 
                 phase += phase_increment;
-                if (phase >= loop_end_q32) {
-                    const std::uint64_t overshoot = phase - loop_end_q32;
-                    if (overshoot < loop_length_q32) {
-                        phase = loop_start_q32 + overshoot;
-                    } else {
-                        phase = loop_start_q32 +
-                            ((phase - loop_start_q32) % loop_length_q32);
-                    }
-                }
+                phase = wrapContinuousPhase(
+                    phase,
+                    loop_start_q32,
+                    loop_end_q32,
+                    loop_length_frames);
             }
         } else {
             // Attack/hold/decay/release still use the canonical envelope helper
@@ -218,15 +257,11 @@ VoiceRenderResult Voice::renderAddRealtime(
                 const bool release_finishes_after_frame =
                     envelope_stage_ == EnvelopeStage::Done;
                 phase += phase_increment;
-                if (phase >= loop_end_q32) {
-                    const std::uint64_t overshoot = phase - loop_end_q32;
-                    if (overshoot < loop_length_q32) {
-                        phase = loop_start_q32 + overshoot;
-                    } else {
-                        phase = loop_start_q32 +
-                            ((phase - loop_start_q32) % loop_length_q32);
-                    }
-                }
+                phase = wrapContinuousPhase(
+                    phase,
+                    loop_start_q32,
+                    loop_end_q32,
+                    loop_length_frames);
                 if (release_finishes_after_frame && active_) {
                     phase_q32_ = phase;
                     finish();
@@ -236,8 +271,8 @@ VoiceRenderResult Voice::renderAddRealtime(
     } else {
         // Complex continuous path: execute exactly the same state transitions as
         // renderAdd(), but avoid rebuilding region/loop state and re-validating
-        // the loop on every sample. This is the hot path used by the physical
-        // heavy-DSP fixture (filter + vibrato + Mod-LFO + Mod-Envelope).
+        // the loop on every sample. Modulation refresh uses an algebraically
+        // exact 32-bit-division implementation so ESP32-S3 stays off __divdi3.
         for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
             const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
             if (index >= end_frame) {
@@ -255,7 +290,18 @@ VoiceRenderResult Voice::renderAddRealtime(
 
             (void)nextModEnvelopeLevel();
             if (vibrato_due || mod_lfo_due || mod_envelope_due) {
-                refreshModulationState();
+                const realtime_modulation::State modulation =
+                    realtime_modulation::compute(
+                        params_,
+                        vibrato_phase_q32_,
+                        vibrato_delay_remaining_,
+                        mod_lfo_phase_q32_,
+                        mod_lfo_delay_remaining_,
+                        modEnvelopeDspLevelQ15());
+                current_phase_increment_q32_ = modulation.phase_increment_q32;
+                current_gain_left_q15_ = modulation.gain_left_q15;
+                current_gain_right_q15_ = modulation.gain_right_q15;
+                current_lowpass_ = modulation.lowpass;
                 if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0) {
                     vibrato_control_frames_remaining_ = kRealtimeModulationControlFrames;
                 }
@@ -299,15 +345,11 @@ VoiceRenderResult Voice::renderAddRealtime(
             const bool release_finishes_after_frame =
                 envelope_stage_ == EnvelopeStage::Done;
             phase += current_phase_increment_q32_;
-            if (phase >= loop_end_q32) {
-                const std::uint64_t overshoot = phase - loop_end_q32;
-                if (overshoot < loop_length_q32) {
-                    phase = loop_start_q32 + overshoot;
-                } else {
-                    phase = loop_start_q32 +
-                        ((phase - loop_start_q32) % loop_length_q32);
-                }
-            }
+            phase = wrapContinuousPhase(
+                phase,
+                loop_start_q32,
+                loop_end_q32,
+                loop_length_frames);
             advanceLfos();
             if (release_finishes_after_frame && active_) {
                 phase_q32_ = phase;
