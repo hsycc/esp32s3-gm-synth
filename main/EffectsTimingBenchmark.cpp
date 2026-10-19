@@ -1,5 +1,6 @@
 #include "EffectsTimingBenchmark.h"
 #include "I2sDmaQualification.h"
+#include "I2sWorstBlockProfiler.h"
 
 #include "sdkconfig.h"
 
@@ -434,17 +435,38 @@ bool runOptionalEffectsTimingBenchmark() {
         voices.allSoundOff();
         return false;
     }
+
+    // Profile only the final production-shaped music timeline. The first clean
+    // SF2 audible gate and the short synthetic timing sweeps remain completely
+    // unchanged. The renderer measures its own work before taking any retained
+    // Voice snapshot, so profile bookkeeping is outside the reported render_us.
+    renderer.beginWorstBlockProfiling(kBlockBudgetUs, block_start_frame);
 #endif
 
-    if (!runOptionalI2sDmaQualification(renderer, block_start_frame)) {
+    const bool i2s_ok = runOptionalI2sDmaQualification(renderer, block_start_frame);
+
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    renderer.endWorstBlockProfiling();
+    logI2sWorstBlockProfile(renderer.worstBlockProfile());
+
+    // Always summarize the deterministic timeline, even when the I2S realtime
+    // gate fails. The previous ordering returned early and hid the Voice/event/
+    // program-handoff evidence needed to diagnose a deadline miss.
+    const bool music_stress_ok = physical_stress->validateAndLog(queue, voices, renderer);
+
+    if (!i2s_ok) {
         ESP_LOGE(kTag, "effects_bench: physical I2S/DMA qualification FAILED");
         voices.allSoundOff();
         return false;
     }
-
-#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    if (!physical_stress->validateAndLog(queue, voices, renderer)) {
+    if (!music_stress_ok) {
         ESP_LOGE(kTag, "effects_bench: physical music stress qualification FAILED");
+        voices.allSoundOff();
+        return false;
+    }
+#else
+    if (!i2s_ok) {
+        ESP_LOGE(kTag, "effects_bench: physical I2S/DMA qualification FAILED");
         voices.allSoundOff();
         return false;
     }

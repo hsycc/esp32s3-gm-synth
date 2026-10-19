@@ -28,6 +28,7 @@ set(GM_SYNTH_MAIN_PRIV_REQUIRES
 if(CONFIG_GM_SYNTH_I2S_QUAL_ENABLE)
     list(APPEND GM_SYNTH_MAIN_SRCS
         "I2sDmaQualification.cpp"
+        "I2sWorstBlockProfiler.cpp"
         "KorvoV4Es8311.cpp"
         "PhysicalCleanSf2AudibleGate.cpp"
         "PhysicalMusicStress.cpp"
