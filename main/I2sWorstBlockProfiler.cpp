@@ -20,7 +20,7 @@ void logI2sWorstBlockProfile(
 
     ESP_LOGI(
         kTag,
-        "i2s_worst: SUMMARY deadline_us=%u deadline_candidates=%u retained=%u slowest_render_us=%u retained_floor_us=%u",
+        "i2s_worst: SUMMARY deadline_us=%u deadline_candidates=%u retained=%u slowest_render_us=%u retained_floor_us=%u scope=pure_renderer deadline_gate=soft",
         static_cast<unsigned>(profile.deadline_us),
         static_cast<unsigned>(profile.deadline_candidates),
         static_cast<unsigned>(profile.retained),

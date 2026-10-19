@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 
 #include "platform/EspRealtimeClock.h"
+#include "realtime/RealtimeHealthTracker.h"
 #include "realtime/ScheduledAudioBlockRenderer.h"
 
 #include <algorithm>
@@ -150,6 +151,12 @@ std::uint32_t elapsedUs(std::uint64_t start_us, std::uint64_t end_us) {
         std::numeric_limits<std::uint32_t>::max()));
 }
 
+std::uint32_t addUs(std::uint32_t left, std::uint32_t right) {
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(left) + right,
+        std::numeric_limits<std::uint32_t>::max()));
+}
+
 bool clockWithinTolerance(std::uint32_t actual_hz, std::uint32_t expected_hz) {
     if (actual_hz == 0u || expected_hz == 0u) {
         return false;
@@ -240,8 +247,6 @@ bool runI2sTask(TaskContext& context) {
     const InternalHeapSnapshot task_entry_heap = internalHeapSnapshot();
     logInternalHeap("task_entry", task_entry_heap);
 
-    // Anti-pop phase 1: force PA off and configure the ES8311 control plane.
-    // DAC start/power-up is deferred until physical MCLK/BCLK/LRCK are live.
     KorvoV4Es8311 codec;
     if (!codec.prepareMuted()) {
         ESP_LOGE(kTag, "i2s_qual: ES8311 muted control preparation failed");
@@ -251,8 +256,6 @@ bool runI2sTask(TaskContext& context) {
     i2s_chan_handle_t tx_channel = nullptr;
     bool channel_enabled = false;
     const auto cleanup = [&]() {
-        // Keep clocks alive while the codec is first disconnected from the PA,
-        // muted and powered down. Only then stop/delete the I2S channel.
         codec.shutdown();
         if (tx_channel != nullptr) {
             if (channel_enabled) {
@@ -285,9 +288,6 @@ bool runI2sTask(TaskContext& context) {
         return false;
     }
 
-    // Match Espressif's ESP32-S3-Korvo-2 speaker path: Philips I2S with a
-    // mono application buffer. Standard mode still emits the two-slot frame on
-    // the wire, so BCLK remains 32*Fs while each write contains 64 mono samples.
     i2s_std_config_t standard_config{};
     standard_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
     standard_config.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
@@ -362,8 +362,6 @@ bool runI2sTask(TaskContext& context) {
         return false;
     }
 
-    // PA OFF + codec not yet started. Fill every DMA buffer with mono silence
-    // before the first physical clock edge.
     std::array<std::int16_t, kI2sSamplesPerBlock> silence{};
     std::size_t total_preloaded_bytes = 0;
     for (std::size_t attempt = 0;
@@ -399,8 +397,7 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(channel_info.total_dma_buf_size),
         static_cast<unsigned>(total_preloaded_bytes));
 
-    // Print all configuration before clocks/output go live. No serial logging is
-    // performed between PA enable and the end of the realtime producer window.
+    const std::uint32_t dma_window_us = dmaWindowUs();
     ESP_LOGI(
         kTag,
         "i2s_qual: ARMED sample_rate=%u frames_per_block=%u bytes_per_block=%u frame_format=mono16_philips mono_policy=avg_lr dma_desc=%u dma_frames=%u dma_window_us=%u driver_dma_bytes=%u preloaded_bytes=%u reference_tone_hz=%u reference_tone_blocks=%u reference_tone_peak=%d bclk_hz=%u mclk_hz=%u bclk_gpio=%d ws_gpio=%d dout_gpio=%d mclk_gpio=%d task_core=%d task_priority=%u",
@@ -409,7 +406,7 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(kBytesPerBlock),
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM),
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM),
-        static_cast<unsigned>(dmaWindowUs()),
+        static_cast<unsigned>(dma_window_us),
         static_cast<unsigned>(channel_info.total_dma_buf_size),
         static_cast<unsigned>(total_preloaded_bytes),
         static_cast<unsigned>(kReferenceToneHz),
@@ -424,7 +421,6 @@ bool runI2sTask(TaskContext& context) {
         CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE,
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY));
 
-    // Start physical clocks only after the ring contains silence.
     err = i2s_channel_enable(tx_channel);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "i2s_qual: i2s_channel_enable failed: %s", esp_err_to_name(err));
@@ -433,8 +429,6 @@ bool runI2sTask(TaskContext& context) {
     }
     channel_enabled = true;
 
-    // Anti-pop phase 2: with clocks live, run the ES8311 DAC start/power-up
-    // sequence while the DAC remains digitally muted and PA remains off.
     if (!codec.startMutedWithClocks()) {
         ESP_LOGE(kTag, "i2s_qual: ES8311 clocked muted start failed");
         cleanup();
@@ -467,10 +461,6 @@ bool runI2sTask(TaskContext& context) {
         return true;
     };
 
-    // Any queue pressure accumulated while clocks were running but the control
-    // path was doing I2C/readback is harmless because all ring contents are
-    // silence and PA is still off. Refill for two complete DMA windows so the
-    // driver's completed-buffer queue is synchronized before audible output.
     const std::size_t live_prime_blocks =
         static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM) * 2u;
     for (std::size_t block = 0; block < live_prime_blocks; ++block) {
@@ -483,17 +473,12 @@ bool runI2sTask(TaskContext& context) {
     const std::uint32_t startup_sent_callbacks = callback_stats.sent_events;
     const std::uint32_t startup_send_queue_overflows = callback_stats.send_queue_overflows;
 
-    // Final anti-pop startup step. enableOutput() performs only DAC unmute and
-    // PA enable; it intentionally does not log so the producer starts at once.
     if (!codec.enableOutput()) {
         ESP_LOGE(kTag, "i2s_qual: ES8311 output enable/readback failed");
         cleanup();
         return false;
     }
 
-    // Hardware-isolation phase: a deterministic 441 Hz triangle tone bypasses
-    // SF2, Voice DSP and effects. Hearing this tone proves I2S -> ES8311 -> PA ->
-    // speaker independently of the synth renderer.
     std::array<std::int16_t, kI2sSamplesPerBlock> mono_output{};
     std::uint64_t tone_frame = 0;
     std::uint64_t tone_checksum = 1469598103934665603ull;
@@ -513,25 +498,40 @@ bool runI2sTask(TaskContext& context) {
     const std::uint32_t tone_send_queue_overflows =
         tone_end_send_queue_overflows - startup_send_queue_overflows;
 
-    // Immediately continue into the real synth workload; do not log or pause
-    // while the DMA producer is active.
     std::array<std::int16_t, kRendererSamplesPerBlock> render_output{};
     std::uint64_t block_start_frame = context.block_start_frame;
     PcmStats pcm_stats{};
+    realtime::RealtimeHealthTracker health_tracker(kBlockBudgetUs, dma_window_us);
+
     const auto renderAndWrite = [&](bool measure,
                                     LatencyStats* render_stats,
+                                    LatencyStats* producer_work_stats,
+                                    LatencyStats* diagnostic_overhead_stats,
                                     LatencyStats* write_stats,
                                     LatencyStats* cycle_stats,
-                                    std::uint32_t* render_deadline_misses,
                                     std::uint32_t* cycle_over_budget,
                                     std::uint32_t* producer_stalls,
                                     std::uint32_t* write_timeouts,
                                     std::uint32_t* partial_writes,
                                     std::uint64_t* checksum) -> bool {
         const std::uint64_t cycle_start_us = platform::espRealtimeNowUs(nullptr);
+        const bool profiled_render = context.renderer->worstBlockProfilingEnabled();
         context.renderer->render(block_start_frame, render_output.data());
+        const std::uint64_t renderer_return_us = platform::espRealtimeNowUs(nullptr);
+
+        const std::uint32_t renderer_call_us = elapsedUs(cycle_start_us, renderer_return_us);
+        const std::uint32_t render_us = profiled_render
+            ? context.renderer->lastProfiledRenderUs()
+            : renderer_call_us;
+        const std::uint32_t diagnostic_overhead_us = renderer_call_us >= render_us
+            ? renderer_call_us - render_us
+            : 0u;
+
+        const std::uint64_t downmix_start_us = platform::espRealtimeNowUs(nullptr);
         downmixToMono(render_output, mono_output);
-        const std::uint64_t render_end_us = platform::espRealtimeNowUs(nullptr);
+        const std::uint64_t producer_work_end_us = platform::espRealtimeNowUs(nullptr);
+        const std::uint32_t downmix_us = elapsedUs(downmix_start_us, producer_work_end_us);
+        const std::uint32_t producer_work_us = addUs(render_us, downmix_us);
         block_start_frame += kFramesPerBlock;
 
         std::size_t bytes_written = 0;
@@ -557,19 +557,18 @@ bool runI2sTask(TaskContext& context) {
         }
 
         if (measure) {
-            const std::uint32_t render_us = elapsedUs(cycle_start_us, render_end_us);
-            const std::uint32_t write_us = elapsedUs(render_end_us, write_end_us);
+            const std::uint32_t write_us = elapsedUs(producer_work_end_us, write_end_us);
             const std::uint32_t cycle_us = elapsedUs(cycle_start_us, write_end_us);
             render_stats->add(render_us);
+            producer_work_stats->add(producer_work_us);
+            diagnostic_overhead_stats->add(diagnostic_overhead_us);
             write_stats->add(write_us);
             cycle_stats->add(cycle_us);
-            if (render_us > kBlockBudgetUs) {
-                ++(*render_deadline_misses);
-            }
+            health_tracker.addBlock(render_us, producer_work_us);
             if (cycle_us > kBlockBudgetUs) {
                 ++(*cycle_over_budget);
             }
-            if (cycle_us > dmaWindowUs()) {
+            if (cycle_us > dma_window_us) {
                 ++(*producer_stalls);
             }
             pcm_stats.add(mono_output);
@@ -578,13 +577,14 @@ bool runI2sTask(TaskContext& context) {
         return true;
     };
 
-    std::uint32_t render_deadline_misses = 0;
     std::uint32_t cycle_over_budget = 0;
     std::uint32_t producer_stalls = 0;
     std::uint32_t write_timeouts = 0;
     std::uint32_t partial_writes = 0;
     std::uint64_t checksum = 1469598103934665603ull;
     LatencyStats render_stats{};
+    LatencyStats producer_work_stats{};
+    LatencyStats diagnostic_overhead_stats{};
     LatencyStats write_stats{};
     LatencyStats cycle_stats{};
 
@@ -593,10 +593,10 @@ bool runI2sTask(TaskContext& context) {
     for (std::size_t block = 0;
          block < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS);
          ++block) {
-        if (!renderAndWrite(false, &render_stats, &write_stats, &cycle_stats,
-                            &render_deadline_misses, &cycle_over_budget,
-                            &producer_stalls, &write_timeouts, &partial_writes,
-                            &checksum)) {
+        if (!renderAndWrite(false, &render_stats, &producer_work_stats,
+                            &diagnostic_overhead_stats, &write_stats, &cycle_stats,
+                            &cycle_over_budget, &producer_stalls, &write_timeouts,
+                            &partial_writes, &checksum)) {
             cleanup();
             return false;
         }
@@ -604,35 +604,37 @@ bool runI2sTask(TaskContext& context) {
 
     const std::uint32_t synth_start_sent_callbacks = callback_stats.sent_events;
     const std::uint32_t synth_start_send_queue_overflows = callback_stats.send_queue_overflows;
+    const std::uint32_t synth_warmup_sent_callbacks =
+        synth_start_sent_callbacks - tone_end_sent_callbacks;
+    const std::uint32_t synth_warmup_send_queue_overflows =
+        synth_start_send_queue_overflows - tone_end_send_queue_overflows;
 
     for (std::size_t block = 0;
          block < static_cast<std::size_t>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS);
          ++block) {
-        if (!renderAndWrite(true, &render_stats, &write_stats, &cycle_stats,
-                            &render_deadline_misses, &cycle_over_budget,
-                            &producer_stalls, &write_timeouts, &partial_writes,
-                            &checksum)) {
+        if (!renderAndWrite(true, &render_stats, &producer_work_stats,
+                            &diagnostic_overhead_stats, &write_stats, &cycle_stats,
+                            &cycle_over_budget, &producer_stalls, &write_timeouts,
+                            &partial_writes, &checksum)) {
             cleanup();
             return false;
         }
     }
 
-    // Freeze active-audio telemetry immediately after the last producer write.
     const std::uint32_t active_end_sent_callbacks = callback_stats.sent_events;
     const std::uint32_t active_end_send_queue_overflows = callback_stats.send_queue_overflows;
     const std::uint32_t synth_sent_callbacks =
         active_end_sent_callbacks - synth_start_sent_callbacks;
     const std::uint32_t synth_send_queue_overflows =
         active_end_send_queue_overflows - synth_start_send_queue_overflows;
-    const std::uint32_t active_send_queue_overflows =
-        active_end_send_queue_overflows - startup_send_queue_overflows;
+    const std::uint32_t active_synth_send_queue_overflows =
+        active_end_send_queue_overflows - tone_end_send_queue_overflows;
     const std::uint64_t clipped_samples =
         context.renderer->stats().clipped_samples - clipped_before;
     const UBaseType_t stack_high_water_bytes = uxTaskGetStackHighWaterMark(nullptr);
     const InternalHeapSnapshot before_cleanup_heap = internalHeapSnapshot();
+    const realtime::RealtimeHealthSnapshot health = health_tracker.snapshot();
 
-    // Stop audible output before any result logging. PA drops first, then codec
-    // mute/power-down occurs while clocks remain live, then I2S is stopped.
     cleanup();
 
     const std::uint32_t final_sent_callbacks = callback_stats.sent_events;
@@ -648,7 +650,7 @@ bool runI2sTask(TaskContext& context) {
 
     ESP_LOGI(
         kTag,
-        "i2s_qual: PATH startup_prime_blocks=%u startup_sent_callbacks=%u startup_send_queue_overflows=%u tone_hz=%u tone_blocks=%u tone_peak=%d tone_sent_callbacks=%u tone_send_queue_overflows=%u tone_checksum=%016llx synth_sent_callbacks=%u synth_send_queue_overflows=%u active_send_queue_overflows=%u shutdown_tail_callbacks=%u shutdown_tail_overflows=%u",
+        "i2s_qual: PATH startup_prime_blocks=%u startup_sent_callbacks=%u startup_prime_send_queue_overflows=%u startup_overflow_gate=diagnostic_only tone_hz=%u tone_blocks=%u tone_peak=%d tone_sent_callbacks=%u tone_send_queue_overflows=%u tone_checksum=%016llx synth_warmup_callbacks=%u synth_warmup_send_queue_overflows=%u synth_sent_callbacks=%u synth_send_queue_overflows=%u active_synth_send_queue_overflows=%u shutdown_tail_callbacks=%u shutdown_tail_overflows=%u",
         static_cast<unsigned>(live_prime_blocks),
         static_cast<unsigned>(startup_sent_callbacks),
         static_cast<unsigned>(startup_send_queue_overflows),
@@ -658,26 +660,34 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(tone_sent_callbacks),
         static_cast<unsigned>(tone_send_queue_overflows),
         static_cast<unsigned long long>(tone_checksum),
+        static_cast<unsigned>(synth_warmup_sent_callbacks),
+        static_cast<unsigned>(synth_warmup_send_queue_overflows),
         static_cast<unsigned>(synth_sent_callbacks),
         static_cast<unsigned>(synth_send_queue_overflows),
-        static_cast<unsigned>(active_send_queue_overflows),
+        static_cast<unsigned>(active_synth_send_queue_overflows),
         static_cast<unsigned>(shutdown_tail_callbacks),
         static_cast<unsigned>(shutdown_tail_overflows));
 
     ESP_LOGI(
         kTag,
-        "i2s_qual: RESULT blocks=%u render_us[min/avg/max]=%u/%u/%u write_wait_us[min/avg/max]=%u/%u/%u cycle_us[min/avg/max]=%u/%u/%u render_deadline_misses=%u cycle_over_budget=%u producer_stalls_over_dma_window=%u write_timeouts=%u partial_writes=%u pcm_peak_abs=%u pcm_avg_abs=%u pcm_nonzero_samples=%llu pcm_samples=%llu clipped_samples=%llu stack_high_water_bytes=%u checksum=%016llx",
+        "i2s_qual: RESULT blocks=%u render_us[min/avg/max]=%u/%u/%u producer_work_us[min/avg/max]=%u/%u/%u diagnostic_overhead_us[min/avg/max]=%u/%u/%u write_wait_us[min/avg/max]=%u/%u/%u cycle_us[min/avg/max]=%u/%u/%u render_deadline_misses=%u render_deadline_gate=soft cycle_over_budget=%u cycle_budget_gate=soft producer_stalls_over_dma_window=%u write_timeouts=%u partial_writes=%u pcm_peak_abs=%u pcm_avg_abs=%u pcm_nonzero_samples=%llu pcm_samples=%llu clipped_samples=%llu stack_high_water_bytes=%u checksum=%016llx",
         static_cast<unsigned>(CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS),
         static_cast<unsigned>(render_stats.minimum()),
         static_cast<unsigned>(render_stats.average()),
         static_cast<unsigned>(render_stats.max_us),
+        static_cast<unsigned>(producer_work_stats.minimum()),
+        static_cast<unsigned>(producer_work_stats.average()),
+        static_cast<unsigned>(producer_work_stats.max_us),
+        static_cast<unsigned>(diagnostic_overhead_stats.minimum()),
+        static_cast<unsigned>(diagnostic_overhead_stats.average()),
+        static_cast<unsigned>(diagnostic_overhead_stats.max_us),
         static_cast<unsigned>(write_stats.minimum()),
         static_cast<unsigned>(write_stats.average()),
         static_cast<unsigned>(write_stats.max_us),
         static_cast<unsigned>(cycle_stats.minimum()),
         static_cast<unsigned>(cycle_stats.average()),
         static_cast<unsigned>(cycle_stats.max_us),
-        static_cast<unsigned>(render_deadline_misses),
+        static_cast<unsigned>(health.render_soft_overruns),
         static_cast<unsigned>(cycle_over_budget),
         static_cast<unsigned>(producer_stalls),
         static_cast<unsigned>(write_timeouts),
@@ -690,18 +700,78 @@ bool runI2sTask(TaskContext& context) {
         static_cast<unsigned>(stack_high_water_bytes),
         static_cast<unsigned long long>(checksum));
 
-    const bool pass =
-        render_deadline_misses == 0u &&
-        producer_stalls == 0u &&
-        write_timeouts == 0u &&
-        partial_writes == 0u &&
-        tone_send_queue_overflows == 0u &&
-        synth_send_queue_overflows == 0u &&
-        active_send_queue_overflows == 0u &&
-        pcm_stats.peak_abs > 0u &&
-        pcm_stats.nonzero_samples > 0u &&
-        clipped_samples == 0u &&
-        stack_high_water_bytes >= CONFIG_GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES;
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: REALTIME_HEALTH block_budget_us=%u dma_window_us=%u render_soft_overruns=%u producer_work_soft_overruns=%u avg_producer_work_us=%u max_consecutive_work_overruns=%u max_backlog_us=%llu max_backlog_blocks=%u max_backlog_recovery_blocks=%u final_backlog_us=%llu min_dma_margin_us=%u backlog_exceeded_dma_window=%u backlog_healthy=%u",
+        static_cast<unsigned>(health.block_budget_us),
+        static_cast<unsigned>(health.dma_window_us),
+        static_cast<unsigned>(health.render_soft_overruns),
+        static_cast<unsigned>(health.producer_work_soft_overruns),
+        static_cast<unsigned>(health.averageProducerWorkUs()),
+        static_cast<unsigned>(health.max_consecutive_work_overruns),
+        static_cast<unsigned long long>(health.max_backlog_us),
+        static_cast<unsigned>(health.max_backlog_blocks),
+        static_cast<unsigned>(health.max_backlog_recovery_blocks),
+        static_cast<unsigned long long>(health.final_backlog_us),
+        static_cast<unsigned>(health.min_dma_margin_us),
+        health.backlog_exceeded_dma_window ? 1u : 0u,
+        health.backlogHealthy() ? 1u : 0u);
+
+    constexpr std::uint32_t kFailProducerStall = 1u << 0u;
+    constexpr std::uint32_t kFailWriteTimeout = 1u << 1u;
+    constexpr std::uint32_t kFailPartialWrite = 1u << 2u;
+    constexpr std::uint32_t kFailToneQueueOverflow = 1u << 3u;
+    constexpr std::uint32_t kFailSynthQueueOverflow = 1u << 4u;
+    constexpr std::uint32_t kFailBacklog = 1u << 5u;
+    constexpr std::uint32_t kFailSilentOutput = 1u << 6u;
+    constexpr std::uint32_t kFailClipping = 1u << 7u;
+    constexpr std::uint32_t kFailStackHeadroom = 1u << 8u;
+
+    std::uint32_t hard_failure_flags = 0u;
+    if (producer_stalls != 0u) {
+        hard_failure_flags |= kFailProducerStall;
+    }
+    if (write_timeouts != 0u) {
+        hard_failure_flags |= kFailWriteTimeout;
+    }
+    if (partial_writes != 0u) {
+        hard_failure_flags |= kFailPartialWrite;
+    }
+    if (tone_send_queue_overflows != 0u) {
+        hard_failure_flags |= kFailToneQueueOverflow;
+    }
+    if (active_synth_send_queue_overflows != 0u) {
+        hard_failure_flags |= kFailSynthQueueOverflow;
+    }
+    if (!health.backlogHealthy()) {
+        hard_failure_flags |= kFailBacklog;
+    }
+    if (pcm_stats.peak_abs == 0u || pcm_stats.nonzero_samples == 0u) {
+        hard_failure_flags |= kFailSilentOutput;
+    }
+    if (clipped_samples != 0u) {
+        hard_failure_flags |= kFailClipping;
+    }
+    if (stack_high_water_bytes < CONFIG_GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES) {
+        hard_failure_flags |= kFailStackHeadroom;
+    }
+
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: HARD_GATE failure_flags=0x%08x producer_stalls=%u write_timeouts=%u partial_writes=%u tone_queue_overflows=%u active_synth_queue_overflows=%u backlog_healthy=%u clipped_samples=%llu stack_headroom_ok=%u transient_render_overruns=%u transient_cycle_overruns=%u",
+        static_cast<unsigned>(hard_failure_flags),
+        static_cast<unsigned>(producer_stalls),
+        static_cast<unsigned>(write_timeouts),
+        static_cast<unsigned>(partial_writes),
+        static_cast<unsigned>(tone_send_queue_overflows),
+        static_cast<unsigned>(active_synth_send_queue_overflows),
+        health.backlogHealthy() ? 1u : 0u,
+        static_cast<unsigned long long>(clipped_samples),
+        stack_high_water_bytes >= CONFIG_GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES ? 1u : 0u,
+        static_cast<unsigned>(health.render_soft_overruns),
+        static_cast<unsigned>(cycle_over_budget));
+
+    const bool pass = hard_failure_flags == 0u;
 
     ESP_LOGI(
         kTag,
@@ -748,8 +818,6 @@ bool runOptionalI2sDmaQualification(
     }
 
     (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    // Let the pinned core's idle task reclaim the dynamically-created task
-    // stack/TCB before subsequent memory snapshots are taken.
     vTaskDelay(1);
     return context.success;
 }

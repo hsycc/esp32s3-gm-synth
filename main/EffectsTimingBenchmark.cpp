@@ -392,11 +392,6 @@ bool runOptionalEffectsTimingBenchmark() {
         kPhysicalTimingEvidence);
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
-    // Normal/full-FX and pathological heavy-DSP are separate workload classes.
-    // The normal sweep remains the nominal product gate. The heavy sweep only
-    // characterizes the worst-feature ceiling and is expected to find a first
-    // unstable step; that boundary must not collapse the public polyphony to
-    // min(normal, pathological-heavy).
     voices.allSoundOff();
     if (!physical_stress->runPolyphonySweep(voices, renderer, &block_start_frame)) {
         ESP_LOGE(kTag, "effects_bench: nominal physical polyphony qualification FAILED");
@@ -419,28 +414,30 @@ bool runOptionalEffectsTimingBenchmark() {
         heavy.boundary_reached ? 1u : 0u,
         static_cast<unsigned>(heavy.failure_flags));
 
-    // Give the idle task an explicit scheduling opportunity before starting the
-    // long continuous-I2S phase. This keeps one characterization sweep from
-    // contaminating the next phase while preserving all measured deadlines.
     voices.allSoundOff();
     yieldToIdleTask();
+
+    // The I2S helper renders a configured warmup before it starts measured
+    // blocks. Schedule the production-shaped timeline at the measured start,
+    // not at the warmup start, so p0 NoteOn/CC events are actually included in
+    // the 16384-block qualification and the Top-N profiler uses the same scope.
+    const std::uint64_t i2s_measure_start_frame =
+        block_start_frame +
+        static_cast<std::uint64_t>(CONFIG_GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS) *
+            kFramesPerBlock;
 
     if (!physical_stress->enqueueTimeline(
             queue,
             voices,
             renderer,
-            block_start_frame,
+            i2s_measure_start_frame,
             CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS)) {
         ESP_LOGE(kTag, "effects_bench: physical music stress timeline setup FAILED");
         voices.allSoundOff();
         return false;
     }
 
-    // Profile only the final production-shaped music timeline. The first clean
-    // SF2 audible gate and the short synthetic timing sweeps remain completely
-    // unchanged. The renderer measures its own work before taking any retained
-    // Voice snapshot, so profile bookkeeping is outside the reported render_us.
-    renderer.beginWorstBlockProfiling(kBlockBudgetUs, block_start_frame);
+    renderer.beginWorstBlockProfiling(kBlockBudgetUs, i2s_measure_start_frame);
 #endif
 
     const bool i2s_ok = runOptionalI2sDmaQualification(renderer, block_start_frame);
@@ -449,9 +446,6 @@ bool runOptionalEffectsTimingBenchmark() {
     renderer.endWorstBlockProfiling();
     logI2sWorstBlockProfile(renderer.worstBlockProfile());
 
-    // Always summarize the deterministic timeline, even when the I2S realtime
-    // gate fails. The previous ordering returned early and hid the Voice/event/
-    // program-handoff evidence needed to diagnose a deadline miss.
     const bool music_stress_ok = physical_stress->validateAndLog(queue, voices, renderer);
 
     if (!i2s_ok) {

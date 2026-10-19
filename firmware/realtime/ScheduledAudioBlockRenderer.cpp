@@ -109,6 +109,7 @@ void ScheduledAudioBlockRenderer::beginWorstBlockProfiling(
     worst_profile_.deadline_us = deadline_us;
     worst_profile_first_frame_ = first_block_start_frame;
     worst_profile_sustain_mask_ = 0;
+    last_profiled_render_us_ = 0;
     worst_profile_enabled_ = deadline_us != 0u;
 }
 
@@ -318,6 +319,11 @@ void ScheduledAudioBlockRenderer::render(
             std::min<std::uint64_t>(
                 elapsed,
                 std::numeric_limits<std::uint32_t>::max()));
+        // Publish the exact same pure-render measurement used by the Top-N
+        // profiler before any snapshot/bookkeeping is performed. Physical I2S
+        // qualification consumes this value so its soft-overrun count and the
+        // profiler candidate count have one timing scope.
+        last_profiled_render_us_ = render_us;
         recordWorstBlock(block_start_frame, render_us, batch);
     }
 #endif

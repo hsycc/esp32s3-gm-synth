@@ -7,6 +7,7 @@ on:
       - "firmware/realtime/RenderDeadlineMonitor.*"
       - "firmware/realtime/TimedAudioBlockRenderer.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "firmware/realtime/RealtimeHealthTracker.h"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/platform/EspRealtimeClock.*"
@@ -16,12 +17,14 @@ on:
       - "firmware/voice/GlobalEffectsProcessor.*"
       - "tests/realtime/test_render_deadline_monitor.cpp"
       - "tests/realtime/test_timed_audio_block_renderer.cpp"
+      - "tests/realtime/test_realtime_health_tracker.cpp"
       - ".github/workflows/m6-deadline-tests.yml"
   pull_request:
     paths:
       - "firmware/realtime/RenderDeadlineMonitor.*"
       - "firmware/realtime/TimedAudioBlockRenderer.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
+      - "firmware/realtime/RealtimeHealthTracker.h"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/platform/EspRealtimeClock.*"
@@ -31,6 +34,7 @@ on:
       - "firmware/voice/GlobalEffectsProcessor.*"
       - "tests/realtime/test_render_deadline_monitor.cpp"
       - "tests/realtime/test_timed_audio_block_renderer.cpp"
+      - "tests/realtime/test_realtime_health_tracker.cpp"
       - ".github/workflows/m6-deadline-tests.yml"
 
 jobs:
@@ -71,3 +75,12 @@ jobs:
             -o build/host-tests/test_timed_audio_block_renderer
       - name: Run timed audio block renderer tests
         run: ./build/host-tests/test_timed_audio_block_renderer
+      - name: Build realtime health policy tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+            tests/realtime/test_realtime_health_tracker.cpp \
+            -o build/host-tests/test_realtime_health_tracker
+      - name: Run realtime health policy tests
+        run: ./build/host-tests/test_realtime_health_tracker

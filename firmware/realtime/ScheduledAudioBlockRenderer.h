@@ -103,7 +103,12 @@ public:
     void beginWorstBlockProfiling(
         std::uint32_t deadline_us,
         std::uint64_t first_block_start_frame);
-    void endWorstBlockProfiling() { worst_profile_enabled_ = false; }
+    void endWorstBlockProfiling() {
+        worst_profile_enabled_ = false;
+        last_profiled_render_us_ = 0;
+    }
+    bool worstBlockProfilingEnabled() const { return worst_profile_enabled_; }
+    std::uint32_t lastProfiledRenderUs() const { return last_profiled_render_us_; }
     const ScheduledWorstBlockProfile& worstBlockProfile() const {
         return worst_profile_;
     }
@@ -133,6 +138,7 @@ private:
     ScheduledAudioStats stats_{};
 
     bool worst_profile_enabled_ = false;
+    std::uint32_t last_profiled_render_us_ = 0;
     std::uint64_t worst_profile_first_frame_ = 0;
     std::uint16_t worst_profile_sustain_mask_ = 0;
     ScheduledWorstBlockProfile worst_profile_{};
