@@ -34,14 +34,24 @@ constexpr std::array<std::uint32_t, 100> kCentRatioQ20{
 constexpr std::uint32_t kRatioFractionBits = 20;
 constexpr std::uint64_t kRatioRounding = std::uint64_t{1} << (kRatioFractionBits - 1u);
 constexpr std::size_t kLfoTableCenter = voice::kLfoControlPointCount / 2u;
+constexpr std::uint32_t kMaxPreparedRatioQ20 = 1979448u;
+constexpr std::uint64_t kMaxRatioProduct =
+    std::numeric_limits<std::uint64_t>::max() - kRatioRounding;
+constexpr std::uint64_t kFastSafeRatioInput =
+    kMaxRatioProduct / kMaxPreparedRatioQ20;
+constexpr std::uint64_t kUnityRatioSafeInput =
+    kMaxRatioProduct / (std::uint64_t{1} << kRatioFractionBits);
 
 std::uint64_t multiplyRatioQ20(std::uint64_t value, std::uint32_t ratio_q20) {
     if (value == 0 || ratio_q20 == 0) {
         return 0;
     }
-    const std::uint64_t max_product =
-        std::numeric_limits<std::uint64_t>::max() - kRatioRounding;
-    if (value > max_product / ratio_q20) {
+
+    // All callers use the prepared semitone/cent tables above. Normal audio
+    // phase increments are far below this compile-time safe bound, so avoid a
+    // runtime uint64 divide solely to prove the product cannot overflow. Keep
+    // the original ratio-specific guard for synthetic/extreme test values.
+    if (value > kFastSafeRatioInput && value > kMaxRatioProduct / ratio_q20) {
         return std::numeric_limits<std::uint64_t>::max();
     }
     return (value * ratio_q20 + kRatioRounding) >> kRatioFractionBits;
@@ -525,6 +535,9 @@ std::uint64_t ZoneResolver::transposeCents(
     const std::uint64_t semitone_value = transposeSemitones(
         root_phase_increment_q32,
         semitones);
+    if (cents == 0 && semitone_value <= kUnityRatioSafeInput) {
+        return std::max<std::uint64_t>(semitone_value, 1u);
+    }
     return std::max<std::uint64_t>(
         multiplyRatioQ20(
             semitone_value,
@@ -570,7 +583,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
         const std::int32_t initial_attenuation_cb =
             effectiveInitialAttenuationCb(zone, effective_velocity);
-        voice::VoiceStartParams params{};
+        voice::VoiceStartParams& params = batch->voices[batch->count];
+        params = voice::VoiceStartParams{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
         params.key = key;
@@ -610,21 +624,25 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.mod_lfo.phase_step_q32 = zone.mod_lfo.phase_step_q32;
             params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
             params.mod_lfo.filter_depth_cents = zone.mod_lfo.filter_depth_cents;
-            prepareModLfoGainTable(
-                initial_attenuation_cb,
-                zone.note_on_gain.velocity_to_attenuation_cb,
-                effective_velocity,
-                zone.note_on_gain.pan_sf2_units,
-                zone.mod_lfo.volume_depth_cb,
-                nullptr,
-                zone.note_on_gain.volume_to_attenuation_cb,
-                zone.note_on_gain.pan_amount,
-                zone.note_on_gain.expression_to_attenuation_cb,
-                &params.mod_lfo.gain_table);
+            if (zone.mod_lfo.volume_depth_cb != 0) {
+                prepareModLfoGainTable(
+                    initial_attenuation_cb,
+                    zone.note_on_gain.velocity_to_attenuation_cb,
+                    effective_velocity,
+                    zone.note_on_gain.pan_sf2_units,
+                    zone.mod_lfo.volume_depth_cb,
+                    nullptr,
+                    zone.note_on_gain.volume_to_attenuation_cb,
+                    zone.note_on_gain.pan_amount,
+                    zone.note_on_gain.expression_to_attenuation_cb,
+                    &params.mod_lfo.gain_table);
+            }
         }
         prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
-        prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
-        batch->voices[batch->count++] = params;
+        if (zone.note_on_filter.enabled) {
+            prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
+        }
+        ++batch->count;
     }
 
     return batch->count == 0 ? ZoneResolveStatus::NoMatch : ZoneResolveStatus::Ok;
@@ -657,7 +675,8 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
         const std::int32_t initial_attenuation_cb =
             effectiveInitialAttenuationCb(zone, effective_velocity);
-        voice::VoiceStartParams params{};
+        voice::VoiceStartParams& params = batch->voices[batch->count];
+        params = voice::VoiceStartParams{};
         params.sample_id = zone.sample_id;
         params.channel = channel;
         params.key = key;
@@ -717,20 +736,24 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             params.mod_lfo.phase_step_q32 = zone.mod_lfo.phase_step_q32;
             params.mod_lfo.pitch_depth_cents = zone.mod_lfo.pitch_depth_cents;
             params.mod_lfo.filter_depth_cents = zone.mod_lfo.filter_depth_cents;
-            prepareModLfoGainTable(
-                initial_attenuation_cb,
-                zone.note_on_gain.velocity_to_attenuation_cb,
-                effective_velocity,
-                zone.note_on_gain.pan_sf2_units,
-                zone.mod_lfo.volume_depth_cb,
-                &channel_state,
-                zone.note_on_gain.volume_to_attenuation_cb,
-                zone.note_on_gain.pan_amount,
-                zone.note_on_gain.expression_to_attenuation_cb,
-                &params.mod_lfo.gain_table);
+            if (zone.mod_lfo.volume_depth_cb != 0) {
+                prepareModLfoGainTable(
+                    initial_attenuation_cb,
+                    zone.note_on_gain.velocity_to_attenuation_cb,
+                    effective_velocity,
+                    zone.note_on_gain.pan_sf2_units,
+                    zone.mod_lfo.volume_depth_cb,
+                    &channel_state,
+                    zone.note_on_gain.volume_to_attenuation_cb,
+                    zone.note_on_gain.pan_amount,
+                    zone.note_on_gain.expression_to_attenuation_cb,
+                    &params.mod_lfo.gain_table);
+            }
         }
         prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
-        prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
+        if (zone.note_on_filter.enabled) {
+            prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
+        }
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
@@ -762,7 +785,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.realtime_control.modulation_wheel_to_vibrato_pitch_cents =
             zone.vibrato_lfo.modulation_wheel_to_pitch_cents;
         params.realtime_control.mod_lfo_volume_depth_cb = zone.mod_lfo.volume_depth_cb;
-        batch->voices[batch->count++] = params;
+        ++batch->count;
     }
 
     return batch->count == 0 ? ZoneResolveStatus::NoMatch : ZoneResolveStatus::Ok;
