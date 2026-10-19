@@ -1,0 +1,97 @@
+name: m7-sf2-release-matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_sf2_release_matrix.cpp"
+      - "tests/test_sf2_release_report.py"
+      - "tools/sf2_release/**"
+      - "scripts/run_m7_sf2_release_matrix.sh"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "assets/sf2/full/GeneralUser-GS.sf2"
+      - "assets/sf2/full/FluidR3_GM.sf2"
+      - "assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2"
+      - ".github/workflows/m7-sf2-release-matrix.yml"
+  pull_request:
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_sf2_release_matrix.cpp"
+      - "tests/test_sf2_release_report.py"
+      - "tools/sf2_release/**"
+      - "scripts/run_m7_sf2_release_matrix.sh"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "assets/sf2/full/GeneralUser-GS.sf2"
+      - "assets/sf2/full/FluidR3_GM.sf2"
+      - "assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2"
+      - ".github/workflows/m7-sf2-release-matrix.yml"
+
+jobs:
+  classify-representative-native-sf2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Attempt full FluidR3 LFS materialization
+        shell: bash
+        run: |
+          set -u
+          full="assets/sf2/full/FluidR3_GM.sf2"
+          if git lfs version >/dev/null 2>&1; then
+            git lfs install --local
+            set +e
+            git lfs pull --include="${full}" --exclude=""
+            status=$?
+            set -e
+            if [[ "${status}" -ne 0 ]]; then
+              echo "Full FluidR3 LFS object unavailable; the deterministic 6 MiB native-SF2 fixture will be used."
+            fi
+          else
+            echo "Git LFS unavailable; the deterministic FluidR3 fixture will be used."
+          fi
+          if [[ -s "${full}" ]] && [[ "$(dd if="${full}" bs=1 count=4 2>/dev/null || true)" == "RIFF" ]]; then
+            echo "Full FluidR3 materialized: $(wc -c < "${full}") bytes"
+          else
+            echo "Full FluidR3 not materialized; fallback fixture remains authoritative for this CI run."
+          fi
+
+      - name: Run report parser unit tests
+        run: python -m unittest tests.test_sf2_release_report -v
+
+      - name: Run representative native-SF2 release classification
+        shell: bash
+        run: |
+          mkdir -p build/m7-sf2-release
+          bash scripts/run_m7_sf2_release_matrix.sh 2>&1 | tee build/m7-sf2-release/qualification.log
+
+      - name: Publish M7 portfolio summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f build/m7-sf2-release/sf2-release-portfolio.md ]]; then
+            cat build/m7-sf2-release/sf2-release-portfolio.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload M7 native-SF2 qualification artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m7-sf2-release-portfolio
+          path: build/m7-sf2-release/
+          if-no-files-found: error
