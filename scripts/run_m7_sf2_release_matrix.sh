@@ -19,6 +19,13 @@ COMMON_FLAGS=(
 )
 
 SCANNER="${BUILD_DIR}/test_sf2_release_matrix"
+ID_PROBE="${BUILD_DIR}/test_sf2_id_space"
+
+"${CXX}" "${COMMON_FLAGS[@]}" \
+  firmware/sf2/Sf2PdtaReader.cpp \
+  tests/gm/test_sf2_id_space.cpp \
+  -o "${ID_PROBE}"
+
 "${CXX}" "${COMMON_FLAGS[@]}" \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -38,6 +45,12 @@ is_real_sf2() {
   [[ "${magic}" == "RIFF" ]]
 }
 
+probe_asset() {
+  local path="$1"
+  local asset="$2"
+  "${ID_PROBE}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.id-space.log"
+}
+
 run_asset() {
   local path="$1"
   local asset="$2"
@@ -49,6 +62,8 @@ run_asset() {
 
   printf '\n[M7] asset=%s source=%s path=%s profile=%s required_accept=%s\n' \
     "${asset}" "${source_kind}" "${path}" "${profile}" "${required}"
+
+  probe_asset "${path}" "${asset}"
 
   set +e
   "${SCANNER}" "${path}" "${asset}" "${profile}" "${required}" "${source_kind}" \

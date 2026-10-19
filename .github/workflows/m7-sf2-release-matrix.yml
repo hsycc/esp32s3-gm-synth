@@ -9,6 +9,7 @@ on:
       - "firmware/sample/**"
       - "firmware/gm/**"
       - "firmware/voice/**"
+      - "tests/gm/test_sf2_id_space.cpp"
       - "tests/gm/test_sf2_release_matrix.cpp"
       - "tests/test_sf2_release_report.py"
       - "tools/sf2_release/**"
@@ -26,6 +27,7 @@ on:
       - "firmware/sample/**"
       - "firmware/gm/**"
       - "firmware/voice/**"
+      - "tests/gm/test_sf2_id_space.cpp"
       - "tests/gm/test_sf2_release_matrix.cpp"
       - "tests/test_sf2_release_report.py"
       - "tools/sf2_release/**"
@@ -102,6 +104,15 @@ jobs:
         run: |
           if [[ -f build/m7-sf2-release/sf2-release-portfolio.md ]]; then
             cat build/m7-sf2-release/sf2-release-portfolio.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f build/m7-sf2-release/qualification.log ]]; then
+            {
+              echo
+              echo '## Bank-local SampleId space'
+              echo '```text'
+              grep '^M7_SF2_ID_SPACE' build/m7-sf2-release/qualification.log || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ -f build/m7-sf2-release/robustness-report.txt ]]; then
             {
