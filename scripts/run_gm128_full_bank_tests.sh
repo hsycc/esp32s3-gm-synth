@@ -57,7 +57,7 @@ printf 'GM128 full-bank qualification\n'
 printf '  compiler: %s\n' "${CXX}"
 printf '  output:   %s\n' "${BUILD_DIR}"
 
-printf '\n[1/6] Build and run full-bank structure / StrictQualified report\n'
+printf '\n[1/7] Build and run full-bank structure / StrictQualified report\n'
 build_and_run test_full_gm128_qualification \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -68,27 +68,27 @@ build_and_run test_full_gm128_qualification \
   firmware/sf2/Sf2SampleSource.cpp \
   tests/gm/test_full_gm128_qualification.cpp
 
-printf '\n[2/6] Build and run full-bank runtime-control transactions\n'
+printf '\n[2/7] Build and run full-bank runtime-control transactions\n'
 build_and_run test_full_gm128_runtime -pthread \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_program_change_control_service.cpp
 
-printf '\n[3/6] Build and run full-bank 4 MiB / 16-channel stress qualification\n'
+printf '\n[3/7] Build and run full-bank 4 MiB / 16-channel stress qualification\n'
 build_and_run test_full_gm128_stress -pthread \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_full_gm128_stress.cpp
 
-printf '\n[4/6] Build and run 16-channel Active+READY capacity curve\n'
+printf '\n[4/7] Build and run 16-channel Active+READY capacity curve\n'
 build_and_run test_full_gm128_capacity -pthread \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_full_gm128_capacity.cpp
 
-printf '\n[5/6] Build and run discovery-driven 32-second host soak\n'
+printf '\n[5/7] Build and run discovery-driven 32-second host soak\n'
 build_and_run test_full_gm128_soak -pthread \
   "${RUNTIME_SOURCES[@]}" \
   tests/gm/test_full_gm128_soak.cpp
 
-printf '\n[6/6] Build and run per-program M7 release matrix\n'
+printf '\n[6/7] Build and run per-program M7 release matrix\n'
 build_and_run test_gm128_release_matrix \
   firmware/sf2/Sf2PdtaReader.cpp \
   firmware/sf2/Sf2ResolvedZone.cpp \
@@ -98,5 +98,10 @@ build_and_run test_gm128_release_matrix \
   firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
   firmware/sf2/Sf2SampleSource.cpp \
   tests/gm/test_gm128_release_matrix.cpp
+
+printf '\n[7/7] Build and run live 16-channel Program Change ownership qualification\n'
+build_and_run test_m7_gm128_live_program_change -pthread \
+  "${RUNTIME_SOURCES[@]}" \
+  tests/gm/test_m7_gm128_live_program_change.cpp
 
 printf '\nGM128 full-bank qualification passed.\n'

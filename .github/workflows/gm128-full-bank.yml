@@ -14,6 +14,7 @@ on:
       - "tests/gm/test_full_gm128_capacity.cpp"
       - "tests/gm/test_full_gm128_soak.cpp"
       - "tests/gm/test_gm128_release_matrix.cpp"
+      - "tests/gm/test_m7_gm128_live_program_change.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
       - "tests/test_gm128_release_report.py"
       - "tools/gm128_release/**"
@@ -31,6 +32,7 @@ on:
       - "tests/gm/test_full_gm128_capacity.cpp"
       - "tests/gm/test_full_gm128_soak.cpp"
       - "tests/gm/test_gm128_release_matrix.cpp"
+      - "tests/gm/test_m7_gm128_live_program_change.cpp"
       - "tests/gm/test_program_change_control_service.cpp"
       - "tests/test_gm128_release_report.py"
       - "tools/gm128_release/**"
@@ -76,7 +78,7 @@ jobs:
               echo
               echo '## Existing GM128 host gates'
               echo '```text'
-              grep -E '^(GM128_(QUALIFICATION|COVERAGE_SUMMARY|FAILURE_SUMMARY|STRESS_|CAPACITY_|SOAK_)|Full FM GM128)' \
+              grep -E '^(GM128_(QUALIFICATION|COVERAGE_SUMMARY|FAILURE_SUMMARY|STRESS_|CAPACITY_|SOAK_)|M7_LIVE_PROGRAM_CHANGE|M7 live 16-channel|Full FM GM128)' \
                 build/gm128-full-bank/qualification-report.txt || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
