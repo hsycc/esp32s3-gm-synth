@@ -12,6 +12,10 @@ namespace {
 
 constexpr std::size_t kEffectsScratchFrames = 64;
 constexpr std::size_t kChannels = 2;
+// Keep this synchronized with VoiceRenderer.cpp. Complex continuous Voices use
+// the same control cadence as the reference renderer; only invariant loop/sample
+// metadata is hoisted out of the per-frame path.
+constexpr std::uint8_t kRealtimeModulationControlFrames = 16;
 
 std::int32_t scaleSend(std::int32_t sample, std::int32_t units) {
     const std::int32_t clamped = std::clamp<std::int32_t>(units, 0, kMaxEffectsSendUnits);
@@ -43,7 +47,7 @@ std::int32_t scaleSampleQ15Fast(std::int32_t sample, std::int32_t gain_q15) {
         return 0;
     }
 
-    // The fast path interpolates int16 PCM, so sample remains in
+    // The simple fast path interpolates int16 PCM, so sample remains in
     // [-32768, 32767]. gain_q15 is clamped to [0, 32767]. Their product is
     // therefore safely inside int32; using a 64-bit multiply here only adds
     // cost on Xtensa and does not provide extra numerical precision.
@@ -52,6 +56,25 @@ std::int32_t scaleSampleQ15Fast(std::int32_t sample, std::int32_t gain_q15) {
         return (product + (std::int32_t{1} << 14)) >> 15;
     }
     return -((-product + (std::int32_t{1} << 14)) >> 15);
+}
+
+std::int32_t scaleSampleQ15Wide(std::int32_t sample, std::int32_t gain_q15) {
+    if (gain_q15 >= kQ15Unity) {
+        return sample;
+    }
+    if (gain_q15 <= 0) {
+        return 0;
+    }
+
+    // Filtered samples are not constrained to int16 range, so the complex
+    // realtime path deliberately uses the same wide arithmetic and rounding as
+    // VoiceRenderer.cpp::scaleSampleQ15(). This keeps it bit-equivalent to the
+    // reference renderer even for resonant-filter overshoot.
+    const std::int64_t product = static_cast<std::int64_t>(sample) * gain_q15;
+    if (product >= 0) {
+        return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
+    }
+    return -static_cast<std::int32_t>(((-product) + (std::int64_t{1} << 14)) >> 15);
 }
 
 }  // namespace
@@ -65,19 +88,12 @@ VoiceRenderResult Voice::renderAddRealtime(
         return result;
     }
 
-    // Specialize only continuous-loop Voices whose pitch/gain/filter state is
-    // invariant apart from the volume envelope. Modulation, filtering and
-    // non-continuous playback remain on renderAdd(), preserving the generic
-    // renderer as the reference implementation for complex cases.
-    const bool simple_continuous =
-        params_.loop_mode == LoopMode::Continuous &&
-        !params_.vibrato_lfo.enabled &&
-        !params_.mod_lfo.enabled &&
-        !params_.mod_envelope.enabled &&
-        !params_.dynamic_lowpass_table.enabled &&
-        !current_lowpass_.enabled;
-    if (!simple_continuous || !ref_.valid() || ref_.record == nullptr ||
-        ref_.record->pcm == nullptr) {
+    // Continuous SF2 loops are the common resident-sample realtime case. Hoist
+    // their immutable sample/region/loop metadata once per render segment even
+    // when filter/LFO/mod-envelope DSP is enabled. Non-continuous playback keeps
+    // using renderAdd() as the canonical reference path.
+    if (params_.loop_mode != LoopMode::Continuous || !ref_.valid() ||
+        ref_.record == nullptr || ref_.record->pcm == nullptr) {
         return renderAdd(interleaved_stereo, frame_count);
     }
 
@@ -98,68 +114,157 @@ VoiceRenderResult Voice::renderAddRealtime(
     }
 
     std::uint64_t phase = phase_q32_;
-    const std::uint64_t phase_increment = current_phase_increment_q32_;
     std::int32_t* output = interleaved_stereo;
     VoiceRenderResult result{};
 
-    const bool steady_sustain =
-        envelope_stage_ == EnvelopeStage::Sustain && !key_released_;
-    if (steady_sustain) {
-        const std::int32_t envelope = params_.envelope.sustain_q15;
-        envelope_level_q15_ = envelope;
-        const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
-        const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
+    // Preserve the original lowest-cost specialization for dry/unmodulated
+    // continuous Voices. Complex Voices below reuse the same hoisted playback
+    // metadata but retain reference modulation/filter arithmetic and ordering.
+    const bool simple_continuous =
+        !params_.vibrato_lfo.enabled &&
+        !params_.mod_lfo.enabled &&
+        !params_.mod_envelope.enabled &&
+        !params_.dynamic_lowpass_table.enabled &&
+        !current_lowpass_.enabled;
+    if (simple_continuous) {
+        const std::uint64_t phase_increment = current_phase_increment_q32_;
+        const bool steady_sustain =
+            envelope_stage_ == EnvelopeStage::Sustain && !key_released_;
+        if (steady_sustain) {
+            const std::int32_t envelope = params_.envelope.sustain_q15;
+            envelope_level_q15_ = envelope;
+            const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
+            const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
 
-        for (std::size_t frame = 0; frame < frame_count; ++frame) {
-            const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
-            if (index >= end_frame) {
-                phase_q32_ = phase;
-                finish();
-                break;
+            for (std::size_t frame = 0; frame < frame_count; ++frame) {
+                const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
+                if (index >= end_frame) {
+                    phase_q32_ = phase;
+                    finish();
+                    break;
+                }
+
+                std::uint32_t next_index = index + 1u;
+                if (index >= loop_start && next_index >= loop_end) {
+                    next_index = loop_start;
+                } else if (next_index >= end_frame) {
+                    next_index = end_frame - 1u;
+                }
+
+                const std::int32_t a = pcm[index];
+                const std::int32_t b = pcm[next_index];
+                const std::uint32_t fraction = static_cast<std::uint32_t>(phase & 0xffffffffu);
+                const std::int64_t delta = static_cast<std::int64_t>(b) - a;
+                const std::int32_t mono = static_cast<std::int32_t>(
+                    static_cast<std::int64_t>(a) +
+                    ((delta * static_cast<std::int64_t>(fraction)) >> 32));
+
+                output[0] += scaleSampleQ15Fast(mono, left_gain);
+                output[1] += scaleSampleQ15Fast(mono, right_gain);
+                output += kChannels;
+                ++result.frames_rendered;
+
+                phase += phase_increment;
+                if (phase >= loop_end_q32) {
+                    const std::uint64_t overshoot = phase - loop_end_q32;
+                    if (overshoot < loop_length_q32) {
+                        phase = loop_start_q32 + overshoot;
+                    } else {
+                        phase = loop_start_q32 +
+                            ((phase - loop_start_q32) % loop_length_q32);
+                    }
+                }
             }
+        } else {
+            // Attack/hold/decay/release still use the canonical envelope helper
+            // so level and finish timing remain identical to renderAdd().
+            for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
+                const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
+                if (index >= end_frame) {
+                    phase_q32_ = phase;
+                    finish();
+                    break;
+                }
 
-            std::uint32_t next_index = index + 1u;
-            if (index >= loop_start && next_index >= loop_end) {
-                next_index = loop_start;
-            } else if (next_index >= end_frame) {
-                next_index = end_frame - 1u;
-            }
+                const std::int32_t envelope = nextEnvelopeLevel();
+                if (envelope_stage_ == EnvelopeStage::Done && envelope <= 0) {
+                    phase_q32_ = phase;
+                    finish();
+                    break;
+                }
 
-            const std::int32_t a = pcm[index];
-            const std::int32_t b = pcm[next_index];
-            const std::uint32_t fraction = static_cast<std::uint32_t>(phase & 0xffffffffu);
-            const std::int64_t delta = static_cast<std::int64_t>(b) - a;
-            const std::int32_t mono = static_cast<std::int32_t>(
-                static_cast<std::int64_t>(a) +
-                ((delta * static_cast<std::int64_t>(fraction)) >> 32));
+                std::uint32_t next_index = index + 1u;
+                if (index >= loop_start && next_index >= loop_end) {
+                    next_index = loop_start;
+                } else if (next_index >= end_frame) {
+                    next_index = end_frame - 1u;
+                }
 
-            output[0] += scaleSampleQ15Fast(mono, left_gain);
-            output[1] += scaleSampleQ15Fast(mono, right_gain);
-            output += kChannels;
-            ++result.frames_rendered;
+                const std::int32_t a = pcm[index];
+                const std::int32_t b = pcm[next_index];
+                const std::uint32_t fraction = static_cast<std::uint32_t>(phase & 0xffffffffu);
+                const std::int64_t delta = static_cast<std::int64_t>(b) - a;
+                const std::int32_t mono = static_cast<std::int32_t>(
+                    static_cast<std::int64_t>(a) +
+                    ((delta * static_cast<std::int64_t>(fraction)) >> 32));
 
-            phase += phase_increment;
-            if (phase >= loop_end_q32) {
-                const std::uint64_t overshoot = phase - loop_end_q32;
-                if (overshoot < loop_length_q32) {
-                    phase = loop_start_q32 + overshoot;
-                } else {
-                    phase = loop_start_q32 +
-                        ((phase - loop_start_q32) % loop_length_q32);
+                const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
+                const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
+                output[0] += scaleSampleQ15Fast(mono, left_gain);
+                output[1] += scaleSampleQ15Fast(mono, right_gain);
+                output += kChannels;
+                ++result.frames_rendered;
+
+                const bool release_finishes_after_frame =
+                    envelope_stage_ == EnvelopeStage::Done;
+                phase += phase_increment;
+                if (phase >= loop_end_q32) {
+                    const std::uint64_t overshoot = phase - loop_end_q32;
+                    if (overshoot < loop_length_q32) {
+                        phase = loop_start_q32 + overshoot;
+                    } else {
+                        phase = loop_start_q32 +
+                            ((phase - loop_start_q32) % loop_length_q32);
+                    }
+                }
+                if (release_finishes_after_frame && active_) {
+                    phase_q32_ = phase;
+                    finish();
                 }
             }
         }
     } else {
-        // Attack/hold/decay/release still use the canonical envelope helper so
-        // their level and finish timing remain identical to renderAdd(). The
-        // savings come from hoisting invariant sample/loop state and skipping
-        // disabled modulation/filter work on every sample.
+        // Complex continuous path: execute exactly the same state transitions as
+        // renderAdd(), but avoid rebuilding region/loop state and re-validating
+        // the loop on every sample. This is the hot path used by the physical
+        // heavy-DSP fixture (filter + vibrato + Mod-LFO + Mod-Envelope).
         for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
             const std::uint32_t index = static_cast<std::uint32_t>(phase >> 32);
             if (index >= end_frame) {
                 phase_q32_ = phase;
                 finish();
                 break;
+            }
+
+            const bool vibrato_due = params_.vibrato_lfo.enabled &&
+                vibrato_delay_remaining_ == 0 && vibrato_control_frames_remaining_ == 0;
+            const bool mod_lfo_due = params_.mod_lfo.enabled &&
+                mod_lfo_delay_remaining_ == 0 && mod_lfo_control_frames_remaining_ == 0;
+            const bool mod_envelope_due = params_.mod_envelope.enabled &&
+                mod_envelope_control_frames_remaining_ == 0;
+
+            (void)nextModEnvelopeLevel();
+            if (vibrato_due || mod_lfo_due || mod_envelope_due) {
+                refreshModulationState();
+                if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0) {
+                    vibrato_control_frames_remaining_ = kRealtimeModulationControlFrames;
+                }
+                if (params_.mod_lfo.enabled && mod_lfo_delay_remaining_ == 0) {
+                    mod_lfo_control_frames_remaining_ = kRealtimeModulationControlFrames;
+                }
+                if (params_.mod_envelope.enabled) {
+                    mod_envelope_control_frames_remaining_ = kRealtimeModulationControlFrames;
+                }
             }
 
             const std::int32_t envelope = nextEnvelopeLevel();
@@ -180,20 +285,20 @@ VoiceRenderResult Voice::renderAddRealtime(
             const std::int32_t b = pcm[next_index];
             const std::uint32_t fraction = static_cast<std::uint32_t>(phase & 0xffffffffu);
             const std::int64_t delta = static_cast<std::int64_t>(b) - a;
-            const std::int32_t mono = static_cast<std::int32_t>(
+            const std::int32_t interpolated = static_cast<std::int32_t>(
                 static_cast<std::int64_t>(a) +
                 ((delta * static_cast<std::int64_t>(fraction)) >> 32));
-
+            const std::int32_t mono = applyLowpass(interpolated);
             const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
             const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
-            output[0] += scaleSampleQ15Fast(mono, left_gain);
-            output[1] += scaleSampleQ15Fast(mono, right_gain);
+            output[0] += scaleSampleQ15Wide(mono, left_gain);
+            output[1] += scaleSampleQ15Wide(mono, right_gain);
             output += kChannels;
             ++result.frames_rendered;
 
             const bool release_finishes_after_frame =
                 envelope_stage_ == EnvelopeStage::Done;
-            phase += phase_increment;
+            phase += current_phase_increment_q32_;
             if (phase >= loop_end_q32) {
                 const std::uint64_t overshoot = phase - loop_end_q32;
                 if (overshoot < loop_length_q32) {
@@ -203,6 +308,7 @@ VoiceRenderResult Voice::renderAddRealtime(
                         ((phase - loop_start_q32) % loop_length_q32);
                 }
             }
+            advanceLfos();
             if (release_finishes_after_frame && active_) {
                 phase_q32_ = phase;
                 finish();

@@ -64,8 +64,17 @@ void assertSameRenderState(
     assert(generic_result.finished == realtime_result.finished);
     assert(generic.phaseQ32() == realtime.phaseQ32());
     assert(generic.envelopeLevelQ15() == realtime.envelopeLevelQ15());
+    assert(generic.modEnvelopeLevelQ15() == realtime.modEnvelopeLevelQ15());
+    assert(generic.currentPhaseIncrementQ32() == realtime.currentPhaseIncrementQ32());
     assert(generic.currentGainLeftQ15() == realtime.currentGainLeftQ15());
     assert(generic.currentGainRightQ15() == realtime.currentGainRightQ15());
+    const auto& generic_filter = generic.currentLowpassConfig();
+    const auto& realtime_filter = realtime.currentLowpassConfig();
+    assert(generic_filter.enabled == realtime_filter.enabled);
+    assert(generic_filter.a0_q24 == realtime_filter.a0_q24);
+    assert(generic_filter.a1_q24 == realtime_filter.a1_q24);
+    assert(generic_filter.b1_q24 == realtime_filter.b1_q24);
+    assert(generic_filter.b2_q24 == realtime_filter.b2_q24);
 }
 
 void testSteadySustainFastPathIsBitExact() {
@@ -239,6 +248,115 @@ void testSimpleReleaseFastPathIsBitExact() {
     assert(realtime_fixture.directory.stats().live_voice_refs == 0);
 }
 
+VoiceStartParams complexContinuousParams() {
+    VoiceStartParams params = steadyParams();
+    params.phase_increment_q32 = kPhaseOneQ32 + kPhaseOneQ32 / 5u;
+    params.gain_left_q15 = 24000;
+    params.gain_right_q15 = 21000;
+    params.envelope.sustain_q15 = 26000;
+    params.envelope.release_frames = 11;
+
+    params.lowpass.enabled = true;
+    params.lowpass.a0_q24 = std::int32_t{1} << 22;
+    params.lowpass.a1_q24 = std::int32_t{1} << 21;
+    params.lowpass.b1_q24 = 0;
+    params.lowpass.b2_q24 = 0;
+
+    params.dynamic_lowpass_table.enabled = true;
+    params.dynamic_lowpass_table.min_offset_cents = -256;
+    params.dynamic_lowpass_table.max_offset_cents = 256;
+    for (std::size_t index = 0; index < params.dynamic_lowpass_table.points.size(); ++index) {
+        auto& filter = params.dynamic_lowpass_table.points[index];
+        filter.enabled = true;
+        filter.a0_q24 = (std::int32_t{1} << 22) + static_cast<std::int32_t>(index * 8192u);
+        filter.a1_q24 = (std::int32_t{1} << 21) + static_cast<std::int32_t>(index * 4096u);
+        filter.b1_q24 = 0;
+        filter.b2_q24 = 0;
+    }
+
+    params.vibrato_lfo.enabled = true;
+    params.vibrato_lfo.delay_frames = 0;
+    params.vibrato_lfo.phase_step_q32 = std::uint32_t{1} << 27u;
+    params.vibrato_lfo.pitch_depth_cents = 47;
+
+    params.mod_lfo.enabled = true;
+    params.mod_lfo.delay_frames = 0;
+    params.mod_lfo.phase_step_q32 = std::uint32_t{1} << 26u;
+    params.mod_lfo.pitch_depth_cents = 73;
+    params.mod_lfo.filter_depth_cents = 144;
+    params.mod_lfo.gain_table.enabled = true;
+    for (std::size_t index = 0; index < params.mod_lfo.gain_table.points.size(); ++index) {
+        params.mod_lfo.gain_table.points[index].left =
+            18000 + static_cast<std::int32_t>(index * 900u);
+        params.mod_lfo.gain_table.points[index].right =
+            24500 - static_cast<std::int32_t>(index * 700u);
+    }
+
+    params.mod_envelope.enabled = true;
+    params.mod_envelope.envelope.attack_frames = 0;
+    params.mod_envelope.envelope.hold_frames = 0;
+    params.mod_envelope.envelope.decay_frames = 0;
+    params.mod_envelope.envelope.sustain_q15 = 17000;
+    params.mod_envelope.envelope.release_frames = 9;
+    params.mod_envelope.pitch_depth_cents = 81;
+    params.mod_envelope.filter_depth_cents = 96;
+    return params;
+}
+
+void testComplexContinuousDspFastPathIsBitExact() {
+    constexpr std::array<std::int16_t, 13> pcm{
+        -12000, -7000, -2000, 3000, 8000, 13000, 9000,
+        4000, -1000, -6000, -11000, -5000, 2000};
+
+    Fixture generic_fixture;
+    Fixture realtime_fixture;
+    assert(generic_fixture.publish(pcm.data(), pcm.size(), 1, 12));
+    assert(realtime_fixture.publish(pcm.data(), pcm.size(), 1, 12));
+
+    const VoiceStartParams params = complexContinuousParams();
+    assert(params.lowpass.valid());
+    assert(params.dynamic_lowpass_table.valid());
+    assert(params.vibrato_lfo.valid());
+    assert(params.mod_lfo.valid());
+    assert(params.mod_envelope.valid());
+
+    Voice generic;
+    Voice realtime;
+    assert(generic.start(generic_fixture.directory, params));
+    assert(realtime.start(realtime_fixture.directory, params));
+
+    // Cross multiple 16-frame modulation control ticks and many loop wraps.
+    constexpr std::size_t kSustainFrames = 128;
+    std::array<std::int32_t, kSustainFrames * 2> generic_mix{};
+    std::array<std::int32_t, kSustainFrames * 2> realtime_mix{};
+    const auto generic_result = generic.renderAdd(generic_mix.data(), kSustainFrames);
+    const auto realtime_result = realtime.renderAddRealtime(realtime_mix.data(), kSustainFrames);
+    assert(generic_mix == realtime_mix);
+    assertSameRenderState(generic, realtime, generic_result, realtime_result);
+    assert(!generic_result.finished);
+
+    // Release also exercises the wide filtered-sample gain path and the
+    // modulation-envelope release state while the loop remains continuous.
+    generic.noteOff();
+    realtime.noteOff();
+    constexpr std::size_t kReleaseFrames = 16;
+    std::array<std::int32_t, kReleaseFrames * 2> generic_release{};
+    std::array<std::int32_t, kReleaseFrames * 2> realtime_release{};
+    const auto generic_release_result = generic.renderAdd(
+        generic_release.data(), kReleaseFrames);
+    const auto realtime_release_result = realtime.renderAddRealtime(
+        realtime_release.data(), kReleaseFrames);
+    assert(generic_release == realtime_release);
+    assertSameRenderState(
+        generic,
+        realtime,
+        generic_release_result,
+        realtime_release_result);
+    assert(generic_release_result.finished);
+    assert(generic_fixture.directory.stats().live_voice_refs == 0);
+    assert(realtime_fixture.directory.stats().live_voice_refs == 0);
+}
+
 void testUntilReleaseModeFallsBackBitExact() {
     constexpr std::array<std::int16_t, 9> pcm{
         700, -1400, 2800, -5600, 11200, -5600, 2800, -1400, 700};
@@ -277,6 +395,7 @@ int main() {
     testQ15GainInt32ExtremesAreBitExact();
     testSimpleAttackDecayFastPathIsBitExact();
     testSimpleReleaseFastPathIsBitExact();
+    testComplexContinuousDspFastPathIsBitExact();
     testUntilReleaseModeFallsBackBitExact();
     std::cout << "Voice realtime fast-path checks passed\n";
     return 0;
