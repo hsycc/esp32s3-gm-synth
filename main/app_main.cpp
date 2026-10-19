@@ -12,6 +12,8 @@
 #include "esp_log.h"
 #include "esp_psram.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
 #include "esp_err.h"
@@ -54,6 +56,14 @@ void logInternalHeap(const char* phase) {
         static_cast<unsigned>(heap_caps_get_free_size(kCaps)),
         static_cast<unsigned>(heap_caps_get_largest_free_block(kCaps)),
         static_cast<unsigned>(heap_caps_get_minimum_free_size(kCaps)));
+}
+
+void yieldToIdleTask() {
+    // Qualification stages can synchronously occupy CPU0 for several seconds
+    // while scanning Flash or preparing samples. A one-tick blocked interval
+    // lets IDLE0 run and service the task watchdog without changing benchmark
+    // timing inside any measured stage.
+    vTaskDelay(1);
 }
 
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
@@ -242,6 +252,7 @@ extern "C" void app_main(void) {
 #endif
 
     runOptionalStorageBenchmark(arena);
+    yieldToIdleTask();
 
     if (!residency.begin(arena.data(), arena.capacity())) {
         ESP_LOGE(kTag, "SampleResidencyManager failed to initialize over PSRAM arena");
@@ -269,6 +280,7 @@ extern "C" void app_main(void) {
 
     logPsram("after Program Prepare", EspPsramArena::heapStats());
     logInternalHeap("after Program Prepare");
+    yieldToIdleTask();
 
 #ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
     if (!gm_synth::bringup::runPhysicalCleanSf2AudibleGate(residency)) {
@@ -277,22 +289,26 @@ extern "C" void app_main(void) {
     }
     logPsram("after clean SF2 audio", EspPsramArena::heapStats());
     logInternalHeap("after clean SF2 audio");
+    yieldToIdleTask();
 #endif
 
     if (!gm_synth::bringup::runOptionalRenderTimingBenchmark()) {
         ESP_LOGE(kTag, "Render timing benchmark FAILED");
         return;
     }
+    yieldToIdleTask();
 
     if (!gm_synth::bringup::runOptionalDspStageTimingBenchmark()) {
         ESP_LOGE(kTag, "DSP stage timing benchmark FAILED");
         return;
     }
+    yieldToIdleTask();
 
     if (!gm_synth::bringup::runOptionalEffectsTimingBenchmark()) {
         ESP_LOGE(kTag, "Effects timing benchmark FAILED");
         return;
     }
+    yieldToIdleTask();
 
     logPsram("after render benchmark", EspPsramArena::heapStats());
     logInternalHeap("after render benchmark");
