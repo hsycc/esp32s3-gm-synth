@@ -35,7 +35,6 @@ GAIN="${BUILD_DIR}/test_sf2_gain_clamp_qualification"
 NOTE_ON_MOD="${BUILD_DIR}/test_sf2_note_on_modulator"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
   firmware/sf2/Sf2ModulationMath.cpp \
-  firmware/sf2/Sf2PanMath.cpp \
   tests/sf2/test_sf2_note_on_modulator.cpp \
   -o "${NOTE_ON_MOD}"
 "${NOTE_ON_MOD}"
