@@ -376,6 +376,45 @@ bool buildZone(
     applyInstrumentValues(instrument_values, &zone.generators);
     zone.ignored_preset_generator_mask = applyPresetOffsets(preset_values, &zone.generators);
 
+    // A number of widely distributed SF2 banks (FluidR3 is the release
+    // qualification example) tag independent sample records as leftSample or
+    // rightSample while leaving sampleLink at its zero default. Those records
+    // are already referenced independently by the instrument zones. Expanding
+    // them as a reciprocal pair would duplicate voices, while rejecting them
+    // loses most of the bank. Treat only this specific broken-link shape as an
+    // independent mono side and fold the side designation into the authored
+    // pan. A genuinely reciprocal pair that happens to link to sample 0 is
+    // preserved for the normal stereo-pair path.
+    const std::uint16_t source_sample_type = sample.sample_type & 0x7fffu;
+    const bool source_is_left = source_sample_type == 4u;
+    const bool source_is_right = source_sample_type == 2u;
+    bool unlinked_stereo_fallback = false;
+    if ((source_is_left || source_is_right) && sample.sample_link == 0u) {
+        bool reciprocal_zero_pair = false;
+        if (sample_id != 0u) {
+            Sf2PdtaReader::SampleHeader sample_zero{};
+            if (!pdta.sampleHeader(0u, &sample_zero)) {
+                return false;
+            }
+            const std::uint16_t zero_type = sample_zero.sample_type & 0x7fffu;
+            reciprocal_zero_pair =
+                sample_zero.sample_link == sample_id &&
+                ((source_is_left && zero_type == 2u) ||
+                 (source_is_right && zero_type == 4u));
+        }
+        if (!reciprocal_zero_pair) {
+            unlinked_stereo_fallback = true;
+            zone.sample_link = 0;
+            zone.sample_type = static_cast<std::uint16_t>(
+                (sample.sample_type & 0x8000u) | 1u);
+            const std::int32_t base_pan = zone.generators.value(17);
+            const std::int32_t side_pan = source_is_left ? -500 : 500;
+            zone.generators.set(
+                17,
+                std::clamp<std::int32_t>(base_pan + side_pan, -500, 500));
+        }
+    }
+
     const auto gv = [&zone](std::uint16_t oper, std::int32_t fallback = 0) {
         return zone.generators.value(oper, fallback);
     };
@@ -415,8 +454,11 @@ bool buildZone(
     if (sample.isRom()) {
         zone.flags |= NativeZoneFlagRomSample;
     }
-    if ((sample.sample_type & 0x7fffu) != 1u) {
+    if ((zone.sample_type & 0x7fffu) != 1u) {
         zone.flags |= NativeZoneFlagStereoOrLinkedSample;
+    }
+    if (unlinked_stereo_fallback) {
+        zone.flags |= NativeZoneFlagUnlinkedStereoSideFallback;
     }
     if (preset_modulators != 0) {
         zone.flags |= NativeZoneFlagPresetModulatorsPresent;

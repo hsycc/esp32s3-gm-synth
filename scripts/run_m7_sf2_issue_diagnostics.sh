@@ -8,14 +8,25 @@ CXX="${CXX:-g++}"
 BUILD_DIR="${M7_SF2_BUILD_DIR:-build/m7-sf2-issues}"
 mkdir -p "${BUILD_DIR}"
 
+COMMON_SF2_SOURCES=(
+  firmware/sf2/Sf2PdtaReader.cpp
+  firmware/sf2/Sf2ResolvedZone.cpp
+  firmware/sf2/Sf2ZoneModulatorResolver.cpp
+  firmware/voice/PitchMath.cpp
+  firmware/sf2/Sf2PlaybackMaterializer.cpp
+  firmware/sf2/Sf2PlaybackProgramPreparer.cpp
+)
+
+COMPAT="${BUILD_DIR}/test_sf2_unlinked_stereo_compat"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  "${COMMON_SF2_SOURCES[@]}" \
+  tests/sf2/test_sf2_unlinked_stereo_compat.cpp \
+  -o "${COMPAT}"
+"${COMPAT}"
+
 DIAG="${BUILD_DIR}/test_sf2_issue_diagnostics"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
-  firmware/sf2/Sf2PdtaReader.cpp \
-  firmware/sf2/Sf2ResolvedZone.cpp \
-  firmware/sf2/Sf2ZoneModulatorResolver.cpp \
-  firmware/voice/PitchMath.cpp \
-  firmware/sf2/Sf2PlaybackMaterializer.cpp \
-  firmware/sf2/Sf2PlaybackProgramPreparer.cpp \
+  "${COMMON_SF2_SOURCES[@]}" \
   tests/gm/test_sf2_issue_diagnostics.cpp \
   -o "${DIAG}"
 

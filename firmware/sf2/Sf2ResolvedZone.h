@@ -58,6 +58,13 @@ enum NativeZoneFlag : std::uint32_t {
     // or replace default SoundFont modulators. They must not be silently lost.
     NativeZoneFlagPresetModulatorsPresent = 1u << 8,
     NativeZoneFlagInstrumentModulatorsPresent = 1u << 9,
+    // Compatibility normalization for widely deployed banks (notably
+    // FluidR3) whose shdr marks independent L/R sample sides but leaves
+    // sampleLink=0 instead of a valid reciprocal link. The resolver converts
+    // such an orphan side into one mono runtime dependency and folds the side
+    // designation into the static pan generator. A genuinely reciprocal pair
+    // linking to sample 0 remains a normal stereo pair and does not set this.
+    NativeZoneFlagUnlinkedStereoSideFallback = 1u << 10,
 };
 
 struct NativeResolvedZone {
