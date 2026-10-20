@@ -47,6 +47,13 @@ NOTE_ON_SET="${BUILD_DIR}/test_sf2_note_on_modulator_set"
   -o "${NOTE_ON_SET}"
 "${NOTE_ON_SET}"
 
+NOTE_ON_TARGETS="${BUILD_DIR}/test_sf2_note_on_modulator_targets"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  tests/sf2/test_sf2_note_on_modulator_targets.cpp \
+  -o "${NOTE_ON_TARGETS}"
+"${NOTE_ON_TARGETS}"
+
 KEY_INDEX="${BUILD_DIR}/test_playback_program_key_index"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
   tests/gm/test_playback_program_key_index.cpp \
