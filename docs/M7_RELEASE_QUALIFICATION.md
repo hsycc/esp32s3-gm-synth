@@ -1,12 +1,14 @@
 # M7 Release Qualification Checkpoint
 
-Checkpoint: `22b48b2f8ef58d01c3c0c39ddea47c7d40f330a9`
+Software/release-image checkpoint: `22b48b2f8ef58d01c3c0c39ddea47c7d40f330a9`
 
-M7 remains **ACTIVE** until the dedicated physical long-run and audible-release sampling are completed. This document freezes the software/CI evidence so the remaining hardware work cannot silently redefine compatibility claims.
+Physical long-run evidence: `benchmarks/M7_PHYSICAL_LONGRUN_2026-10-20.md`.
+
+M7 remains **ACTIVE** while representative audible-release observations and the planned compatibility extensions are still open. The automated N16R8 physical long-run itself is now closed PASS.
 
 ## Software release matrix
 
-The production `Sf2PlaybackProgramPreparer` now classifies complete native SoundFonts program-by-program. Acceptance means `StrictQualified`; unsupported or malformed programs remain explicit rejects rather than being silently approximated.
+The production `Sf2PlaybackProgramPreparer` classifies complete native SoundFonts program-by-program. Acceptance means `StrictQualified`; unsupported or malformed programs remain explicit rejects rather than being silently approximated.
 
 | Bank | Presets | StrictQualified | Explicit reject | Main release limitations |
 |---|---:|---:|---:|---|
@@ -24,18 +26,18 @@ This is **not** a claim of general reciprocal linked-stereo support. A genuine l
 
 ## Large-program boundary
 
-The release runtime deliberately keeps `PlaybackProgramSnapshot::kMaxZones=256`; this is also the realtime NoteOn scan bound and must not be raised merely to improve import percentages.
+The current release runtime keeps `PlaybackProgramSnapshot::kMaxZones=256`; this is a realtime linear-scan bound and must not simply be raised to 720 to improve import percentages.
 
 Measured rejected large-program shapes are:
 
 - GeneralUser GS: 4 programs, up to 320 zones; maximum 25 key candidates and 5 key+velocity matches.
 - FluidR3 GM: 12 programs, up to 720 zones; maximum 36 key candidates and 8 key+velocity matches.
 
-These measurements point toward a future compact key-indexed snapshot rather than a 720-entry linear realtime scan. The programs remain explicit release rejects in M7.
+The next compatibility stage therefore targets a compact caller-owned key index prepared outside the audio domain. The intent is to make NoteOn inspect only the key's candidate span rather than linearly scanning every zone while preserving the existing READY/commit/ACK lifetime contract.
 
 ## M7.2 / robustness evidence
 
-CI also covers:
+CI covers:
 
 - 16-channel active playback with Program Change while published Voice references remain live;
 - Prepare -> READY -> block-boundary commit -> ACK ownership transitions;
@@ -43,42 +45,39 @@ CI also covers:
 - deterministic malformed-SF2 rejection for short/truncated/invalid RIFF forms without crash;
 - tracked GM128 matrix and full-bank cache/residency/runtime gates.
 
-## Dedicated physical long-run image
+## Dedicated physical long-run result
 
-`esp-idf-m7-release-build` produces a separate N16R8 image rather than modifying the established M6 hwbench baseline.
+`esp-idf-m7-release-build` produces a separate N16R8 image rather than modifying the established M6 hwbench baseline. The release profile is ESP32-S3 N16R8 at 240 MHz, 4.50 MiB PCM residency arena, ES8311 physical I2S, 44.1 kHz/64-frame blocks, 8 x 64-frame DMA descriptors, and `131072` measured blocks per long-run window (~190.22 s).
 
-Release profile:
+The 2026-10-20 hardware run completed both long windows.
 
-- ESP32-S3 N16R8, 240 MHz;
-- 4.50 MiB PCM residency arena;
-- ES8311 / Korvo physical I2S path;
-- 44.1 kHz, 64-frame renderer blocks;
-- 8 x 64-frame DMA descriptors (~11.61 ms configured DMA window);
-- `131072` measured blocks = about `190.22 s` continuous measured streaming;
-- production-shaped sustain/release/percussion/pitch/CC/Program-Change/GM-Reset phases distributed across the full measured interval;
-- the same backlog-aware hard realtime model closed in M6.
+Clean real-SF2 long run:
 
-The build artifact also carries `tools/m7_release/physical_report.py`. A captured serial log is qualified with:
+- 131072 measured blocks;
+- render avg/max `122/935 us`;
+- producer avg/max `126/939 us`;
+- zero soft work overruns and zero backlog;
+- `HARD_GATE failure_flags=0x00000000`;
+- zero stalls/timeouts/partial writes/active queue overflows/clipping;
+- `i2s_qual: PASS` and `clean_sf2: PASS`.
 
-```bash
-python3 tools/m7_release/physical_report.py reports/local/m7-release.log \
-  --json reports/local/m7-release.json \
-  --markdown reports/local/m7-release.md
-```
+Production-shaped music stress:
 
-Automated physical PASS requires, among other gates:
+- 131072 measured blocks / 118 scheduled events;
+- render avg/max `737/1870 us`;
+- producer avg/max `740/1874 us`;
+- four transient render and producer soft overruns;
+- maximum backlog `423 us` / one block, maximum recovery horizon 19 blocks;
+- final backlog `0 us`;
+- minimum DMA margin `11187 us` against the `11610 us` DMA window;
+- backlog never crossed the DMA window;
+- zero stalls/timeouts/partial writes/active queue overflows/clipping;
+- `HARD_GATE failure_flags=0x00000000`;
+- `music_stress: PASS`, `i2s_qual: PASS`, `effects_bench: PASS final_refs=0`.
 
-- at least 131072 measured blocks;
-- `HARD_GATE failure_flags=0`;
-- zero active synth queue overflow, producer stall, write timeout and partial write;
-- no clipping;
-- stack headroom gate PASS;
-- `backlog_exceeded_dma_window=0`;
-- `final_backlog_us=0` and `backlog_healthy=1`;
-- normal/full-FX maximum >= 24 and heavy-DSP maximum >= 8;
-- music-stress PASS, I2S PASS and zero leaked final Voice refs.
+The same run re-confirmed the established product envelope: normal/full-FX maximum 24 voices with first tested unstable step 28, and pathological-heavy maximum 8 voices with first unstable step 12.
 
-The report parser has deterministic host tests for clean PASS, hard-gate failure, queue overflow, unrecovered/DMA-exceeding backlog, insufficient measured duration, missing telemetry and panic markers.
+See `benchmarks/M7_PHYSICAL_LONGRUN_2026-10-20.md` for the retained metrics and semantic counters.
 
 ## Audible evidence boundary
 
@@ -88,15 +87,15 @@ The current Korvo/ES8311 qualification output is mono: renderer L/R is averaged 
 
 For M7 closure:
 
-- use the existing real-SF2 dry cue for pitch/envelope sanity;
-- add/document representative sustained/loop, drum and FX listening samples;
+- retain the existing real-SF2 dry cue for pitch/envelope sanity;
+- record representative sustained/loop, drum and FX listening observations;
 - use host/stereo PCM evidence for left/right and pan semantics, with physical mono-downmix as the N16R8 hardware check;
 - do not describe the mono Korvo listening run as a true stereo audition.
 
-## Remaining M7 hardware work
+## Remaining M7 work
 
-1. Flash the `esp32s3-n16r8-m7-release-longrun` artifact from checkpoint `22b48b2f`.
-2. Capture one complete boot/qualification serial log through the end of the 131072-block run.
-3. Run `physical_report.py` and retain its JSON/Markdown evidence.
-4. Record the representative audible observations separately.
-5. Only then mark M7 complete and freeze product-facing compatibility/polyphony wording.
+1. Extend only the real-bank custom-modulator routes that can be represented with correct SF2 semantics; keep unsupported routes explicit rather than silently dropping them.
+2. Replace the >256-zone linear NoteOn boundary with a compact key-indexed snapshot so the observed 320–720-zone presets remain bounded in realtime.
+3. Investigate the remaining invalid-loop and scale-tuning special cases after those two broad compatibility classes are closed.
+4. Record representative audible observations separately.
+5. Re-run an appropriate physical regression after realtime-core compatibility changes, then freeze final public compatibility/polyphony wording.
