@@ -24,6 +24,14 @@ COMPAT="${BUILD_DIR}/test_sf2_unlinked_stereo_compat"
   -o "${COMPAT}"
 "${COMPAT}"
 
+GAIN="${BUILD_DIR}/test_sf2_gain_clamp_qualification"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  firmware/voice/PitchMath.cpp \
+  firmware/sf2/Sf2PlaybackMaterializer.cpp \
+  tests/sf2/test_sf2_gain_clamp_qualification.cpp \
+  -o "${GAIN}"
+"${GAIN}"
+
 DIAG="${BUILD_DIR}/test_sf2_issue_diagnostics"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
   "${COMMON_SF2_SOURCES[@]}" \

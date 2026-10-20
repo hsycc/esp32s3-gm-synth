@@ -23,6 +23,14 @@ constexpr std::uint64_t kHardIssueMask =
     PlaybackIssueInvalidPhaseIncrement |
     PlaybackIssueInvalidFixedVelocity;
 
+// A negative intermediate attenuation is legal SF2 summing-node input. The
+// final attenuation path clamps to [0, 1440] cB before converting to gain, so a
+// negative preset offset may cancel velocity/controller attenuation but never
+// amplifies above unity. Keep the historical issue bit for diagnostics while
+// excluding it from StrictQualified compatibility decisions.
+constexpr std::uint64_t kStrictQualificationIssueMask =
+    ~static_cast<std::uint64_t>(PlaybackIssueGainAboveUnityClamped);
+
 std::uint32_t timecentsToFrames(std::int32_t timecents, std::uint32_t sample_rate) {
     if (sample_rate == 0) {
         return 0;
@@ -448,7 +456,7 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     }
 
     *output = candidate;
-    result.status = issues == PlaybackIssueNone
+    result.status = (issues & kStrictQualificationIssueMask) == PlaybackIssueNone
         ? PlaybackMaterializationStatus::Qualified
         : PlaybackMaterializationStatus::Preview;
     return result;
