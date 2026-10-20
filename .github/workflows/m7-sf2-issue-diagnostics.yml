@@ -1,0 +1,72 @@
+name: m7-sf2-issue-diagnostics
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "firmware/sf2/**"
+      - "tests/gm/test_sf2_issue_diagnostics.cpp"
+      - "scripts/run_m7_sf2_issue_diagnostics.sh"
+      - "assets/sf2/full/**"
+      - "assets/sf2/subsets/**"
+      - ".github/workflows/m7-sf2-issue-diagnostics.yml"
+
+jobs:
+  diagnose-representative-native-sf2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: Materialize representative full-bank LFS assets where available
+        shell: bash
+        run: |
+          set -u
+          assets=(
+            "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+            "assets/sf2/full/GeneralUser-GS.sf2"
+            "assets/sf2/full/FluidR3_GM.sf2"
+          )
+          if ! git lfs version >/dev/null 2>&1; then
+            echo "Git LFS unavailable; subset fallbacks remain available for optional banks."
+            exit 0
+          fi
+          git lfs install --local
+          for full in "${assets[@]}"; do
+            set +e
+            git lfs pull --include="${full}" --exclude=""
+            status=$?
+            set -e
+            if [[ "${status}" -ne 0 ]]; then
+              echo "LFS object unavailable for ${full}; optional banks may use deterministic subset fallback."
+            fi
+          done
+
+      - name: Run M7 issue diagnostics
+        shell: bash
+        run: |
+          bash scripts/run_m7_sf2_issue_diagnostics.sh
+
+      - name: Publish issue summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f build/m7-sf2-issues/issue-summary.txt ]]; then
+            {
+              echo '## M7 native-SF2 issue diagnostics'
+              echo '```text'
+              cat build/m7-sf2-issues/issue-summary.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload M7 issue diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m7-sf2-issue-diagnostics
+          path: build/m7-sf2-issues/
+          if-no-files-found: error
