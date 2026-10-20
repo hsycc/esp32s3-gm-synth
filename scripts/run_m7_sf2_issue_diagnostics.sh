@@ -79,6 +79,14 @@ ZONE_SHAPE="${BUILD_DIR}/test_sf2_zone_shape_inventory"
   tests/gm/test_sf2_zone_shape_inventory.cpp \
   -o "${ZONE_SHAPE}"
 
+PREPARED_ROUTE_INVENTORY="${BUILD_DIR}/test_sf2_prepared_note_on_route_inventory"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  firmware/sf2/Sf2PdtaReader.cpp \
+  firmware/sf2/Sf2ResolvedZone.cpp \
+  firmware/sf2/Sf2PreparedNoteOnRouteResolver.cpp \
+  tests/gm/test_sf2_prepared_note_on_route_inventory.cpp \
+  -o "${PREPARED_ROUTE_INVENTORY}"
+
 is_real_sf2() {
   local path="$1"
   [[ -s "${path}" ]] || return 1
@@ -105,6 +113,8 @@ run_one() {
   "${DIAG}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.issues.log"
   "${MOD_INVENTORY}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.modulators.log"
   "${ZONE_SHAPE}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.zone-shape.log"
+  "${PREPARED_ROUTE_INVENTORY}" "${path}" "${asset}" | \
+    tee "${BUILD_DIR}/${asset}.prepared-routes.log"
   python3 tools/m7_release/modulator_closure.py \
     "${BUILD_DIR}/${asset}.modulators.log" \
     --asset "${asset}" | tee "${BUILD_DIR}/${asset}.modulator-closure.log"
@@ -127,6 +137,7 @@ run_one "${FLUID_PATH}" fluidr3_gm
     grep '^M7_MOD_SUMMARY' "${BUILD_DIR}/${asset}.modulators.log" || true
     grep '^M7_MOD_CLOSURE_SUMMARY' "${BUILD_DIR}/${asset}.modulator-closure.log" || true
     grep '^M7_MOD_CLOSURE_CATEGORY' "${BUILD_DIR}/${asset}.modulator-closure.log" || true
+    grep '^M7_PREPARED_ROUTE_SUMMARY' "${BUILD_DIR}/${asset}.prepared-routes.log" || true
     grep '^M7_ZONE_SHAPE_SUMMARY' "${BUILD_DIR}/${asset}.zone-shape.log" || true
     echo
   done
