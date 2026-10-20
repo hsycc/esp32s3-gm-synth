@@ -159,9 +159,12 @@ config GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS
 config GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS
     int "I2S measured blocks"
     default 4096
-    range 128 32768
+    range 128 262144
     help
         4096 blocks is about 5.94 seconds at 44.1 kHz / 64 frames per block.
+        The normal physical M6 image uses 16384 blocks (~23.78 s). Dedicated
+        M7 release long-run images may use 131072 blocks (~190.22 s) while
+        retaining the same fixed-size aggregate timing/backlog telemetry.
 
 config GM_SYNTH_I2S_QUAL_WRITE_TIMEOUT_MS
     int "I2S blocking write timeout (ms)"
