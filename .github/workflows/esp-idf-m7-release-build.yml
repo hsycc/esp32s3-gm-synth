@@ -1,0 +1,105 @@
+name: esp-idf-m7-release-build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "sdkconfig.defaults"
+      - "sdkconfig.m7release.defaults"
+      - "partitions_qemu.csv"
+      - "main/**"
+      - "firmware/**"
+      - "scripts/build_m7_release_idf.sh"
+      - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
+      - ".github/workflows/esp-idf-m7-release-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-m7-release-longrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pinned ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: "v6.1"
+
+      - name: Build physical N16R8 M7 release long-run image
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p reports
+          set +e
+          bash scripts/build_m7_release_idf.sh 2>&1 | tee reports/m7-release-build.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "${status}" -ne 0 ]]; then
+            diagnostics="$(grep -E -C 3 'fatal error:|error:|undefined reference|CMake Error|FAILED:|ninja: build stopped' reports/m7-release-build.log | tail -n 240 || true)"
+            {
+              echo "### M7 physical long-run build diagnostics"
+              echo '```text'
+              if [[ -n "${diagnostics}" ]]; then
+                printf '%s\n' "${diagnostics}"
+              else
+                tail -n 120 reports/m7-release-build.log
+              fi
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          exit "${status}"
+
+      - name: Publish resolved release profile
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo '## M7 physical release image'
+            echo
+            echo '- target: ESP32-S3 N16R8'
+            echo '- measured blocks: 131072'
+            echo '- frames/block: 64'
+            echo '- measured streaming interval: ~190.22 s'
+            echo '- DMA: 8 descriptors x 64 frames'
+            echo '- hard gate: backlog/DMA/write/active-queue/clipping/stack health'
+            echo
+            echo '```text'
+            grep -E '^CONFIG_GM_SYNTH_(PCM_ARENA_BYTES|I2S_QUAL_(MEASURE_BLOCKS|DMA_DESC_NUM|DMA_FRAME_NUM|TASK_CORE|TASK_PRIORITY))=' sdkconfig.m7release
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload M7 release build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-n16r8-m7-release-build-diagnostics
+          path: |
+            reports/m7-release-build.log
+            sdkconfig.m7release
+            build-m7-release/esp32s3_gm_synth.map
+          if-no-files-found: warn
+
+      - name: Upload physical N16R8 M7 release long-run image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-n16r8-m7-release-longrun
+          path: |
+            build-m7-release/bootloader/bootloader.bin
+            build-m7-release/partition_table/partition-table.bin
+            build-m7-release/esp32s3_gm_synth.bin
+            build-m7-release/esp32s3_gm_synth.elf
+            build-m7-release/esp32s3_gm_synth.map
+            build-m7-release/qemu_sf2.bin
+            build-m7-release/flash_args
+            build-m7-release/flasher_args.json
+            sdkconfig.m7release
+            sdkconfig.m7release.defaults
+          if-no-files-found: error
