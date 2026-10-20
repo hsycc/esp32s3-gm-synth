@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sample/ProgramSnapshot.h"
+#include "sf2/Sf2FilterMath.h"
 #include "sf2/Sf2ModulationMath.h"
 #include "voice/VoiceRenderer.h"
 
@@ -45,10 +46,10 @@ struct NoteOnFilterConfig {
     std::int32_t initial_cutoff_cents = 13500;
     std::int32_t velocity_to_cutoff_cents = -2400;
     std::int16_t resonance_cb = 0;
-    // File-defined negative-linear NoteOn velocity -> initialFilterQ route.
-    // The contribution is evaluated once at NoteOn before Q24 coefficients and
-    // the SoundFont Q/2 gain compensation are prepared.
-    std::int32_t velocity_to_resonance_cb = 0;
+    // File-defined NoteOn velocity -> initialFilterQ routes. The historical
+    // single negative-linear amount remains assignment-compatible, while the
+    // prepared payload also carries the real-bank dual-source velocity route.
+    sf2::Sf2FilterQNoteOnModulation velocity_to_resonance_cb{};
     // Additional file-defined immutable NoteOn key/velocity sources targeting
     // initialFilterFc. Source-oper carries linear/concave/convex/switch plus
     // direction/polarity, so adding a new supported source shape no longer
@@ -64,6 +65,7 @@ struct NoteOnFilterConfig {
         }
         if (initial_cutoff_cents < 1500 || initial_cutoff_cents > 13500 ||
             resonance_cb < 0 || resonance_cb > 960 ||
+            !velocity_to_resonance_cb.valid() ||
             additional_cutoff_route_count > additional_cutoff_routes.size()) {
             return false;
         }

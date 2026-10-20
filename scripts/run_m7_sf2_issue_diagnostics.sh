@@ -54,6 +54,14 @@ NOTE_ON_TARGETS="${BUILD_DIR}/test_sf2_note_on_modulator_targets"
   -o "${NOTE_ON_TARGETS}"
 "${NOTE_ON_TARGETS}"
 
+FILTER_Q_NOTE_ON="${BUILD_DIR}/test_sf2_filter_q_note_on_modulation"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  firmware/sf2/Sf2FilterMath.cpp \
+  tests/sf2/test_sf2_filter_q_note_on_modulation.cpp \
+  -o "${FILTER_Q_NOTE_ON}"
+"${FILTER_Q_NOTE_ON}"
+
 KEY_INDEX="${BUILD_DIR}/test_playback_program_key_index"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
   tests/gm/test_playback_program_key_index.cpp \

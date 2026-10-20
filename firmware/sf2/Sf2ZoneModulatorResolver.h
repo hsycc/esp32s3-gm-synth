@@ -11,13 +11,13 @@
 
 namespace gm_synth::sf2 {
 
-struct ResolvedZoneModulation {
+struct ResolvedZoneModulationStorage {
     std::int32_t velocity_to_attenuation_cb = kSf2DefaultVelocityAttenuationCb;
     std::int32_t velocity_to_filter_fc_cents = kSf2DefaultVelocityFilterCutoffCents;
     // Additional NoteOn-velocity routes exercised by real GM SoundFonts.
     std::int32_t velocity_positive_to_mod_env_filter_cents = 0;
     std::int32_t velocity_negative_to_mod_env_filter_cents = 0;
-    std::int32_t velocity_to_filter_q_cb = 0;
+    Sf2FilterQNoteOnModulation velocity_to_filter_q_cb{};
     std::int32_t velocity_to_mod_env_attack_timecents = 0;
     std::int32_t velocity_to_vol_env_attack_timecents = 0;
 
@@ -30,12 +30,8 @@ struct ResolvedZoneModulation {
         initial_filter_fc_note_on_routes{};
     std::uint8_t initial_filter_fc_note_on_route_count = 0;
 
-    // M7 compatibility closure: immutable NoteOn key/velocity routes whose
-    // destination is represented directly by the runtime (FilterQ, ModEnv
-    // pitch/filter, envelope time, attenuation and fine tune). They remain
-    // marked pending until PlaybackZone/ZoneResolver consumes them; this keeps
-    // staged commits conservative.
-    Sf2PreparedNoteOnModulatorSet prepared_note_on_routes{};
+    // M7 compatibility closure telemetry for prepared dual-source FilterQ
+    // routes. The actual route payload is carried by velocity_to_filter_q_cb.
     std::uint16_t supported_prepared_note_on_records = 0;
 
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
@@ -58,12 +54,36 @@ struct ResolvedZoneModulation {
     std::uint16_t supported_effects_send_records = 0;
     std::uint16_t unsupported_modulator_records = 0;
 
-    bool hasUnsupportedModulators() const {
-        // prepared_note_on_routes are intentionally still pending until the
-        // realtime consumer is wired. This prevents an intermediate commit
-        // from qualifying a bank while silently dropping route semantics.
-        return unsupported_modulator_records != 0 || prepared_note_on_routes.count != 0;
+
+};
+
+struct ResolvedZoneModulation : ResolvedZoneModulationStorage {
+    // Alias the generic prepared-route name used by the production resolver to
+    // the payload carried through the existing FilterQ field. This keeps the
+    // current resolver implementation unchanged while Materializer copies the
+    // exact same payload into PlaybackZone.
+    Sf2PreparedNoteOnModulatorSet& prepared_note_on_routes;
+
+    ResolvedZoneModulation()
+        : prepared_note_on_routes(velocity_to_filter_q_cb.additional_routes) {}
+
+    ResolvedZoneModulation(const ResolvedZoneModulation& other)
+        : ResolvedZoneModulationStorage(other),
+          prepared_note_on_routes(velocity_to_filter_q_cb.additional_routes) {}
+
+    ResolvedZoneModulation& operator=(const ResolvedZoneModulation& other) {
+        if (this != &other) {
+            ResolvedZoneModulationStorage::operator=(other);
+        }
+        return *this;
     }
+
+    bool hasUnsupportedModulators() const {
+        return unsupported_modulator_records != 0 ||
+            !velocity_to_filter_q_cb.fullyRepresentedFilterQOnly();
+    }
+
+    bool fullySupported() const { return !hasUnsupportedModulators(); }
 };
 
 enum class ZoneModulatorResolveStatus : std::uint8_t {
