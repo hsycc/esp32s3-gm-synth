@@ -40,6 +40,12 @@ NOTE_ON_MOD="${BUILD_DIR}/test_sf2_note_on_modulator"
   -o "${NOTE_ON_MOD}"
 "${NOTE_ON_MOD}"
 
+NOTE_ON_SET="${BUILD_DIR}/test_sf2_note_on_modulator_set"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  tests/sf2/test_sf2_note_on_modulator_set.cpp \
+  -o "${NOTE_ON_SET}"
+"${NOTE_ON_SET}"
+
 KEY_INDEX="${BUILD_DIR}/test_playback_program_key_index"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
   tests/gm/test_playback_program_key_index.cpp \
