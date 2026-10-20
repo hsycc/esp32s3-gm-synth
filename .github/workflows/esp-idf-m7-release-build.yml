@@ -11,6 +11,8 @@ on:
       - "main/**"
       - "firmware/**"
       - "scripts/build_m7_release_idf.sh"
+      - "tools/m7_release/**"
+      - "tests/test_m7_release_physical_report.py"
       - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
       - ".github/workflows/esp-idf-m7-release-build.yml"
 
@@ -24,6 +26,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Validate M7 physical log report contract
+        run: python3 -m unittest tests.test_m7_release_physical_report -v
 
       - name: Install pinned ESP-IDF
         uses: espressif/install-esp-idf-action@v1
@@ -69,6 +74,7 @@ jobs:
             echo '- measured streaming interval: ~190.22 s'
             echo '- DMA: 8 descriptors x 64 frames'
             echo '- hard gate: backlog/DMA/write/active-queue/clipping/stack health'
+            echo '- log validator: tools/m7_release/physical_report.py'
             echo
             echo '```text'
             grep -E '^CONFIG_GM_SYNTH_(PCM_ARENA_BYTES|I2S_QUAL_(MEASURE_BLOCKS|DMA_DESC_NUM|DMA_FRAME_NUM|TASK_CORE|TASK_PRIORITY))=' sdkconfig.m7release
@@ -102,4 +108,5 @@ jobs:
             build-m7-release/flasher_args.json
             sdkconfig.m7release
             sdkconfig.m7release.defaults
+            tools/m7_release/physical_report.py
           if-no-files-found: error

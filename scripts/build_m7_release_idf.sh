@@ -6,7 +6,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build-m7-release"
 SDKCONFIG_PATH="$ROOT_DIR/sdkconfig.m7release"
-STAGING_DIR="$ROOT_DIR/.m7_release_sf2_data"
+# Reuse the same staging path consumed by the shared CMake raw-FATFS fixture.
+# M7 has an independent sdkconfig/build directory, but CMake intentionally has
+# one canonical fixture mount path for QEMU and physical qualification images.
+STAGING_DIR="$ROOT_DIR/.qemu_sf2_data"
 FIXTURE_SOURCE="$ROOT_DIR/assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
 FIXTURE_TARGET="$STAGING_DIR/test.sf2"
 FIXTURE_SHA256="9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62"
