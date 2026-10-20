@@ -97,6 +97,9 @@ run_one() {
   "${DIAG}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.issues.log"
   "${MOD_INVENTORY}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.modulators.log"
   "${ZONE_SHAPE}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.zone-shape.log"
+  python3 tools/m7_release/modulator_closure.py \
+    "${BUILD_DIR}/${asset}.modulators.log" \
+    --asset "${asset}" | tee "${BUILD_DIR}/${asset}.modulator-closure.log"
 }
 
 FM_PATH="assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
@@ -114,6 +117,8 @@ run_one "${FLUID_PATH}" fluidr3_gm
     grep '^M7_ISSUE_SUMMARY' "${BUILD_DIR}/${asset}.issues.log" || true
     grep '^M7_ISSUE_COUNT' "${BUILD_DIR}/${asset}.issues.log" | grep -v 'rejected_programs=0$' || true
     grep '^M7_MOD_SUMMARY' "${BUILD_DIR}/${asset}.modulators.log" || true
+    grep '^M7_MOD_CLOSURE_SUMMARY' "${BUILD_DIR}/${asset}.modulator-closure.log" || true
+    grep '^M7_MOD_CLOSURE_CATEGORY' "${BUILD_DIR}/${asset}.modulator-closure.log" || true
     grep '^M7_ZONE_SHAPE_SUMMARY' "${BUILD_DIR}/${asset}.zone-shape.log" || true
     echo
   done
