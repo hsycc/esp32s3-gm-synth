@@ -2,6 +2,7 @@
 
 #include "Sf2FilterMath.h"
 #include "Sf2ModulationMath.h"
+#include "Sf2NoteOnModulatorSet.h"
 #include "Sf2PdtaReader.h"
 
 #include <array>
@@ -29,6 +30,14 @@ struct ResolvedZoneModulation {
         initial_filter_fc_note_on_routes{};
     std::uint8_t initial_filter_fc_note_on_route_count = 0;
 
+    // M7 compatibility closure: immutable NoteOn key/velocity routes whose
+    // destination is represented directly by the runtime (FilterQ, ModEnv
+    // pitch/filter, envelope time, attenuation and fine tune). They remain
+    // marked pending until PlaybackZone/ZoneResolver consumes them; this keeps
+    // staged commits conservative.
+    Sf2PreparedNoteOnModulatorSet prepared_note_on_routes{};
+    std::uint16_t supported_prepared_note_on_records = 0;
+
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t pan_amount = kSf2DefaultPanAmount;
     std::int32_t expression_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
@@ -50,7 +59,10 @@ struct ResolvedZoneModulation {
     std::uint16_t unsupported_modulator_records = 0;
 
     bool hasUnsupportedModulators() const {
-        return unsupported_modulator_records != 0;
+        // prepared_note_on_routes are intentionally still pending until the
+        // realtime consumer is wired. This prevents an intermediate commit
+        // from qualifying a bank while silently dropping route semantics.
+        return unsupported_modulator_records != 0 || prepared_note_on_routes.count != 0;
     }
 };
 

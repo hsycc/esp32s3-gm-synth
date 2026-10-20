@@ -68,6 +68,7 @@ struct ModulatorScan {
     RouteValue modulation_wheel_vibrato{};
     RouteValue reverb_send{};
     RouteValue chorus_send{};
+    Sf2PreparedNoteOnModulatorSet prepared_note_on{};
 
     std::uint32_t supported_velocity_records = 0;
     std::uint32_t supported_velocity_filter_records = 0;
@@ -76,6 +77,7 @@ struct ModulatorScan {
     std::uint32_t supported_channel_control_records = 0;
     std::uint32_t supported_vibrato_records = 0;
     std::uint32_t supported_effects_send_records = 0;
+    std::uint32_t supported_prepared_note_on_records = 0;
     std::uint32_t unsupported_records = 0;
 };
 
@@ -251,6 +253,30 @@ bool isIgnoredSf201VelocityFilterCancellation(
            modulator.amount_source_oper == 0x0D02u &&
            modulator.transform_oper == 0 &&
            modulator.amount == 0;
+}
+
+bool isPreparedNoteOnRuntimeRoute(const Sf2PdtaReader::Modulator& modulator) {
+    if (modulator.transform_oper != 0 ||
+        !isSupportedSf2NoteOnSourceOper(modulator.source_oper) ||
+        (modulator.amount_source_oper != 0 &&
+         !isSupportedSf2NoteOnSourceOper(modulator.amount_source_oper)) ||
+        !isPreparedNoteOnDestination(modulator.destination_oper)) {
+        return false;
+    }
+
+    // Pan stays explicit until stereo-side base pan is represented separately;
+    // otherwise the required generator clamp would occur in the wrong order.
+    return modulator.destination_oper != kPanDestination;
+}
+
+Sf2PreparedNoteOnModulator preparedRoute(
+    const Sf2PdtaReader::Modulator& modulator) {
+    return Sf2PreparedNoteOnModulator{
+        modulator.source_oper,
+        modulator.destination_oper,
+        modulator.amount,
+        modulator.amount_source_oper,
+    };
 }
 
 void remember(RouteValue* route, const Sf2PdtaReader::Modulator& modulator) {
@@ -439,6 +465,14 @@ bool scanModulators(
         } else if (exactRoute(modulator, kChorusSourceOper, kChorusDestination)) {
             remember(&scan.chorus_send, modulator);
             ++scan.supported_effects_send_records;
+        } else if (isPreparedNoteOnRuntimeRoute(modulator)) {
+            if (replacePreparedNoteOnModulator(
+                    &scan.prepared_note_on,
+                    preparedRoute(modulator))) {
+                ++scan.supported_prepared_note_on_records;
+            } else {
+                ++scan.unsupported_records;
+            }
         } else {
             ++scan.unsupported_records;
         }
@@ -586,6 +620,26 @@ ResolvedZoneModulation combine(
         preset_local.chorus_send,
         instrument_global.chorus_send,
         instrument_local.chorus_send);
+
+    const std::uint32_t prepared_records = sumCategory(
+        &ModulatorScan::supported_prepared_note_on_records,
+        preset_global, preset_local, instrument_global, instrument_local);
+    if (combinePreparedNoteOnLevels(
+            preset_global.prepared_note_on,
+            preset_local.prepared_note_on,
+            instrument_global.prepared_note_on,
+            instrument_local.prepared_note_on,
+            &resolved.prepared_note_on_routes)) {
+        resolved.supported_prepared_note_on_records = clampU16(prepared_records);
+    } else {
+        // Conservative overflow behavior: do not publish a partial route set.
+        // The raw records remain explicit unsupported telemetry.
+        resolved.prepared_note_on_routes = Sf2PreparedNoteOnModulatorSet{};
+        resolved.supported_prepared_note_on_records = 0;
+        route_overflow_records = saturatingAdd32(
+            route_overflow_records,
+            prepared_records);
+    }
 
     resolved.supported_velocity_attenuation_records = clampU16(sumCategory(
         &ModulatorScan::supported_velocity_records,
@@ -827,7 +881,9 @@ ZoneModulatorResolveStatus Sf2ZoneModulatorResolver::resolveProgram(
                     resolved.supported_channel_control_records,
                     saturatingAdd32(
                         resolved.supported_vibrato_records,
-                        resolved.supported_effects_send_records)));
+                        saturatingAdd32(
+                            resolved.supported_effects_send_records,
+                            resolved.supported_prepared_note_on_records))));
             result->supported_records = saturatingAdd32(
                 result->supported_records,
                 saturatingAdd32(velocity_supported, other_supported));
