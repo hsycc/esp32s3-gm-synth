@@ -8,6 +8,8 @@ CXX="${CXX:-g++}"
 BUILD_DIR="${M7_SF2_BUILD_DIR:-build/m7-sf2-issues}"
 mkdir -p "${BUILD_DIR}"
 
+python3 -m unittest tests.test_m7_modulator_closure -v
+
 COMMON_SF2_SOURCES=(
   firmware/sf2/Sf2PdtaReader.cpp
   firmware/sf2/Sf2ResolvedZone.cpp
