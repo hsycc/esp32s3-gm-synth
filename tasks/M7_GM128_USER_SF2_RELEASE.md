@@ -4,6 +4,9 @@ Status: **ACTIVE**
 
 M7 starts from the completed M6 physical baseline at `c16ff278b265018be9d2af5cc4fe3e54fe01e947`.
 
+Current software/release-image checkpoint: `22b48b2f8ef58d01c3c0c39ddea47c7d40f330a9`.
+See `docs/M7_RELEASE_QUALIFICATION.md` for the frozen software compatibility matrix and the remaining physical evidence contract.
+
 ## Goal
 
 Turn the existing SF2/GM engine from a physically qualified implementation into a repeatable release-qualified product path for the tracked GM128 bank and representative user-supplied native `.sf2` assets.
@@ -61,84 +64,56 @@ M7.0 passes only when all 128 melodic and all 128 tracked percussion-bank progra
 
 ## M7.1 — Representative multi-bank native-SF2 matrix
 
-Next, generalize the M7.0 runner so the same report schema can qualify multiple native `.sf2` assets without requiring a private compiled-bank format.
+The generalized release scanner now classifies complete native `.sf2` banks program-by-program and keeps unsupported features as explicit release rejects.
 
-Representative classes should include:
+Current full-bank checkpoint:
 
-- the tracked compact FM/GM bank;
-- GeneralUser GS or another complete mainstream GM/GS bank;
-- a larger or structurally more complex user-style SF2 with stereo/modulation features.
+- FM/GM Open: 5760 / 5760 presets StrictQualified;
+- GeneralUser GS: 243 / 287 StrictQualified, with 44 explicit rejects;
+- FluidR3 GM: 173 / 189 StrictQualified, with 16 explicit rejects.
 
-For each bank record:
-
-- discovered Bank/Program coverage;
-- prepare pass/failure reasons;
-- dependency and working-set distribution;
-- maximum zones / overlap / PCM working sets;
-- supported and unsupported SF2 feature usage;
-- cache/reuse/eviction behavior;
-- programs requiring special release notes.
-
-A user bank may be rejected for an explicit unsupported or malformed condition. It must not cause panic, invalid sample access, ownership corruption or destructive eviction of live audio state.
+The release blockers are documented in `docs/M7_RELEASE_QUALIFICATION.md`. In particular, M7 deliberately retains the 256-zone realtime scan bound rather than raising it to accommodate 320–720-zone presets without an indexed runtime design.
 
 ## M7.2 — 16-channel product workload
 
-Exercise representative real-bank 16-part GM playback rather than only isolated programs:
+The real-bank ownership gate exercises representative 16-part GM behavior including rapid Program Change while other channels remain active. It preserves Prepare -> READY -> block-boundary commit -> ACK semantics and checks published Voice-reference lifetime across the transaction.
 
-- 15 melodic channels + GM Channel 10 percussion;
-- Note On/Off and sustain;
-- CC7 volume / CC10 pan / CC11 expression;
-- pitch bend and bend range;
-- CC91 reverb / CC93 chorus;
-- Program and Bank Change;
-- GM Reset;
-- dense chords, drum bursts and release accumulation;
-- rapid Program Change while other channels remain active.
+Qualification preserves the M6 hard realtime model:
 
-Qualification should preserve the M6 hard realtime model:
-
-- report 1451 us block overruns as soft timing diagnostics;
-- hard-fail unrecovered backlog, DMA-window exhaustion, active playback queue overflow, write failures, clipping, invalid sample access and ownership/lifetime faults.
+- 1451 us block overruns are soft timing diagnostics;
+- unrecovered backlog, DMA-window exhaustion, active playback queue overflow, write failures, clipping, invalid sample access and ownership/lifetime faults are hard failures.
 
 ## M7.3 — User-SF2 robustness / edge cases
 
-Add bounded negative and edge-case coverage for:
+Coverage now includes deterministic malformed/truncated RIFF rejection, large bank-local SampleIds independent of the 512 simultaneous-residency cap, real-bank issue-level telemetry, unlinked FluidR3 left/right side normalization and explicit large-program/modulator boundaries.
 
-- large samples and high sample rates;
-- very short / long loops;
-- stereo linked samples;
-- large zone and modulator tables;
-- extreme envelopes and tuning;
-- empty or missing presets / drum kits;
-- capacity admission failure;
-- Program Change under eviction pressure;
-- release-tail survival;
-- truncated or malformed SF2 input.
-
-The required behavior is explicit acceptance or explicit rejection, never uncontrolled memory access or realtime ownership corruption.
+The required behavior remains explicit acceptance or explicit rejection, never uncontrolled memory access or realtime ownership corruption.
 
 ## M7.4 — Physical long-run / audible release sampling
 
-Use physical N16R8 for the things host/QEMU cannot prove:
+A dedicated `sdkconfig.m7release.defaults` / `esp-idf-m7-release-build` path now builds a separate physical release image without changing the established M6 16384-block hwbench baseline.
 
-- physical Program Prepare/storage latency on representative banks;
-- long-running I2S/DMA health;
-- real p95/p99/max render timing and backlog;
-- real memory high-water;
-- representative audible checks for pitch, loops, envelope behavior, drums, stereo/pan and FX;
-- final release polyphony wording by workload class.
+The M7 image is configured for:
 
-Subjective listening evidence must remain separate from automated timing evidence.
+- 131072 measured 64-frame blocks (~190.22 s);
+- N16R8 / 4.50 MiB PCM arena;
+- 8 x 64-frame DMA descriptors;
+- production-shaped music-stress phases distributed through the measured interval;
+- the same backlog-aware hard gates as M6.
+
+`tools/m7_release/physical_report.py` turns the resulting serial log into JSON/Markdown release evidence and fails on hard-gate, backlog, duration, clipping, stack, missing-telemetry or panic regressions.
+
+The build image is CI-qualified, but M7 remains ACTIVE until this image is actually run on physical hardware and the separate audible-release observations are recorded.
 
 ## Exit criteria
 
-- [ ] tracked GM128 release matrix emits JSON + Markdown and is CI-backed;
-- [ ] all Bank 0 melodic programs pass the release matrix;
-- [ ] tracked Bank 128 percussion set passes the release matrix;
-- [ ] at least three representative native SF2 banks are classified with the same report model;
-- [ ] mixed 16-channel real-bank workload passes semantic and ownership gates;
-- [ ] no invalid sample/fetch access, stale reference or leaked Voice refs;
-- [ ] no supported workload causes unrecovered DMA/backlog/write failure;
-- [ ] unsupported/malformed user-SF2 conditions fail explicitly and safely;
-- [ ] physical long-run and representative audible release checks are documented;
-- [ ] final public compatibility/polyphony claims are derived from representative physical evidence rather than isolated synthetic maxima.
+- [x] tracked GM128 release matrix emits JSON + Markdown and is CI-backed;
+- [x] all Bank 0 melodic programs pass the release matrix;
+- [x] tracked Bank 128 percussion set passes the release matrix;
+- [x] at least three representative native SF2 banks are classified with the same report model;
+- [x] mixed 16-channel real-bank workload passes semantic and ownership gates;
+- [x] qualified CI workloads show no invalid sample/fetch access, stale reference or leaked Voice refs;
+- [ ] M7 physical long-run confirms no supported workload causes unrecovered DMA/backlog/write failure;
+- [x] unsupported/malformed user-SF2 conditions fail explicitly and safely;
+- [ ] physical long-run and representative audible release checks are documented with actual hardware evidence;
+- [ ] final public compatibility/polyphony claims are derived from the completed representative physical evidence rather than isolated synthetic maxima.
