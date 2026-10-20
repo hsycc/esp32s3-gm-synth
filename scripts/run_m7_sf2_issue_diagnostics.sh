@@ -38,6 +38,12 @@ DIAG="${BUILD_DIR}/test_sf2_issue_diagnostics"
   tests/gm/test_sf2_issue_diagnostics.cpp \
   -o "${DIAG}"
 
+MOD_INVENTORY="${BUILD_DIR}/test_sf2_modulator_inventory"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  firmware/sf2/Sf2PdtaReader.cpp \
+  tests/gm/test_sf2_modulator_inventory.cpp \
+  -o "${MOD_INVENTORY}"
+
 is_real_sf2() {
   local path="$1"
   [[ -s "${path}" ]] || return 1
@@ -62,6 +68,7 @@ run_one() {
     return 1
   fi
   "${DIAG}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.issues.log"
+  "${MOD_INVENTORY}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.modulators.log"
 }
 
 FM_PATH="assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
@@ -78,6 +85,7 @@ run_one "${FLUID_PATH}" fluidr3_gm
   for asset in fm_gm_open generaluser_gs fluidr3_gm; do
     grep '^M7_ISSUE_SUMMARY' "${BUILD_DIR}/${asset}.issues.log" || true
     grep '^M7_ISSUE_COUNT' "${BUILD_DIR}/${asset}.issues.log" | grep -v 'rejected_programs=0$' || true
+    grep '^M7_MOD_SUMMARY' "${BUILD_DIR}/${asset}.modulators.log" || true
     echo
   done
 } > "${BUILD_DIR}/issue-summary.txt"
