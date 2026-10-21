@@ -273,14 +273,16 @@ void testGenericPreparedRoutesMaterializeWithoutDroppingPanBoundary() {
     assert(zone.prepared_note_on_modulators.routes[0].destination_oper == 48u);
     assert(zone.valid());
 
-    ResolvedZoneModulation pan_pending{};
+    ResolvedZoneModulation pan_supported{};
     assert(addPreparedNoteOnModulator(
-        &pan_pending.prepared_note_on_routes,
+        &pan_supported.prepared_note_on_routes,
         Sf2PreparedNoteOnModulator{0x0203u, 17u, 250, 0u}));
-    const auto pending = Sf2PlaybackMaterializer{}.materialize(native, pan_pending, &zone);
-    assert(pending.playablePreview());
-    assert(pending.hasIssue(PlaybackIssueCustomModulatorsPending));
-    assert(zone.prepared_note_on_modulators.count == 0);
+    pan_supported.supported_prepared_note_on_records = 1;
+    const auto pan = Sf2PlaybackMaterializer{}.materialize(native, pan_supported, &zone);
+    assert(pan.playablePreview());
+    assert(!pan.hasIssue(PlaybackIssueCustomModulatorsPending));
+    assert(zone.prepared_note_on_modulators.count == 1);
+    assert(zone.prepared_note_on_modulators.routes[0].destination_oper == 17u);
     assert(zone.valid());
 }
 
