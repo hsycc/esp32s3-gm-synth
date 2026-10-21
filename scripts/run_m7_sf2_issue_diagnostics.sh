@@ -91,6 +91,13 @@ DIAG="${BUILD_DIR}/test_sf2_issue_diagnostics"
   tests/gm/test_sf2_issue_diagnostics.cpp \
   -o "${DIAG}"
 
+LOOP_INVENTORY="${BUILD_DIR}/test_sf2_loop_inventory"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
+  firmware/sf2/Sf2PdtaReader.cpp \
+  firmware/sf2/Sf2ResolvedZone.cpp \
+  tests/gm/test_sf2_loop_inventory.cpp \
+  -o "${LOOP_INVENTORY}"
+
 MOD_INVENTORY="${BUILD_DIR}/test_sf2_modulator_inventory"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
   firmware/sf2/Sf2PdtaReader.cpp \
@@ -136,6 +143,7 @@ run_one() {
     return 1
   fi
   "${DIAG}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.issues.log"
+  "${LOOP_INVENTORY}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.loops.log"
   "${MOD_INVENTORY}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.modulators.log"
   "${ZONE_SHAPE}" "${path}" "${asset}" | tee "${BUILD_DIR}/${asset}.zone-shape.log"
   "${PREPARED_ROUTE_INVENTORY}" "${path}" "${asset}" | \
@@ -159,6 +167,7 @@ run_one "${FLUID_PATH}" fluidr3_gm
   for asset in fm_gm_open generaluser_gs fluidr3_gm; do
     grep '^M7_ISSUE_SUMMARY' "${BUILD_DIR}/${asset}.issues.log" || true
     grep '^M7_ISSUE_COUNT' "${BUILD_DIR}/${asset}.issues.log" | grep -v 'rejected_programs=0$' || true
+    grep '^M7_LOOP_SUMMARY' "${BUILD_DIR}/${asset}.loops.log" || true
     grep '^M7_MOD_SUMMARY' "${BUILD_DIR}/${asset}.modulators.log" || true
     grep '^M7_MOD_CLOSURE_SUMMARY' "${BUILD_DIR}/${asset}.modulator-closure.log" || true
     grep '^M7_MOD_CLOSURE_CATEGORY' "${BUILD_DIR}/${asset}.modulator-closure.log" || true
