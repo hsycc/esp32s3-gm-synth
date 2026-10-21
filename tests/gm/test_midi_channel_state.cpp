@@ -8,6 +8,7 @@ namespace {
 
 using gm_synth::gm::ChannelControlBankChanged;
 using gm_synth::gm::ChannelControlGainChanged;
+using gm_synth::gm::ChannelControlFilterChanged;
 using gm_synth::gm::ChannelControlPanChanged;
 using gm_synth::gm::ChannelControlPitchRangeChanged;
 using gm_synth::gm::ChannelControlResetControllers;
@@ -67,6 +68,28 @@ void testBankVolumePanExpressionSustainAndVibratoControllers() {
     assert(state.sustainDown());
     assert((state.applyControlChange(64, 0) & ChannelControlSustainChanged) != 0);
     assert(!state.sustainDown());
+}
+
+void testCc21FilterControllerLifecycle() {
+    MidiChannelState state{};
+    state.resetAll();
+    assert(state.filter_controller_21 == 0);
+    assert((state.applyControlChange(21, 64) & ChannelControlFilterChanged) != 0);
+    assert(state.filter_controller_21 == 64);
+    assert(state.applyControlChange(21, 64) == 0);
+    assert((state.applyControlChange(21, 127) & ChannelControlFilterChanged) != 0);
+    assert(state.filter_controller_21 == 127);
+    assert((state.applyControlChange(121, 0) & ChannelControlFilterChanged) != 0);
+    assert(state.filter_controller_21 == 0);
+    assert((state.applyControlChange(21, 127) & ChannelControlFilterChanged) != 0);
+    state.resetAll();
+    assert(state.filter_controller_21 == 0);
+
+    MidiChannelStateBank bank;
+    assert((bank.applyControlChange(4, 21, 31) & ChannelControlFilterChanged) != 0);
+    assert(bank.channel(4).filter_controller_21 == 31);
+    assert(bank.channel(5).filter_controller_21 == 0);
+    assert(bank.applyControlChange(16, 21, 20) == 0);
 }
 
 void testPitchBendSensitivityRpn() {
@@ -185,6 +208,7 @@ void testChannelBankIsIndependentAcross16Channels() {
 int main() {
     testGmDefaults();
     testBankVolumePanExpressionSustainAndVibratoControllers();
+    testCc21FilterControllerLifecycle();
     testPitchBendSensitivityRpn();
     testResetAllControllersPreservesMixButResetsPerformanceState();
     testPitchBendAndProgramValueValidation();
