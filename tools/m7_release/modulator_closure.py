@@ -23,7 +23,7 @@ ROUTE_RE = re.compile(
     r"transform=(?P<transform>\d+)\s+count=(?P<count>\d+)\s*$"
 )
 
-PREPARED_NOTE_ON_DESTINATIONS = {7, 9, 11, 17, 28, 34, 36, 38, 48, 52}
+PREPARED_NOTE_ON_DESTINATIONS = {0, 4, 7, 9, 11, 17, 28, 34, 36, 38, 48, 52}
 
 
 @dataclass(frozen=True)

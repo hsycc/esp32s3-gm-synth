@@ -54,6 +54,23 @@ NOTE_ON_TARGETS="${BUILD_DIR}/test_sf2_note_on_modulator_targets"
   -o "${NOTE_ON_TARGETS}"
 "${NOTE_ON_TARGETS}"
 
+SAMPLE_ADDRESS_NOTE_ON="${BUILD_DIR}/test_sf2_sample_address_note_on_runtime"
+"${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware -pthread \
+  firmware/sample/PublishedSampleDirectory.cpp \
+  firmware/sample/ProgramSnapshot.cpp \
+  firmware/voice/VoiceRenderer.cpp \
+  firmware/voice/VoiceRuntimeControl.cpp \
+  firmware/voice/PitchMath.cpp \
+  firmware/sf2/Sf2ModulationMath.cpp \
+  firmware/sf2/Sf2FilterMath.cpp \
+  firmware/sf2/Sf2PlaybackMaterializer.cpp \
+  firmware/gm/MidiChannelState.cpp \
+  firmware/gm/PlaybackProgramSnapshot.cpp \
+  firmware/gm/ZoneResolver.cpp \
+  tests/sf2/test_sf2_sample_address_note_on_runtime.cpp \
+  -o "${SAMPLE_ADDRESS_NOTE_ON}"
+"${SAMPLE_ADDRESS_NOTE_ON}"
+
 FILTER_Q_NOTE_ON="${BUILD_DIR}/test_sf2_filter_q_note_on_modulation"
 "${CXX}" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Ifirmware \
   firmware/sf2/Sf2ModulationMath.cpp \

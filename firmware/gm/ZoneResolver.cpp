@@ -155,6 +155,35 @@ sf2::Sf2NoteOnTargetDeltas preparedNoteOnTargetDeltas(
     return deltas;
 }
 
+voice::SampleRegion preparedSampleRegion(
+    const PlaybackZone& zone,
+    const sf2::Sf2NoteOnTargetDeltas& deltas) {
+    voice::SampleRegion region = zone.sample_region;
+    if (!region.enabled || region.start_frame >= region.end_frame) {
+        return region;
+    }
+
+    const std::int64_t dynamic_offset =
+        static_cast<std::int64_t>(deltas.sample_start_offset_points) +
+        static_cast<std::int64_t>(deltas.sample_start_coarse_32k) * 32768;
+    if (dynamic_offset == 0) {
+        return region;
+    }
+
+    std::int64_t max_start = static_cast<std::int64_t>(region.end_frame) - 1;
+    if (zone.loop_mode != voice::LoopMode::None) {
+        max_start = std::min<std::int64_t>(
+            max_start,
+            static_cast<std::int64_t>(region.loop_start_frame));
+    }
+    const std::int64_t adjusted = std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(region.start_frame) + dynamic_offset,
+        0,
+        max_start);
+    region.start_frame = static_cast<std::uint32_t>(adjusted);
+    return region;
+}
+
 std::uint64_t keyTrackedPhaseIncrement(
     const PlaybackZone& zone,
     std::uint8_t key,
@@ -714,7 +743,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.phase_increment_q32 = keyTrackedPhaseIncrement(
             zone, key, note_on_deltas.fine_tune_cents);
         params.loop_mode = zone.loop_mode;
-        params.sample_region = zone.sample_region;
+        params.sample_region = preparedSampleRegion(zone, note_on_deltas);
         params.gain_left_q15 = zone.gain_left_q15;
         params.gain_right_q15 = zone.gain_right_q15;
         if (zone.note_on_gain.enabled) {
@@ -824,7 +853,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
             : transposeCents(key_increment, bend_cents);
 
         params.loop_mode = zone.loop_mode;
-        params.sample_region = zone.sample_region;
+        params.sample_region = preparedSampleRegion(zone, note_on_deltas);
         params.gain_left_q15 = zone.gain_left_q15;
         params.gain_right_q15 = zone.gain_right_q15;
         if (zone.note_on_gain.enabled) {

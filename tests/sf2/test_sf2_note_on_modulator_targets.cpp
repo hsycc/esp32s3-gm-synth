@@ -14,14 +14,12 @@ namespace {
 
 void testObservedGeneralUserDestinationsAreRepresentable() {
     for (std::uint16_t destination : {
-             std::uint16_t{7}, std::uint16_t{9}, std::uint16_t{11},
-             std::uint16_t{17}, std::uint16_t{28}, std::uint16_t{34},
-             std::uint16_t{36}, std::uint16_t{38}, std::uint16_t{48},
-             std::uint16_t{52}}) {
+             std::uint16_t{0}, std::uint16_t{4}, std::uint16_t{7},
+             std::uint16_t{9}, std::uint16_t{11}, std::uint16_t{17},
+             std::uint16_t{28}, std::uint16_t{34}, std::uint16_t{36},
+             std::uint16_t{38}, std::uint16_t{48}, std::uint16_t{52}}) {
         assert(isPreparedNoteOnDestination(destination));
     }
-    assert(!isPreparedNoteOnDestination(0));
-    assert(!isPreparedNoteOnDestination(4));
     assert(!isPreparedNoteOnDestination(8));  // existing dedicated filter-Fc path
 }
 
@@ -53,12 +51,16 @@ void testMultipleRoutesAccumulateInNativeDestinationUnits() {
         evaluatePreparedNoteOnModulator(fine_tune, 64, 100));
 }
 
-void testSampleAddressRoutesRemainOutsideGenericTargetPath() {
+void testSampleAddressRoutesAccumulateInGeneratorUnits() {
     Sf2NoteOnTargetDeltas deltas{};
     const Sf2PreparedNoteOnModulator start_offset{0x0002u, 0u, -2000, 0u};
     const Sf2PreparedNoteOnModulator coarse_start{0x0102u, 4u, 1, 0u};
-    assert(!applyPreparedNoteOnModulator(start_offset, 60, 100, &deltas));
-    assert(!applyPreparedNoteOnModulator(coarse_start, 60, 100, &deltas));
+    assert(applyPreparedNoteOnModulator(start_offset, 60, 100, &deltas));
+    assert(applyPreparedNoteOnModulator(coarse_start, 60, 100, &deltas));
+    assert(deltas.sample_start_offset_points ==
+        evaluatePreparedNoteOnModulator(start_offset, 60, 100));
+    assert(deltas.sample_start_coarse_32k ==
+        evaluatePreparedNoteOnModulator(coarse_start, 60, 100));
 }
 
 }  // namespace
@@ -67,7 +69,7 @@ int main() {
     testObservedGeneralUserDestinationsAreRepresentable();
     testFluidDualSourceContributionTargetsFilterQ();
     testMultipleRoutesAccumulateInNativeDestinationUnits();
-    testSampleAddressRoutesRemainOutsideGenericTargetPath();
+    testSampleAddressRoutesAccumulateInGeneratorUnits();
     std::cout << "SF2 prepared NoteOn target checks passed\n";
     return 0;
 }

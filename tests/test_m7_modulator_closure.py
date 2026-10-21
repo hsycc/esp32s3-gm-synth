@@ -49,7 +49,7 @@ class M7ModulatorClosureTests(unittest.TestCase):
             "prepared_note_on_candidate",
         )
 
-    def test_sample_address_and_arbitrary_cc_stay_separate(self):
+    def test_sample_address_is_supported_while_arbitrary_cc_stays_pending(self):
         sample_address = modulator_closure.Route(
             asset="generaluser_gs",
             scope="instrument",
@@ -59,6 +59,16 @@ class M7ModulatorClosureTests(unittest.TestCase):
             amount_source=0,
             transform=0,
             count=6,
+        )
+        coarse_address = modulator_closure.Route(
+            asset="generaluser_gs",
+            scope="instrument",
+            source=0x0102,
+            destination=4,
+            amount=0,
+            amount_source=0,
+            transform=0,
+            count=3,
         )
         cc21_filter = modulator_closure.Route(
             asset="generaluser_gs",
@@ -70,10 +80,9 @@ class M7ModulatorClosureTests(unittest.TestCase):
             transform=0,
             count=1,
         )
-        self.assertEqual(
-            modulator_closure.classify(sample_address),
-            "sample_address_note_on",
-        )
+        self.assertTrue(modulator_closure.currently_supported(sample_address))
+        self.assertTrue(modulator_closure.currently_supported(coarse_address))
+        self.assertFalse(modulator_closure.currently_supported(cc21_filter))
         self.assertEqual(
             modulator_closure.classify(cc21_filter),
             "controller_state_pending",

@@ -12,6 +12,8 @@ namespace gm_synth::sf2 {
 // destination-specific clamp/conversion remains authoritative when this state
 // is integrated into PlaybackZone/ZoneResolver.
 struct Sf2NoteOnTargetDeltas {
+    std::int32_t sample_start_offset_points = 0;   // generator 0
+    std::int32_t sample_start_coarse_32k = 0;      // generator 4
     std::int32_t mod_env_pitch_cents = 0;          // generator 7
     std::int32_t filter_q_cb = 0;                  // generator 9
     std::int32_t mod_env_filter_cents = 0;         // generator 11
@@ -37,6 +39,8 @@ inline std::int32_t saturatingNoteOnTargetAdd(std::int32_t a, std::int32_t b) {
 
 inline bool isPreparedNoteOnDestination(std::uint16_t destination_oper) {
     switch (destination_oper) {
+        case 0:
+        case 4:
         case 7:
         case 9:
         case 11:
@@ -54,12 +58,16 @@ inline bool isPreparedNoteOnDestination(std::uint16_t destination_oper) {
 }
 
 // Destinations whose generator-domain value is already represented by
-// PlaybackZone and can therefore be evaluated once at NoteOn. FilterQ (9)
-// keeps its dedicated payload so the already-qualified FluidR3 path is not
-// double-counted. Pan (17) remains pending until stereo-side base pan and the
-// generator clamp are represented in the correct SF2 order.
+// PlaybackZone and can therefore be evaluated once at NoteOn. Sample-start
+// address offsets (0/4) are applied to the prepared SampleRegion with a final
+// realizable-region clamp. FilterQ (9) keeps its dedicated payload so the
+// already-qualified FluidR3 path is not double-counted. Pan (17) remains
+// pending until stereo-side base pan and the generator clamp are represented
+// in the correct SF2 order.
 inline bool isRuntimeGenericPreparedNoteOnDestination(std::uint16_t destination_oper) {
     switch (destination_oper) {
+        case 0:
+        case 4:
         case 7:
         case 11:
         case 28:
@@ -96,6 +104,8 @@ inline bool applyPreparedNoteOnModulator(
         velocity);
     std::int32_t* destination = nullptr;
     switch (route.destination_oper) {
+        case 0: destination = &targets->sample_start_offset_points; break;
+        case 4: destination = &targets->sample_start_coarse_32k; break;
         case 7: destination = &targets->mod_env_pitch_cents; break;
         case 9: destination = &targets->filter_q_cb; break;
         case 11: destination = &targets->mod_env_filter_cents; break;

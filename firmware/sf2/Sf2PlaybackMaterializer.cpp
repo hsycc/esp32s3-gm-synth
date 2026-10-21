@@ -278,7 +278,11 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         (looping &&
          (native.loop_start != static_cast<std::int64_t>(native.shdr_loop_start) ||
           native.loop_end != static_cast<std::int64_t>(native.shdr_loop_end)));
-    if (region_changed &&
+    const bool sample_start_modulated =
+        modulation.preparedNoteOnRoutesFullyRepresented() &&
+        (hasPreparedDestination(modulation.prepared_note_on_routes, 0u) ||
+         hasPreparedDestination(modulation.prepared_note_on_routes, 4u));
+    if ((region_changed || sample_start_modulated) &&
         (issues & (PlaybackIssueInvalidSampleAddress |
                    PlaybackIssueAddressOutsideResidentSample)) == 0) {
         candidate.sample_region.enabled = true;
