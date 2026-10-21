@@ -158,12 +158,14 @@ void testCc21PreparesFilterForFullControllerRange() {
     assert(batch.voices[0].dynamic_lowpass_table.enabled);
     assert(batch.voices[0].dynamic_lowpass_table.min_offset_cents == -2400);
     assert(batch.voices[0].dynamic_lowpass_table.max_offset_cents == 0);
-    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents == -2400);
+    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents ==
+           gm_synth::sf2::positiveLinearToAmount(127, -2400));
     state.applyControlChange(21, 64);
     assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 31, &batch) ==
            ZoneResolveStatus::Ok);
     assert(batch.voices[0].realtime_control.cc21_filter_offset_cents < 0);
-    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents > -2400);
+    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents >
+           gm_synth::sf2::positiveLinearToAmount(127, -2400));
     state.applyControlChange(21, 127);
     assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 32, &batch) ==
            ZoneResolveStatus::Ok);
