@@ -77,6 +77,9 @@ ProgramChangeServiceResult ProgramChangeControlService::serviceChannel(
     playback_request.modulation_capacity = workspace.modulation_capacity;
     playback_request.playback_zones = workspace.playback_zones;
     playback_request.playback_capacity = workspace.playback_capacity;
+    playback_request.key_spans = workspace.key_spans;
+    playback_request.key_zone_indices = workspace.key_zone_indices;
+    playback_request.key_zone_index_capacity = workspace.key_zone_index_capacity;
     playback_request.dependencies = workspace.dependencies;
     playback_request.dependency_capacity = workspace.dependency_capacity;
     playback_request.snapshot = &workspace.snapshot;
