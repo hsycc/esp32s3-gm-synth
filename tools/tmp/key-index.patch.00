@@ -1,0 +1,363 @@
+diff -ruN '--exclude=*.o' a/firmware/gm/PlaybackProgramKeyIndex.h b/firmware/gm/PlaybackProgramKeyIndex.h
+--- a/firmware/gm/PlaybackProgramKeyIndex.h	2026-10-21 03:52:34.000000000 +0000
++++ b/firmware/gm/PlaybackProgramKeyIndex.h	2026-10-21 04:13:19.084265059 +0000
+@@ -9,17 +9,6 @@
+ 
+ namespace gm_synth::gm {
+ 
+-// The observed M7 banks peak at 720 zones. Keep the control-domain indexed
+-// representation comfortably above that without changing the existing 256-zone
+-// linear-scan contract until the index is wired into ZoneResolver.
+-constexpr std::size_t kPlaybackProgramIndexedZoneLimit = 1024;
+-constexpr std::size_t kPlaybackProgramMidiKeyCount = 128;
+-
+-struct PlaybackProgramKeySpan {
+-    std::uint32_t begin = 0;
+-    std::uint16_t count = 0;
+-};
+-
+ struct PlaybackProgramKeyIndexView {
+     const PlaybackProgramKeySpan* spans = nullptr;
+     const std::uint16_t* zone_indices = nullptr;
+diff -ruN '--exclude=*.o' a/firmware/gm/PlaybackProgramSnapshot.h b/firmware/gm/PlaybackProgramSnapshot.h
+--- a/firmware/gm/PlaybackProgramSnapshot.h	2026-10-21 03:55:28.808216481 +0000
++++ b/firmware/gm/PlaybackProgramSnapshot.h	2026-10-21 04:19:46.430337014 +0000
+@@ -8,12 +8,21 @@
+ #include "sf2/Sf2NoteOnModulatorTargets.h"
+ #include "voice/VoiceRenderer.h"
+ 
++#include <algorithm>
+ #include <array>
+ #include <atomic>
+ #include <cstddef>
+ #include <cstdint>
++#include <limits>
+ 
+ namespace gm_synth::gm {
+ 
++constexpr std::size_t kPlaybackProgramIndexedZoneLimit = 1024;
++constexpr std::size_t kPlaybackProgramMidiKeyCount = 128;
++
++struct PlaybackProgramKeySpan {
++    std::uint32_t begin = 0;
++    std::uint16_t count = 0;
++};
++
+ // Compact parameters whose final value depends on the incoming NoteOn and the
+ // current MIDI channel controller state. Keeping the raw SoundFont attenuation
+ // summing node here is important: a negative preset initialAttenuation may
+@@ -238,11 +247,12 @@
+ };
+ 
+ struct PlaybackProgramSnapshot {
+-    // This is a realtime scan bound, not an inline-storage size. The checked-in
+-    // SF2 analysis manifests are validated against it in CI. GeneralUser's
+-    // largest currently resolved program has 200 zones, so 256 leaves bounded
+-    // headroom without inflating every per-channel snapshot object.
+-    static constexpr std::size_t kMaxZones = 256;
++    // Total prepared-zone storage bound. Programs above the legacy linear-scan
++    // limit are only valid when a control-domain-built key index is attached,
++    // so NoteOn work remains bounded by candidates for one MIDI key rather than
++    // by the total zone count.
++    static constexpr std::size_t kMaxZones = kPlaybackProgramIndexedZoneLimit;
++    static constexpr std::size_t kMaxLinearScanZones = 256;
+ 
+     std::uint8_t channel = 0;
+     std::uint16_t bank = 0;
+@@ -257,6 +267,70 @@
+     const PlaybackZone* zones = nullptr;
+     std::uint16_t zone_count = 0;
+ 
++    // Optional control-domain-built key -> zone reference index. It becomes
++    // mandatory above kMaxLinearScanZones. The pointed-to arrays share the same
++    // READY/Active/Retired lifetime contract as zones.
++    const PlaybackProgramKeySpan* key_spans = nullptr;
++    const std::uint16_t* key_zone_indices = nullptr;
++    std::uint32_t key_reference_count = 0;
++    std::uint16_t max_key_candidates = 0;
++
++    bool hasKeyIndex() const {
++        return key_spans != nullptr || key_zone_indices != nullptr ||
++            key_reference_count != 0 || max_key_candidates != 0;
++    }
++
++    bool keyIndexValid() const {
++        if (!hasKeyIndex()) {
++            return zone_count <= kMaxLinearScanZones;
++        }
++        if (key_spans == nullptr || key_zone_indices == nullptr ||
++            zone_count == 0 || key_reference_count == 0) {
++            return false;
++        }
++
++        std::uint64_t expected_references = 0;
++        std::array<std::uint16_t, kPlaybackProgramMidiKeyCount> expected_counts{};
++        for (std::size_t zone_index = 0; zone_index < zone_count; ++zone_index) {
++            const PlaybackZone& zone = zones[zone_index];
++            expected_references +=
++                static_cast<std::uint32_t>(zone.key_high - zone.key_low) + 1u;
++            if (expected_references > std::numeric_limits<std::uint32_t>::max()) {
++                return false;
++            }
++            for (std::uint16_t key = zone.key_low; key <= zone.key_high; ++key) {
++                ++expected_counts[key];
++            }
++        }
++        if (expected_references != key_reference_count) {
++            return false;
++        }
++
++        std::uint16_t observed_max = 0;
++        for (std::size_t key = 0; key < kPlaybackProgramMidiKeyCount; ++key) {
++            const PlaybackProgramKeySpan& span = key_spans[key];
++            if (span.begin > key_reference_count ||
++                span.count > key_reference_count - span.begin ||
++                span.count != expected_counts[key]) {
++                return false;
++            }
++            observed_max = std::max(observed_max, span.count);
++            std::uint16_t previous = 0;
++            bool have_previous = false;
++            for (std::size_t offset = 0; offset < span.count; ++offset) {
++                const std::uint16_t zone_index = key_zone_indices[span.begin + offset];
++                if (zone_index >= zone_count ||
++                    key < zones[zone_index].key_low || key > zones[zone_index].key_high ||
++                    (have_previous && zone_index <= previous)) {
++                    return false;
++                }
++                previous = zone_index;
++                have_previous = true;
++            }
++        }
++        return observed_max == max_key_candidates;
++    }
++
+     bool valid() const {
+         if (channel >= 16 || token == 0 || bank_generation == 0 ||
+             zone_count > kMaxZones || (zone_count != 0 && zones == nullptr)) {
+@@ -267,7 +341,7 @@
+                 return false;
+             }
+         }
+-        return true;
++        return keyIndexValid();
+     }
+ };
+ 
+diff -ruN '--exclude=*.o' a/firmware/gm/ProgramChangeControlService.cpp b/firmware/gm/ProgramChangeControlService.cpp
+--- a/firmware/gm/ProgramChangeControlService.cpp	2026-10-21 03:52:34.000000000 +0000
++++ b/firmware/gm/ProgramChangeControlService.cpp	2026-10-21 04:15:21.943191040 +0000
+@@ -72,6 +72,10 @@
+     playback_request.modulation_capacity = workspace.modulation_capacity;
+     playback_request.playback_zones = workspace.playback_zones;
+     playback_request.playback_capacity = workspace.playback_capacity;
++    playback_request.key_spans = workspace.key_spans;
++    playback_request.key_span_capacity = workspace.key_span_capacity;
++    playback_request.key_zone_indices = workspace.key_zone_indices;
++    playback_request.key_zone_index_capacity = workspace.key_zone_index_capacity;
+     playback_request.dependencies = workspace.dependencies;
+     playback_request.dependency_capacity = workspace.dependency_capacity;
+     playback_request.snapshot = &workspace.snapshot;
+diff -ruN '--exclude=*.o' a/firmware/gm/ProgramChangeControlService.h b/firmware/gm/ProgramChangeControlService.h
+--- a/firmware/gm/ProgramChangeControlService.h	2026-10-21 03:52:34.000000000 +0000
++++ b/firmware/gm/ProgramChangeControlService.h	2026-10-21 04:15:21.942717208 +0000
+@@ -35,6 +35,10 @@
+     std::size_t modulation_capacity = 0;
+     PlaybackZone* playback_zones = nullptr;
+     std::size_t playback_capacity = 0;
++    PlaybackProgramKeySpan* key_spans = nullptr;
++    std::size_t key_span_capacity = 0;
++    std::uint16_t* key_zone_indices = nullptr;
++    std::size_t key_zone_index_capacity = 0;
+     sample::SampleId* dependencies = nullptr;
+     std::size_t dependency_capacity = 0;
+     sf2::PlaybackPreparePolicy policy = sf2::PlaybackPreparePolicy::AllowPreview;
+diff -ruN '--exclude=*.o' a/firmware/gm/ZoneResolver.cpp b/firmware/gm/ZoneResolver.cpp
+--- a/firmware/gm/ZoneResolver.cpp	2026-10-21 03:55:28.809351974 +0000
++++ b/firmware/gm/ZoneResolver.cpp	2026-10-21 04:19:46.430633397 +0000
+@@ -64,10 +64,39 @@
+     std::uint8_t velocity,
+     std::uint32_t note_instance_id,
+     const ResolvedVoiceBatch* batch) {
++    const bool index_required =
++        program.zone_count > PlaybackProgramSnapshot::kMaxLinearScanZones;
++    const bool index_available =
++        program.key_spans != nullptr &&
++        program.key_zone_indices != nullptr &&
++        program.key_reference_count != 0 &&
++        program.max_key_candidates != 0;
+     return batch != nullptr && channel < 16 && key <= 127 && velocity <= 127 &&
+         note_instance_id != 0 && program.channel == channel &&
+         program.zone_count <= PlaybackProgramSnapshot::kMaxZones &&
+-        (program.zone_count == 0 || program.zones != nullptr);
++        (program.zone_count == 0 || program.zones != nullptr) &&
++        (!program.hasKeyIndex() || index_available) &&
++        (!index_required || index_available);
++}
++
++std::size_t candidateCountForKey(
++    const PlaybackProgramSnapshot& program,
++    std::uint8_t key) {
++    return program.key_spans != nullptr && program.key_zone_indices != nullptr
++        ? program.key_spans[key].count
++        : program.zone_count;
++}
++
++std::size_t candidateZoneIndex(
++    const PlaybackProgramSnapshot& program,
++    std::uint8_t key,
++    std::size_t candidate_offset) {
++    if (program.key_spans == nullptr || program.key_zone_indices == nullptr) {
++        return candidate_offset;
++    }
++    const PlaybackProgramKeySpan& span = program.key_spans[key];
++    return program.key_zone_indices[span.begin + candidate_offset];
+ }
+ 
+ std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) {
+@@ -617,7 +646,9 @@
+         return ZoneResolveStatus::InvalidArgument;
+     }
+ 
+-    for (std::size_t i = 0; i < program.zone_count; ++i) {
++    const std::size_t candidate_count = candidateCountForKey(program, key);
++    for (std::size_t candidate = 0; candidate < candidate_count; ++candidate) {
++        const std::size_t i = candidateZoneIndex(program, key, candidate);
+         const PlaybackZone& zone = program.zones[i];
+         if (!zone.matches(key, velocity)) {
+             continue;
+@@ -715,7 +746,9 @@
+         return ZoneResolveStatus::InvalidArgument;
+     }
+ 
+-    for (std::size_t i = 0; i < program.zone_count; ++i) {
++    const std::size_t candidate_count = candidateCountForKey(program, key);
++    for (std::size_t candidate = 0; candidate < candidate_count; ++candidate) {
++        const std::size_t i = candidateZoneIndex(program, key, candidate);
+         const PlaybackZone& zone = program.zones[i];
+         if (!zone.matches(key, velocity)) {
+             continue;
+diff -ruN '--exclude=*.o' a/firmware/gm/ZoneResolver.h b/firmware/gm/ZoneResolver.h
+--- a/firmware/gm/ZoneResolver.h	2026-10-21 03:52:34.000000000 +0000
++++ b/firmware/gm/ZoneResolver.h	2026-10-21 04:15:59.628581900 +0000
+@@ -28,7 +28,9 @@
+ // Realtime-safe resolver over immutable prepared playback metadata. It does no
+ // allocation, storage I/O, SF2 parsing, logarithms or floating-point pitch
+-// conversion. The scan is bounded by PlaybackProgramSnapshot::kMaxZones.
++// conversion. Programs at or below kMaxLinearScanZones retain the legacy
++// linear scan. Larger snapshots carry a prepared key index, so NoteOn scans
++// only the bounded candidate span for the incoming MIDI key.
+ class ZoneResolver {
+ public:
+     // Compatibility path used by existing direct tests/callers. It applies only
+diff -ruN '--exclude=*.o' a/firmware/sf2/Sf2PlaybackProgramPreparer.cpp b/firmware/sf2/Sf2PlaybackProgramPreparer.cpp
+--- a/firmware/sf2/Sf2PlaybackProgramPreparer.cpp	2026-10-21 03:52:34.000000000 +0000
++++ b/firmware/sf2/Sf2PlaybackProgramPreparer.cpp	2026-10-21 04:14:56.609828887 +0000
+@@ -1,8 +1,10 @@
+ #include "Sf2PlaybackProgramPreparer.h"
+ 
+ #include "Sf2StereoPair.h"
++#include "../gm/PlaybackProgramKeyIndex.h"
+ 
+ #include <algorithm>
++#include <array>
+ #include <limits>
+ 
+ namespace gm_synth::sf2 {
+@@ -145,6 +147,8 @@
+         (request.native_capacity != 0 && request.native_scratch == nullptr) ||
+         (request.modulation_capacity != 0 && request.modulation_scratch == nullptr) ||
+         (request.playback_capacity != 0 && request.playback_zones == nullptr) ||
++        (request.key_span_capacity != 0 && request.key_spans == nullptr) ||
++        (request.key_zone_index_capacity != 0 && request.key_zone_indices == nullptr) ||
+         (request.dependency_capacity != 0 && request.dependencies == nullptr)) {
+         result.status = PlaybackPrepareStatus::InvalidArgument;
+         return result;
+@@ -369,6 +373,50 @@
+             request.dependencies);
+     }
+ 
++    const bool needs_key_index =
++        required_playback_zones > gm::PlaybackProgramSnapshot::kMaxLinearScanZones;
++    gm::PlaybackProgramKeyIndexBuildResult key_index_result{};
++    if (needs_key_index) {
++        result.required_key_span_capacity = gm::kPlaybackProgramMidiKeyCount;
++        std::array<gm::PlaybackProgramKeySpan, gm::kPlaybackProgramMidiKeyCount>
++            query_spans{};
++        const gm::PlaybackProgramKeyIndexBuildResult query =
++            gm::buildPlaybackProgramKeyIndex(
++                request.playback_zones,
++                required_playback_zones,
++                query_spans.data(),
++                nullptr,
++                0);
++        if (query.status != gm::PlaybackProgramKeyIndexBuildStatus::ReferenceCapacityExceeded &&
++            query.status != gm::PlaybackProgramKeyIndexBuildStatus::Ok) {
++            result.status = PlaybackPrepareStatus::SnapshotInvalid;
++            return result;
++        }
++        result.required_key_reference_capacity = query.required_references;
++        if (request.key_spans == nullptr ||
++            request.key_span_capacity < gm::kPlaybackProgramMidiKeyCount ||
++            (query.required_references != 0 &&
++             (request.key_zone_indices == nullptr ||
++              request.key_zone_index_capacity < query.required_references))) {
++            result.status = PlaybackPrepareStatus::KeyIndexCapacityExceeded;
++            return result;
++        }
++
++        key_index_result = gm::buildPlaybackProgramKeyIndex(
++            request.playback_zones,
++            required_playback_zones,
++            request.key_spans,
++            request.key_zone_indices,
++            request.key_zone_index_capacity);
++        if (key_index_result.status != gm::PlaybackProgramKeyIndexBuildStatus::Ok) {
++            result.status = PlaybackPrepareStatus::SnapshotInvalid;
++            return result;
++        }
++        result.required_key_reference_capacity = key_index_result.required_references;
++        result.max_key_candidates = key_index_result.max_candidates_per_key;
++    }
++
+     gm::PlaybackProgramSnapshot candidate{};
+     candidate.channel = request.channel;
+     candidate.bank = request.bank;
+@@ -379,6 +427,12 @@
+     candidate.bank_generation = request.bank_generation;
+     candidate.zones = request.playback_zones;
+     candidate.zone_count = static_cast<std::uint16_t>(required_playback_zones);
++    if (needs_key_index) {
++        candidate.key_spans = request.key_spans;
++        candidate.key_zone_indices = request.key_zone_indices;
++        candidate.key_reference_count = key_index_result.required_references;
++        candidate.max_key_candidates = key_index_result.max_candidates_per_key;
++    }
+     if (!candidate.valid()) {
+         result.status = PlaybackPrepareStatus::SnapshotInvalid;
+         return result;
+diff -ruN '--exclude=*.o' a/firmware/sf2/Sf2PlaybackProgramPreparer.h b/firmware/sf2/Sf2PlaybackProgramPreparer.h
+--- a/firmware/sf2/Sf2PlaybackProgramPreparer.h	2026-10-21 03:52:34.000000000 +0000
++++ b/firmware/sf2/Sf2PlaybackProgramPreparer.h	2026-10-21 04:14:13.615101113 +0000
+@@ -24,6 +24,7 @@
+     UnqualifiedZone,
+     MaterializationFailed,
+     SnapshotInvalid,
++    KeyIndexCapacityExceeded,
+ };
+ 
+ struct PlaybackPrepareRequest {
+@@ -47,6 +48,16 @@
+     gm::PlaybackZone* playback_zones = nullptr;
+     std::size_t playback_capacity = 0;
+ 
++    // Optional control-domain key index storage. It is required when the final
++    // playback zone count exceeds PlaybackProgramSnapshot::kMaxLinearScanZones.
++    // The index arrays become immutable snapshot-owned backing storage after
++    // successful publication and therefore share the playback_zones lifetime.
++    gm::PlaybackProgramKeySpan* key_spans = nullptr;
++    std::size_t key_span_capacity = 0;
++    std::uint16_t* key_zone_indices = nullptr;
++    std::size_t key_zone_index_capacity = 0;
++
++    // Unique resident sample IDs required by the resolved program. Stereo
