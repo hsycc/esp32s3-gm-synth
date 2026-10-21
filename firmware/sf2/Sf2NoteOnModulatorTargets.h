@@ -53,6 +53,33 @@ inline bool isPreparedNoteOnDestination(std::uint16_t destination_oper) {
     }
 }
 
+// Destinations whose generator-domain value is already represented by
+// PlaybackZone and can therefore be evaluated once at NoteOn. FilterQ (9)
+// keeps its dedicated payload so the already-qualified FluidR3 path is not
+// double-counted. Pan (17) remains pending until stereo-side base pan and the
+// generator clamp are represented in the correct SF2 order.
+inline bool isRuntimeGenericPreparedNoteOnDestination(std::uint16_t destination_oper) {
+    switch (destination_oper) {
+        case 7:
+        case 11:
+        case 28:
+        case 34:
+        case 36:
+        case 38:
+        case 48:
+        case 52:
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool isRuntimeGenericPreparedNoteOnRoute(
+    const Sf2PreparedNoteOnModulator& route) {
+    return route.valid() &&
+        isRuntimeGenericPreparedNoteOnDestination(route.destination_oper);
+}
+
 inline bool applyPreparedNoteOnModulator(
     const Sf2PreparedNoteOnModulator& route,
     std::uint8_t key,

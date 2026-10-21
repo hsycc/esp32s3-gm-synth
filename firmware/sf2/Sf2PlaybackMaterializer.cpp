@@ -133,6 +133,17 @@ voice::LoopMode loopModeFor(std::int32_t sample_modes, bool* supported) {
     }
 }
 
+bool hasPreparedDestination(
+    const Sf2PreparedNoteOnModulatorSet& routes,
+    std::uint16_t destination_oper) {
+    for (std::size_t index = 0; index < routes.count; ++index) {
+        if (routes.routes[index].destination_oper == destination_oper) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
@@ -340,6 +351,9 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         candidate.note_on_filter.additional_cutoff_routes[
             candidate.note_on_filter.additional_cutoff_route_count++] = route;
     }
+    if (modulation.preparedNoteOnRoutesFullyRepresented()) {
+        candidate.prepared_note_on_modulators = modulation.prepared_note_on_routes;
+    }
 
     const std::int32_t static_vibrato_depth = native.generators.value(6, 0);
     candidate.vibrato_lfo.enabled =
@@ -387,7 +401,10 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
     candidate.mod_envelope.enabled = candidate.mod_envelope.pitch_depth_cents != 0 ||
         candidate.mod_envelope.filter_depth_cents != 0 ||
         candidate.mod_envelope.velocity_positive_to_filter_depth_cents != 0 ||
-        candidate.mod_envelope.velocity_negative_to_filter_depth_cents != 0;
+        candidate.mod_envelope.velocity_negative_to_filter_depth_cents != 0 ||
+        hasPreparedDestination(candidate.prepared_note_on_modulators, 7u) ||
+        hasPreparedDestination(candidate.prepared_note_on_modulators, 11u) ||
+        hasPreparedDestination(candidate.prepared_note_on_modulators, 28u);
     candidate.mod_envelope.envelope.delay_frames = timecentsToFrames(
         native.generators.value(25, -12000),
         output_sample_rate_);

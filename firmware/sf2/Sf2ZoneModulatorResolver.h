@@ -12,7 +12,7 @@
 
 namespace gm_synth::sf2 {
 
-struct ResolvedZoneModulationStorage {
+struct ResolvedZoneModulation {
     std::int32_t velocity_to_attenuation_cb = kSf2DefaultVelocityAttenuationCb;
     std::int32_t velocity_to_filter_fc_cents = kSf2DefaultVelocityFilterCutoffCents;
     // Additional NoteOn-velocity routes exercised by real GM SoundFonts.
@@ -31,8 +31,11 @@ struct ResolvedZoneModulationStorage {
         initial_filter_fc_note_on_routes{};
     std::uint8_t initial_filter_fc_note_on_route_count = 0;
 
-    // M7 compatibility closure telemetry for prepared dual-source FilterQ
-    // routes. The actual route payload is carried by velocity_to_filter_q_cb.
+    // Generic immutable NoteOn routes targeting generator domains already
+    // represented by PlaybackZone. FilterQ remains in its dedicated payload;
+    // pan/sample-address/controller-state routes stay explicit compatibility
+    // boundaries until their ordering/ownership semantics are represented.
+    Sf2PreparedNoteOnModulatorSet prepared_note_on_routes{};
     std::uint16_t supported_prepared_note_on_records = 0;
 
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
@@ -55,33 +58,23 @@ struct ResolvedZoneModulationStorage {
     std::uint16_t supported_effects_send_records = 0;
     std::uint16_t unsupported_modulator_records = 0;
 
-
-};
-
-struct ResolvedZoneModulation : ResolvedZoneModulationStorage {
-    // Alias the generic prepared-route name used by the production resolver to
-    // the payload carried through the existing FilterQ field. This keeps the
-    // current resolver implementation unchanged while Materializer copies the
-    // exact same payload into PlaybackZone.
-    Sf2PreparedNoteOnModulatorSet& prepared_note_on_routes;
-
-    ResolvedZoneModulation()
-        : prepared_note_on_routes(velocity_to_filter_q_cb.additional_routes) {}
-
-    ResolvedZoneModulation(const ResolvedZoneModulation& other)
-        : ResolvedZoneModulationStorage(other),
-          prepared_note_on_routes(velocity_to_filter_q_cb.additional_routes) {}
-
-    ResolvedZoneModulation& operator=(const ResolvedZoneModulation& other) {
-        if (this != &other) {
-            ResolvedZoneModulationStorage::operator=(other);
+    bool preparedNoteOnRoutesFullyRepresented() const {
+        if (!prepared_note_on_routes.valid()) {
+            return false;
         }
-        return *this;
+        for (std::size_t index = 0; index < prepared_note_on_routes.count; ++index) {
+            if (!isRuntimeGenericPreparedNoteOnRoute(
+                    prepared_note_on_routes.routes[index])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     bool hasUnsupportedModulators() const {
         return unsupported_modulator_records != 0 ||
-            !velocity_to_filter_q_cb.fullyRepresentedFilterQOnly();
+            !velocity_to_filter_q_cb.fullyRepresentedFilterQOnly() ||
+            !preparedNoteOnRoutesFullyRepresented();
     }
 
     bool fullySupported() const { return !hasUnsupportedModulators(); }

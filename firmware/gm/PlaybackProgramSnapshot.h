@@ -3,6 +3,8 @@
 #include "sample/ProgramSnapshot.h"
 #include "sf2/Sf2FilterMath.h"
 #include "sf2/Sf2ModulationMath.h"
+#include "sf2/Sf2NoteOnModulatorSet.h"
+#include "sf2/Sf2NoteOnModulatorTargets.h"
 #include "voice/VoiceRenderer.h"
 
 #include <array>
@@ -191,10 +193,26 @@ struct PlaybackZone {
     std::int32_t velocity_to_vol_env_attack_timecents = 0;
     NoteOnGainConfig note_on_gain{};
     NoteOnFilterConfig note_on_filter{};
+    // Immutable key/velocity modulation for generator destinations that are
+    // evaluated once at NoteOn. No allocation or bank parsing occurs here.
+    sf2::Sf2PreparedNoteOnModulatorSet prepared_note_on_modulators{};
     VibratoLfoConfig vibrato_lfo{};
     ModLfoConfig mod_lfo{};
     ModEnvelopeConfig mod_envelope{};
     EffectsSendConfig effects_send{};
+
+    bool preparedNoteOnModulatorsValid() const {
+        if (!prepared_note_on_modulators.valid()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < prepared_note_on_modulators.count; ++index) {
+            if (!sf2::isRuntimeGenericPreparedNoteOnRoute(
+                    prepared_note_on_modulators.routes[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     bool valid() const {
         const bool sample_region_valid = !sample_region.enabled ||
@@ -208,6 +226,7 @@ struct PlaybackZone {
                root_key <= 127 && scale_tuning_cents_per_key <= 1200 &&
                root_phase_increment_q32 != 0 && sample_region_valid &&
                note_on_gain.valid() && note_on_filter.valid() &&
+               preparedNoteOnModulatorsValid() &&
                vibrato_lfo.valid() && mod_lfo.valid() &&
                mod_envelope.valid() && effects_send.valid();
     }

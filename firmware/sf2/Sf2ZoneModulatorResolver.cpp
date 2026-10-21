@@ -624,16 +624,39 @@ ResolvedZoneModulation combine(
     const std::uint32_t prepared_records = sumCategory(
         &ModulatorScan::supported_prepared_note_on_records,
         preset_global, preset_local, instrument_global, instrument_local);
-    if (combinePreparedNoteOnLevels(
-            preset_global.prepared_note_on,
-            preset_local.prepared_note_on,
-            instrument_global.prepared_note_on,
-            instrument_local.prepared_note_on,
-            &resolved.prepared_note_on_routes)) {
+    Sf2PreparedNoteOnModulatorSet combined_prepared{};
+    bool prepared_ok = combinePreparedNoteOnLevels(
+        preset_global.prepared_note_on,
+        preset_local.prepared_note_on,
+        instrument_global.prepared_note_on,
+        instrument_local.prepared_note_on,
+        &combined_prepared);
+    if (prepared_ok) {
+        for (std::size_t index = 0; index < combined_prepared.count; ++index) {
+            const Sf2PreparedNoteOnModulator& route = combined_prepared.routes[index];
+            if (route.destination_oper == kInitialFilterQDestination) {
+                prepared_ok = replacePreparedNoteOnModulator(
+                    &resolved.velocity_to_filter_q_cb.additional_routes,
+                    route);
+            } else if (isRuntimeGenericPreparedNoteOnRoute(route)) {
+                prepared_ok = replacePreparedNoteOnModulator(
+                    &resolved.prepared_note_on_routes,
+                    route);
+            } else {
+                prepared_ok = false;
+            }
+            if (!prepared_ok) {
+                break;
+            }
+        }
+    }
+    if (prepared_ok) {
         resolved.supported_prepared_note_on_records = clampU16(prepared_records);
     } else {
-        // Conservative overflow behavior: do not publish a partial route set.
-        // The raw records remain explicit unsupported telemetry.
+        // Conservative overflow/partition behavior: do not publish a partial
+        // route set. Raw records remain explicit unsupported telemetry.
+        resolved.velocity_to_filter_q_cb.additional_routes =
+            Sf2PreparedNoteOnModulatorSet{};
         resolved.prepared_note_on_routes = Sf2PreparedNoteOnModulatorSet{};
         resolved.supported_prepared_note_on_records = 0;
         route_overflow_records = saturatingAdd32(
