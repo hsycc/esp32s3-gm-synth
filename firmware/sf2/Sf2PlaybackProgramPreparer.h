@@ -3,6 +3,7 @@
 #include "Sf2PlaybackMaterializer.h"
 #include "Sf2ResolvedZone.h"
 #include "Sf2ZoneModulatorResolver.h"
+#include "../gm/PlaybackProgramKeyIndex.h"
 #include "../sample/SampleResidencyManager.h"
 
 #include <cstddef>
@@ -21,6 +22,7 @@ enum class PlaybackPrepareStatus : std::uint8_t {
     ResolveFailed,
     ModulatorResolveFailed,
     ZoneCapacityExceeded,
+    KeyIndexCapacityExceeded,
     DependencyCapacityExceeded,
     UnrepresentableZone,
     UnqualifiedZone,
@@ -50,6 +52,14 @@ struct PlaybackPrepareRequest {
     gm::PlaybackZone* playback_zones = nullptr;
     std::size_t playback_capacity = 0;
 
+    // Optional caller-owned immutable key index. key_spans points to exactly
+    // kPlaybackProgramMidiKeyCount entries. Supplying it opts small programs
+    // into indexed NoteOn lookup; programs above kLinearScanZoneLimit require
+    // it and enough key_zone_indices capacity to publish a valid snapshot.
+    gm::PlaybackProgramKeySpan* key_spans = nullptr;
+    std::uint16_t* key_zone_indices = nullptr;
+    std::size_t key_zone_index_capacity = 0;
+
     // Unique resident sample IDs required by the resolved program. Stereo
     // pairs contribute both their left and right sample IDs.
     sample::SampleId* dependencies = nullptr;
@@ -71,6 +81,9 @@ struct PlaybackPrepareResult {
     std::size_t stereo_pair_count = 0;
     std::size_t required_native_capacity = 0;
     std::size_t required_zone_capacity = 0;
+    // Number of uint16_t zone references required by the immutable key index.
+    std::size_t required_key_index_capacity = 0;
+    std::uint16_t max_candidates_per_key = 0;
     std::size_t dependency_count = 0;
     std::size_t required_dependency_capacity = 0;
     std::size_t preview_zone_count = 0;
@@ -85,7 +98,8 @@ struct PlaybackPrepareResult {
 // Control-domain bridge from a parsed SF2 bank to the immutable realtime
 // PlaybackProgramSnapshot. It resolves the native hierarchy first, validates
 // linked stereo pairs, expands left/right samples into two mono PlaybackZones,
-// then performs a transactional materialization preflight before publication.
+// builds the optional/required key index, then performs transactional
+// materialization validation before publication.
 class Sf2PlaybackProgramPreparer {
 public:
     explicit Sf2PlaybackProgramPreparer(std::uint32_t output_sample_rate = 44100)
