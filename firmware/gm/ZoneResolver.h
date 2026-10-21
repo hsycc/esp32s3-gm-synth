@@ -77,6 +77,7 @@ struct RealtimeProgramEventStats {
     std::uint64_t pitch_bend_events = 0;
     std::uint64_t channel_pressure_events = 0;
     std::uint64_t controller_state_changes = 0;
+    std::uint64_t filter_controller_changes = 0;
     std::uint64_t active_voice_updates = 0;
     std::uint64_t sustain_releases = 0;
     std::uint64_t all_notes_off_events = 0;
