@@ -53,11 +53,21 @@ struct ScheduledWorstBlockVoiceContext {
     std::uint8_t exclusive_tails = 0;
 };
 
+// Only event-heavy physical blocks (>=8 scheduled events) get stage timing.
+struct ScheduledWorstBlockStages {
+    bool valid = false;
+    std::uint32_t setup_prepare_us = 0;
+    std::uint32_t event_apply_us = 0;
+    std::uint32_t voice_render_us = 0;
+    std::uint32_t effects_finalize_us = 0;
+};
+
 struct ScheduledWorstBlockEntry {
     bool valid = false;
     std::size_t stream_block = 0;
     std::uint64_t block_start_frame = 0;
     std::uint32_t render_us = 0;
+    ScheduledWorstBlockStages stages{};
     ScheduledWorstBlockEventContext events{};
     ScheduledWorstBlockVoiceContext voices{};
 };
@@ -123,7 +133,8 @@ private:
     void recordWorstBlock(
         std::uint64_t block_start_frame,
         std::uint32_t render_us,
-        const BlockEventBatch& batch);
+        const BlockEventBatch& batch,
+        const ScheduledWorstBlockStages& stages);
     ScheduledWorstBlockVoiceContext captureProfileVoices();
     void insertWorstBlock(ScheduledWorstBlockEntry entry);
 
