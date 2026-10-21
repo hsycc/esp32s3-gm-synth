@@ -19,7 +19,7 @@ class M7ModulatorClosureTests(unittest.TestCase):
         )
         self.assertTrue(modulator_closure.currently_supported(route))
 
-    def test_fluid_dual_velocity_filter_q_is_prepared_note_on_candidate(self):
+    def test_fluid_dual_velocity_filter_q_matches_runtime_prepared_route(self):
         route = modulator_closure.Route(
             asset="fluidr3_gm",
             scope="instrument",
@@ -29,6 +29,19 @@ class M7ModulatorClosureTests(unittest.TestCase):
             amount_source=0x0D02,
             transform=0,
             count=4,
+        )
+        self.assertTrue(modulator_closure.currently_supported(route))
+
+    def test_note_on_pan_remains_explicitly_pending(self):
+        route = modulator_closure.Route(
+            asset="generaluser_gs",
+            scope="instrument",
+            source=0x0203,
+            destination=17,
+            amount=400,
+            amount_source=0,
+            transform=0,
+            count=1,
         )
         self.assertFalse(modulator_closure.currently_supported(route))
         self.assertEqual(
