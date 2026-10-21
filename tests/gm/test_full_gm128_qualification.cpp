@@ -557,7 +557,7 @@ int main() {
               << " total_dependencies=" << stats.total_dependencies
               << " unique_dependencies=" << stats.unique_dependency_count
               << " unique_pcm_bytes=" << stats.unique_dependency_pcm_bytes
-              << " unique_aligned_pcm_bytes=" << stats.unique_dependency_aligned_pcm_bytes
+              << " unique_aligned_pcm_bytes=" << stats.unique_dependency_aligned_bytes
               << " supported_modulator_records=" << stats.supported_modulator_records
               << " unsupported_modulator_records=" << stats.unsupported_modulator_records
               << " preview_zones=" << stats.preview_zones
