@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PlaybackProgramKeyIndex.h"
 #include "PlaybackProgramSnapshot.h"
 #include "ProgramChangeMailbox.h"
 #include "RealtimeProgramChangeHandoff.h"
@@ -26,9 +27,9 @@ enum class ProgramChangeServiceStatus : std::uint8_t {
 };
 
 // Caller-owned storage for one prepared playback generation. The object and its
-// playback_zones buffer must remain alive and immutable while snapshot is READY,
-// Active or Retired. In practice keep two of these per MIDI channel and reuse a
-// retired one only after acknowledgeCommitted() returns it.
+// playback_zones/key-index buffers must remain alive and immutable while the
+// snapshot is READY, Active or Retired. In practice keep two of these per MIDI
+// channel and reuse a retired one only after acknowledgeCommitted() returns it.
 struct ProgramChangePrepareWorkspace {
     sf2::NativeResolvedZone* native_scratch = nullptr;
     std::size_t native_capacity = 0;
@@ -36,16 +37,26 @@ struct ProgramChangePrepareWorkspace {
     std::size_t modulation_capacity = 0;
     PlaybackZone* playback_zones = nullptr;
     std::size_t playback_capacity = 0;
+    PlaybackProgramKeySpan* key_spans = nullptr;
+    std::uint16_t* key_zone_indices = nullptr;
+    std::size_t key_zone_index_capacity = 0;
     sample::SampleId* dependencies = nullptr;
     std::size_t dependency_capacity = 0;
     sf2::PlaybackPreparePolicy policy = sf2::PlaybackPreparePolicy::AllowPreview;
     PlaybackProgramSnapshot snapshot{};
 
     bool structurallyValid() const {
+        const bool has_any_key_index_storage =
+            key_spans != nullptr || key_zone_indices != nullptr || key_zone_index_capacity != 0;
+        const bool key_index_storage_valid =
+            !has_any_key_index_storage ||
+            (key_spans != nullptr &&
+             (key_zone_index_capacity == 0 || key_zone_indices != nullptr));
         return native_scratch != nullptr && native_capacity != 0 &&
                modulation_scratch != nullptr && modulation_capacity != 0 &&
                playback_zones != nullptr && playback_capacity != 0 &&
-               dependencies != nullptr && dependency_capacity != 0;
+               dependencies != nullptr && dependency_capacity != 0 &&
+               key_index_storage_valid;
     }
 };
 
