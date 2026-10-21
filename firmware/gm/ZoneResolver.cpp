@@ -1,4 +1,5 @@
 #include "ZoneResolver.h"
+#include "voice/AudioBlockRenderer.h"
 
 #if defined(ESP_PLATFORM)
 #include "esp_timer.h"
