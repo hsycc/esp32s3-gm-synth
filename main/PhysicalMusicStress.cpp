@@ -140,6 +140,14 @@ bool PhysicalMusicStress::initialize() {
         zone.effects_send.chorus_sf2_units = 300;
         zone.effects_send.reverb_cc_amount = 500;
         zone.effects_send.chorus_cc_amount = 500;
+        // Physical-only channel 6 (zero-based 5) filter stress. Four
+        // sustained notes are already scheduled in the p7 burst.
+        if (channel == 5u) {
+            zone.note_on_filter.enabled = true;
+            zone.note_on_filter.initial_cutoff_cents = 9000;
+            zone.note_on_filter.velocity_to_cutoff_cents = 0;
+            zone.note_on_filter.cc21_to_cutoff_cents = -2400;
+        }
 
         gm::PlaybackProgramSnapshot& program = programs_[channel];
         program = gm::PlaybackProgramSnapshot{};
@@ -440,6 +448,15 @@ bool PhysicalMusicStress::enqueueTimeline(
         }
     }
 
+    const std::uint64_t p8 = phaseFrame(8, 16);
+    const std::uint64_t p9 = phaseFrame(9, 16);
+    const std::uint64_t p10 = phaseFrame(10, 16);
+    if (!pushEvent(queue, p8, realtime::EventType::ControlChange, 5, 21, 64) ||
+        !pushEvent(queue, p9, realtime::EventType::ControlChange, 5, 21, 127) ||
+        !pushEvent(queue, p10, realtime::EventType::ControlChange, 5, 21, 0)) {
+        return false;
+    }
+
     const std::uint64_t p11 = phaseFrame(11, 16);
     if (!pushEvent(queue, p11, realtime::EventType::ControlChange, 2, 64, 127)) {
         return false;
@@ -524,7 +541,7 @@ bool PhysicalMusicStress::enqueueTimeline(
 
     ESP_LOGI(
         kTag,
-        "music_stress: TIMELINE_ARMED events=%u measured_blocks=%u duration_frames=%llu includes=sustain,release,percussion,pitch,cc,program_handoff,gm_reset",
+        "music_stress: TIMELINE_ARMED events=%u measured_blocks=%u duration_frames=%llu includes=sustain,release,percussion,pitch,cc,cc21_filter_sweep,program_handoff,gm_reset",
         static_cast<unsigned>(timeline_events_enqueued_),
         static_cast<unsigned>(measured_blocks),
         static_cast<unsigned long long>(measured_blocks * kFramesPerBlock));
@@ -628,6 +645,10 @@ bool PhysicalMusicStress::validateAndLog(
         static_cast<unsigned>(handoff_after_take.read_retries),
         latest_programs_ok ? 1u : 0u);
 
+    ESP_LOGI(
+        kTag,
+        "music_stress: CC21_FILTER channel=5 zone_cutoff=9000 amount=-2400 sequence=0,64,127,0 filter_changes=%llu gate=physical_diagnostic",
+        static_cast<unsigned long long>(event_stats.filter_controller_changes));
     const auto note_burst = event_applier_.noteOnBurstTiming();
     ESP_LOGI(
         kTag,
@@ -655,6 +676,7 @@ bool PhysicalMusicStress::validateAndLog(
         event_stats.note_off_events >= 28 &&
         event_stats.pitch_bend_events >= 1 &&
         event_stats.channel_pressure_events >= 1 &&
+        event_stats.filter_controller_changes >= 3 &&
         event_stats.voice_start_failures == 0 &&
         event_stats.percussion_program_unavailable == 0 &&
         event_stats.resolve_overflows == 0 &&
