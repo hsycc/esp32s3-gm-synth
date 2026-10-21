@@ -7,6 +7,7 @@
 #include "../../firmware/sf2/Sf2StereoPair.h"
 #include "../../firmware/voice/VoiceRenderer.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -29,11 +30,13 @@ using gm_synth::sf2::NativeZoneFlagInvalidLoopRange;
 using gm_synth::sf2::NativeZoneFlagSampleAddressOutOfSmpl;
 using gm_synth::sf2::NativeZoneFlagStereoOrLinkedSample;
 using gm_synth::sf2::Sf2PdtaReader;
+using gm_synth::sf2::Sf2PreparedNoteOnModulator;
 using gm_synth::sf2::StereoPairExpansion;
 using gm_synth::sf2::StereoPairStatus;
 using gm_synth::sf2::applyStereoBasePan;
 using gm_synth::sf2::channelNoteOnGainQ15;
 using gm_synth::sf2::controllerToPanSf2Units;
+using gm_synth::sf2::evaluatePreparedNoteOnModulator;
 using gm_synth::sf2::expandStereoPair;
 using gm_synth::sf2::kSf2LeftSampleType;
 using gm_synth::sf2::kSf2LinkedSampleType;
@@ -260,6 +263,8 @@ void testExpandedStereoPanPreservesLayerBaseAcrossLiveCc10() {
 
     assert(left.note_on_gain.pan_sf2_units == -500);
     assert(right.note_on_gain.pan_sf2_units == 500);
+    assert(left.note_on_gain.stereo_pan_offset_sf2_units == -500);
+    assert(right.note_on_gain.stereo_pan_offset_sf2_units == 500);
     assert(left.gain_left_q15 == kQ15Unity);
     assert(left.gain_right_q15 == 0);
     assert(right.gain_left_q15 == 0);
@@ -288,6 +293,7 @@ void testExpandedStereoPanPreservesLayerBaseAcrossLiveCc10() {
     far_left.gain_right_q15 = 0;
     applyStereoBasePan(&far_left, true);
     assert(far_left.note_on_gain.pan_sf2_units == -1000);
+    assert(far_left.note_on_gain.stereo_pan_offset_sf2_units == -500);
     assert(far_left.valid());
 
     std::int32_t out_left = 0;
@@ -302,6 +308,60 @@ void testExpandedStereoPanPreservesLayerBaseAcrossLiveCc10() {
         &out_right);
     assert(out_left == kQ15Unity);
     assert(out_right == 0);
+}
+
+void testPreparedPanModulationClampsBeforeStereoSideAndSurvivesLiveCc10() {
+    constexpr std::uint8_t key = 127;
+    constexpr std::uint8_t velocity = 100;
+    const Sf2PreparedNoteOnModulator pan_route{0x0203u, 17u, 400, 0u};
+    const std::int32_t pan_delta =
+        evaluatePreparedNoteOnModulator(pan_route, key, velocity);
+
+    PlaybackZone mono = tunedZone(100);
+    mono.note_on_gain.pan_sf2_units = 400;
+    mono.gain_left_q15 = sf2PanChannelGainQ15(400, true);
+    mono.gain_right_q15 = sf2PanChannelGainQ15(400, false);
+    mono.prepared_note_on_modulators.routes[0] = pan_route;
+    mono.prepared_note_on_modulators.count = 1;
+    assert(mono.valid());
+
+    const std::int32_t generator_pan = std::clamp(400 + pan_delta, -500, 500);
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    const PlaybackProgramSnapshot mono_program = programFor(&mono);
+    assert(resolver.resolveNoteOn(mono_program, 2, key, velocity, 6, &batch) ==
+           ZoneResolveStatus::Ok);
+    assert(batch.count == 1);
+    assert(batch.voices[0].gain_left_q15 == sf2PanChannelGainQ15(generator_pan, true));
+    assert(batch.voices[0].gain_right_q15 == sf2PanChannelGainQ15(generator_pan, false));
+
+    PlaybackZone stereo_left = mono;
+    applyStereoBasePan(&stereo_left, true);
+    assert(stereo_left.note_on_gain.pan_sf2_units == -100);
+    assert(stereo_left.note_on_gain.stereo_pan_offset_sf2_units == -500);
+    assert(stereo_left.valid());
+
+    MidiChannelState state{};
+    state.resetAll();
+    state.volume = 127;
+    state.expression = 127;
+    state.pan = 64;
+    const PlaybackProgramSnapshot stereo_program = programFor(&stereo_left);
+    assert(resolver.resolveNoteOn(stereo_program, state, 2, key, velocity, 7, &batch) ==
+           ZoneResolveStatus::Ok);
+    assert(batch.count == 1);
+    const std::int32_t stereo_pan = generator_pan - 500;
+    assert(batch.voices[0].gain_left_q15 == sf2PanChannelGainQ15(stereo_pan, true));
+    assert(batch.voices[0].gain_right_q15 == sf2PanChannelGainQ15(stereo_pan, false));
+    assert(batch.voices[0].realtime_control.pan_sf2_units == stereo_pan);
+
+    // This assertion catches the wrong order. Adding the modulator directly to
+    // the already-expanded -100 pan would yield a different value whenever the
+    // generator-domain sum clamps at +500 before the stereo-side offset.
+    const std::int32_t wrong_order_pan = std::clamp(-100 + pan_delta, -1000, 1000);
+    if (generator_pan == 500) {
+        assert(stereo_pan != wrong_order_pan);
+    }
 }
 
 void testStereoLayersRenderTogetherAndDoNotSelfChokeExclusiveClass() {
@@ -366,6 +426,7 @@ int main() {
     testStereoPairExpansionUsesRightPitchAndMirrorsAddressOffsets();
     testStereoPairValidationRejectsUndefinedAndBrokenLinks();
     testExpandedStereoPanPreservesLayerBaseAcrossLiveCc10();
+    testPreparedPanModulationClampsBeforeStereoSideAndSurvivesLiveCc10();
     testStereoLayersRenderTogetherAndDoNotSelfChokeExclusiveClass();
     std::cout << "SF2 scale-tuning/pan/stereo runtime checks passed\n";
     return 0;
