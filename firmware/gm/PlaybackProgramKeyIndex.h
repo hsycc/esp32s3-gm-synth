@@ -9,16 +9,8 @@
 
 namespace gm_synth::gm {
 
-// The observed M7 banks peak at 720 zones. Keep the control-domain indexed
-// representation comfortably above that without changing the existing 256-zone
-// linear-scan contract until the index is wired into ZoneResolver.
-constexpr std::size_t kPlaybackProgramIndexedZoneLimit = 1024;
-constexpr std::size_t kPlaybackProgramMidiKeyCount = 128;
-
-struct PlaybackProgramKeySpan {
-    std::uint32_t begin = 0;
-    std::uint16_t count = 0;
-};
+constexpr std::size_t kPlaybackProgramIndexedZoneLimit = PlaybackProgramSnapshot::kMaxZones;
+constexpr std::size_t kPlaybackProgramMidiKeyCount = PlaybackProgramSnapshot::kMidiKeyCount;
 
 struct PlaybackProgramKeyIndexView {
     const PlaybackProgramKeySpan* spans = nullptr;
@@ -36,6 +28,11 @@ struct PlaybackProgramKeyIndexView {
             const PlaybackProgramKeySpan& span = spans[key];
             if (span.begin > reference_count ||
                 span.count > reference_count - span.begin) {
+                return false;
+            }
+        }
+        for (std::uint32_t index = 0; index < reference_count; ++index) {
+            if (zone_indices[index] >= zone_count) {
                 return false;
             }
         }
@@ -65,8 +62,8 @@ struct PlaybackProgramKeyIndexBuildResult {
 
 // Build a stable, allocation-free key -> zone-index table outside the realtime
 // domain. Each zone index is repeated once for every MIDI key in its key range.
-// The audio path can therefore scan only the candidate span for the incoming
-// key and apply the existing velocity predicate to that bounded subset.
+// The audio path therefore scans only the candidate span for the incoming key
+// and applies the existing velocity predicate to that bounded subset.
 inline PlaybackProgramKeyIndexBuildResult buildPlaybackProgramKeyIndex(
     const PlaybackZone* zones,
     std::size_t zone_count,
