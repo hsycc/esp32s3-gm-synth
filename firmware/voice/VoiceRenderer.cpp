@@ -490,6 +490,9 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     }
 
     active_ = true;
+    if (params_.realtime_control.cc21_filter_offset_cents != 0) {
+        refreshModulationState();
+    }
     return true;
 }
 
@@ -868,7 +871,8 @@ void Voice::refreshModulationState() {
     current_lowpass_ = params_.lowpass;
 
     std::int64_t pitch_cents = 0;
-    std::int64_t filter_offset_cents = 0;
+    std::int64_t filter_offset_cents =
+        params_.realtime_control.cc21_filter_offset_cents;
     if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0 &&
         params_.vibrato_lfo.pitch_depth_cents != 0) {
         pitch_cents += scaleSignedQ15(
