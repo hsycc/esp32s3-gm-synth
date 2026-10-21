@@ -23,6 +23,7 @@ def sample_log(version="abcdef0", gate="0x00000000", cc=3):
         f"I gm_synth: music_stress: CC21_FILTER channel=5 filter_changes={cc}",
         "I gm_synth: music_stress: RESULT max_stable_polyphony=24 PASS",
         "I gm_synth: physical_polyphony: RESULT max_stable_voices=24 PASS",
+        "I main_task: Returned from app_main()",
     ]
     return "\n".join(parts)
 
@@ -52,6 +53,11 @@ class M7PhysicalCompareTests(unittest.TestCase):
         r=self.parse(sample_log(gate="0x00000020",cc=2))
         self.assertFalse(r["checks"]["hard_gate"])
         self.assertFalse(r["checks"]["cc21_sweep"])
+
+    def test_missing_final_marker_is_incomplete(self):
+        incomplete=sample_log().replace("I main_task: Returned from app_main()","")
+        with self.assertRaisesRegex(ValueError,"incomplete"):
+            self.parse(incomplete)
 
     def test_wdt_is_rejected(self):
         with self.assertRaisesRegex(ValueError,"crash/WDT"):
