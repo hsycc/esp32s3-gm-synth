@@ -1,5 +1,6 @@
 #include "ZoneResolver.h"
 
+#include "PlaybackProgramKeyIndex.h"
 #include "sf2/Sf2FilterMath.h"
 #include "sf2/Sf2ModulationMath.h"
 #include "sf2/Sf2ResonantFilterMath.h"
@@ -68,6 +69,69 @@ bool validResolveArguments(
         note_instance_id != 0 && program.channel == channel &&
         program.zone_count <= PlaybackProgramSnapshot::kMaxZones &&
         (program.zone_count == 0 || program.zones != nullptr);
+}
+
+struct ZoneCandidateSpan {
+    const std::uint16_t* zone_indices = nullptr;
+    std::size_t count = 0;
+    bool indexed = false;
+};
+
+bool noteOnCandidates(
+    const PlaybackProgramSnapshot& program,
+    std::uint8_t key,
+    ZoneCandidateSpan* output) {
+    if (output == nullptr || key >= PlaybackProgramSnapshot::kMidiKeyCount) {
+        return false;
+    }
+
+    const bool has_any_index_state =
+        program.key_spans != nullptr || program.key_zone_indices != nullptr ||
+        program.key_reference_count != 0;
+    if (!has_any_index_state) {
+        if (program.zone_count > PlaybackProgramSnapshot::kLinearScanZoneLimit) {
+            return false;
+        }
+        output->zone_indices = nullptr;
+        output->count = program.zone_count;
+        output->indexed = false;
+        return true;
+    }
+
+    if (program.key_spans == nullptr ||
+        (program.key_reference_count != 0 && program.key_zone_indices == nullptr)) {
+        return false;
+    }
+    const PlaybackProgramKeySpan span = program.key_spans[key];
+    if (span.begin > program.key_reference_count ||
+        span.count > program.key_reference_count - span.begin) {
+        return false;
+    }
+
+    output->zone_indices = span.count == 0
+        ? nullptr
+        : program.key_zone_indices + span.begin;
+    output->count = span.count;
+    output->indexed = true;
+    return true;
+}
+
+bool candidateZoneIndex(
+    const PlaybackProgramSnapshot& program,
+    const ZoneCandidateSpan& candidates,
+    std::size_t candidate,
+    std::size_t* zone_index) {
+    if (zone_index == nullptr || candidate >= candidates.count) {
+        return false;
+    }
+    const std::size_t resolved = candidates.indexed
+        ? static_cast<std::size_t>(candidates.zone_indices[candidate])
+        : candidate;
+    if (resolved >= program.zone_count) {
+        return false;
+    }
+    *zone_index = resolved;
+    return true;
 }
 
 std::uint8_t effectiveVelocity(const PlaybackZone& zone, std::uint8_t velocity) {
@@ -612,12 +676,19 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
     std::uint8_t velocity,
     std::uint32_t note_instance_id,
     ResolvedVoiceBatch* batch) const {
-    if (!validResolveArguments(program, channel, key, velocity, note_instance_id, batch)) {
+    ZoneCandidateSpan candidates{};
+    if (!validResolveArguments(program, channel, key, velocity, note_instance_id, batch) ||
+        !noteOnCandidates(program, key, &candidates)) {
         return ZoneResolveStatus::InvalidArgument;
     }
 
     batch->clear();
-    for (std::size_t i = 0; i < program.zone_count; ++i) {
+    for (std::size_t candidate = 0; candidate < candidates.count; ++candidate) {
+        std::size_t i = 0;
+        if (!candidateZoneIndex(program, candidates, candidate, &i)) {
+            batch->clear();
+            return ZoneResolveStatus::InvalidArgument;
+        }
         const PlaybackZone& zone = program.zones[i];
         if (!zone.matches(key, velocity)) {
             continue;
@@ -709,13 +780,20 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
     std::uint8_t velocity,
     std::uint32_t note_instance_id,
     ResolvedVoiceBatch* batch) const {
-    if (!validResolveArguments(program, channel, key, velocity, note_instance_id, batch)) {
+    ZoneCandidateSpan candidates{};
+    if (!validResolveArguments(program, channel, key, velocity, note_instance_id, batch) ||
+        !noteOnCandidates(program, key, &candidates)) {
         return ZoneResolveStatus::InvalidArgument;
     }
 
     const int bend_cents = pitchBendCents(channel_state);
     batch->clear();
-    for (std::size_t i = 0; i < program.zone_count; ++i) {
+    for (std::size_t candidate = 0; candidate < candidates.count; ++candidate) {
+        std::size_t i = 0;
+        if (!candidateZoneIndex(program, candidates, candidate, &i)) {
+            batch->clear();
+            return ZoneResolveStatus::InvalidArgument;
+        }
         const PlaybackZone& zone = program.zones[i];
         if (!zone.matches(key, velocity)) {
             continue;
