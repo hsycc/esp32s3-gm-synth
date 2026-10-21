@@ -1,5 +1,9 @@
 #include "ZoneResolver.h"
 
+#if defined(ESP_PLATFORM)
+#include "esp_timer.h"
+#endif
+
 #include "PlaybackProgramKeyIndex.h"
 #include "sf2/Sf2FilterMath.h"
 #include "sf2/Sf2ModulationMath.h"
@@ -1104,6 +1108,24 @@ bool RealtimeProgramEventApplier::apply(
         return true;
     }
 
+#if defined(ESP_PLATFORM)
+    const bool measure_note = note_on_burst_timing_enabled_;
+    if (measure_note) {
+        constexpr std::uint64_t kBlockFrames = voice::AudioBlockRenderer::kFramesPerBlock;
+        const std::uint64_t block_frame =
+            (event.timestamp_frame / kBlockFrames) * kBlockFrames;
+        if (note_on_burst_current_.note_on_count != 0 &&
+            note_on_burst_current_.block_start_frame != block_frame) {
+            if (note_on_burst_current_.note_on_count >
+                note_on_burst_worst_.note_on_count) {
+                note_on_burst_worst_ = note_on_burst_current_;
+            }
+            note_on_burst_current_ = NoteOnBurstTiming{};
+        }
+        note_on_burst_current_.block_start_frame = block_frame;
+    }
+    const std::int64_t zone_start_us = measure_note ? esp_timer_get_time() : 0;
+#endif
     const ZoneResolveStatus status = resolver_.resolveNoteOn(
         *program,
         channel_states_.channel(event.channel),
@@ -1112,6 +1134,17 @@ bool RealtimeProgramEventApplier::apply(
         event.data2,
         allocateNoteInstanceId(),
         &batch_);
+
+#if defined(ESP_PLATFORM)
+    if (measure_note) {
+        const auto zone_us = static_cast<std::uint32_t>(
+            std::max<std::int64_t>(0, esp_timer_get_time() - zone_start_us));
+        ++note_on_burst_current_.note_on_count;
+        note_on_burst_current_.zone_resolve_us += zone_us;
+        note_on_burst_current_.max_zone_resolve_us =
+            std::max(note_on_burst_current_.max_zone_resolve_us, zone_us);
+    }
+#endif
 
     if (status == ZoneResolveStatus::NoMatch) {
         util::saturatingIncrement(stats_.no_matching_zones);
@@ -1127,6 +1160,9 @@ bool RealtimeProgramEventApplier::apply(
     }
 
     util::saturatingAdd(stats_.voices_resolved, static_cast<std::uint64_t>(batch_.count));
+#if defined(ESP_PLATFORM)
+    const std::int64_t voice_start_us = measure_note ? esp_timer_get_time() : 0;
+#endif
     bool all_started = true;
     for (std::size_t i = 0; i < batch_.count; ++i) {
         if (voices.start(batch_.voices[i])) {
@@ -1136,6 +1172,15 @@ bool RealtimeProgramEventApplier::apply(
             all_started = false;
         }
     }
+#if defined(ESP_PLATFORM)
+    if (measure_note) {
+        const auto elapsed_us = static_cast<std::uint32_t>(
+            std::max<std::int64_t>(0, esp_timer_get_time() - voice_start_us));
+        note_on_burst_current_.voice_start_us += elapsed_us;
+        note_on_burst_current_.max_voice_start_us =
+            std::max(note_on_burst_current_.max_voice_start_us, elapsed_us);
+    }
+#endif
     return all_started;
 }
 
