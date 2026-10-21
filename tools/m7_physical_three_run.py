@@ -26,6 +26,16 @@ def parse_log(path):
                 if (m := re.search(r"App version:\s*([0-9a-fA-F]+)",ln))]
     if not versions:
         raise ValueError(f"{path}: App version missing")
+    # A WDT often prevents app_main from returning. Report the real failure
+    # rather than obscuring it with a generic "incomplete boot log" error.
+    failure = next((line for line in lines
+                    if "task_wdt: Task watchdog got triggered" in line
+                    or "Guru Meditation Error" in line), None)
+    if failure is not None:
+        raise ValueError(f"{path}: crash/WDT in physical qualification: {failure.strip()}")
+    if len(versions) != 1:
+        raise ValueError(f"{path}: multiple boot sessions/reboots ({len(versions)}); "
+                         "one log must contain exactly one independent boot")
     if not any("Returned from app_main()" in line for line in lines):
         raise ValueError(f"{path}: incomplete boot log (no app_main completion)")
     result_lines = line_with(lines,"i2s_qual: RESULT blocks=")
@@ -58,8 +68,6 @@ def parse_log(path):
     if not render_timings or len(render_timings.split("/")) != 3:
         raise ValueError(f"{path}: render timings missing")
     minimum,average,maximum = map(int,render_timings.split("/"))
-    if any("task_wdt:" in x or "Guru Meditation" in x for x in lines):
-        raise ValueError(f"{path}: crash/WDT detected")
     passes = {
         "hard_gate": all(expect_int(fields(x),"failure_flags",16) == 0
                          for x in gate_lines),
