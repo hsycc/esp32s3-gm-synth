@@ -43,7 +43,7 @@ class M7PhysicalCompareTests(unittest.TestCase):
         self.assertEqual(r["render_max_us"],2006)
 
     def test_zero_soft_overruns_need_no_retained_worst_block(self):
-        no_worst="\\n".join(line for line in sample_log().splitlines()
+        no_worst="\n".join(line for line in sample_log().splitlines()
                            if "i2s_worst:" not in line)
         r=self.parse(no_worst)
         self.assertTrue(all(r["checks"].values()))
