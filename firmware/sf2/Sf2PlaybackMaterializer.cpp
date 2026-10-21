@@ -31,7 +31,8 @@ constexpr std::uint64_t kHardIssueMask =
 // from StrictQualified.
 constexpr std::uint64_t kStrictQualificationIssueMask =
     ~(static_cast<std::uint64_t>(PlaybackIssueGainAboveUnityClamped) |
-      static_cast<std::uint64_t>(PlaybackIssueScaleTuningPending));
+      static_cast<std::uint64_t>(PlaybackIssueScaleTuningPending) |
+      static_cast<std::uint64_t>(PlaybackIssueLoopStartClamped));
 
 std::uint32_t timecentsToFrames(std::int32_t timecents, std::uint32_t sample_rate) {
     if (sample_rate == 0) {
@@ -190,7 +191,20 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         native.sample_end > static_cast<std::int64_t>(native.shdr_end)) {
         issues |= PlaybackIssueAddressOutsideResidentSample;
     }
-    if ((native.flags & NativeZoneFlagInvalidLoopRange) != 0) {
+    // A sample-start offset may legitimately skip over the original loop
+    // start. When the end still follows the new start, intersect the two
+    // intervals. Malformed, reversed or out-of-bounds loops remain hard errors.
+    const bool can_clamp_loop_start =
+        (native.flags & NativeZoneFlagInvalidLoopRange) != 0 &&
+        native.sampleModes() == 1 &&
+        native.sample_start > native.loop_start &&
+        native.sample_start < native.loop_end &&
+        native.loop_end <= native.sample_end &&
+        native.loop_start >= static_cast<std::int64_t>(native.shdr_start) &&
+        native.loop_end <= static_cast<std::int64_t>(native.shdr_end);
+    if (can_clamp_loop_start) {
+        issues |= PlaybackIssueLoopStartClamped;
+    } else if ((native.flags & NativeZoneFlagInvalidLoopRange) != 0) {
         issues |= PlaybackIssueInvalidLoop;
     }
     if ((native.flags & NativeZoneFlagRomSample) != 0) {
@@ -292,7 +306,8 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
             native.sample_end - static_cast<std::int64_t>(native.shdr_start));
         if (looping && (issues & PlaybackIssueInvalidLoop) == 0) {
             candidate.sample_region.loop_start_frame = static_cast<std::uint32_t>(
-                native.loop_start - static_cast<std::int64_t>(native.shdr_start));
+                (can_clamp_loop_start ? native.sample_start : native.loop_start) -
+                static_cast<std::int64_t>(native.shdr_start));
             candidate.sample_region.loop_end_frame = static_cast<std::uint32_t>(
                 native.loop_end - static_cast<std::int64_t>(native.shdr_start));
         }
