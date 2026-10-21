@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -54,6 +55,24 @@ private:
     std::ifstream file_;
     std::uint64_t size_ = 0;
 };
+
+// Host-only PCM16 seam probe; a discontinuity is a listening-review signal.
+bool pcmPoint(RandomAccessReader& reader, const Sf2PdtaReader& pdta,
+              std::int64_t index, std::int32_t* value) {
+    if (value == nullptr || index < 0 ||
+        static_cast<std::uint64_t>(index) >= pdta.smplPointCount()) {
+        return false;
+    }
+    std::uint8_t bytes[2]{};
+    if (!reader.readAt(pdta.smplPayloadOffset() +
+            static_cast<std::uint64_t>(index) * 2u, bytes, sizeof(bytes))) {
+        return false;
+    }
+    *value = static_cast<std::int16_t>(
+        static_cast<std::uint16_t>(bytes[0]) |
+        (static_cast<std::uint16_t>(bytes[1]) << 8u));
+    return true;
+}
 
 std::int32_t generatorValue(const NativeResolvedZone& zone, std::uint16_t oper) {
     return zone.generators.value(oper, 0);
@@ -167,6 +186,9 @@ int main(int argc, char** argv) {
                       << " bad_start=" << (bad_start ? 1 : 0)
                       << " bad_order=" << (bad_order ? 1 : 0)
                       << " bad_end=" << (bad_end ? 1 : 0)
+                      << " normalized=" << (normalized ? 1 : 0)
+                      << " seam_pcm16_jump=" << seam_jump
+                      << " terminal_pcm16_step=" << terminal_step
                       << '\n';
         }
         if (program_invalid) {
