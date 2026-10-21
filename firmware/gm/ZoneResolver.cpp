@@ -1039,6 +1039,9 @@ bool RealtimeProgramEventApplier::apply(
         if (action != ChannelControlNone) {
             util::saturatingIncrement(stats_.controller_state_changes);
         }
+        if ((action & ChannelControlFilterChanged) != 0) {
+            util::saturatingIncrement(stats_.filter_controller_changes);
+        }
 
         if ((action & ChannelControlAllSoundOff) != 0) {
             util::saturatingIncrement(stats_.all_sound_off_events);
