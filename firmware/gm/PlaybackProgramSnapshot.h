@@ -38,6 +38,10 @@ struct NoteOnGainConfig {
     // pan-width of headroom prevents an early clamp from changing controller
     // behavior when the channel later pans back toward center.
     std::int16_t pan_sf2_units = 0;
+    // Stereo expansion records its side contribution separately so file-defined
+    // NoteOn modulators targeting generator 17 can run in the required order:
+    // generator sum -> clamp to -500..500 -> add stereo side -> live CC10.
+    std::int16_t stereo_pan_offset_sf2_units = 0;
     // -1 means use the incoming NoteOn velocity. SF2 generator 47 may replace
     // the velocity used by note-on modulators without changing zone selection.
     std::int16_t fixed_velocity = -1;
@@ -45,6 +49,8 @@ struct NoteOnGainConfig {
     bool valid() const {
         return !enabled ||
             (pan_sf2_units >= -1000 && pan_sf2_units <= 1000 &&
+             stereo_pan_offset_sf2_units >= -500 &&
+             stereo_pan_offset_sf2_units <= 500 &&
              fixed_velocity >= -1 && fixed_velocity <= 127);
     }
 };
