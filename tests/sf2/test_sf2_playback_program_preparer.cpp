@@ -11,6 +11,7 @@
 
 namespace {
 
+using gm_synth::gm::PlaybackProgramKeySpan;
 using gm_synth::gm::PlaybackProgramSnapshot;
 using gm_synth::gm::PlaybackZone;
 using gm_synth::sample::SampleId;
@@ -140,16 +141,20 @@ void testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes() {
     std::array<ResolvedZoneModulation, 8> modulation{};
     std::array<PlaybackZone, 8> playback{};
     std::array<SampleId, 8> dependencies{};
+    std::array<PlaybackProgramKeySpan, PlaybackProgramSnapshot::kMidiKeyCount> key_spans{};
+    std::array<std::uint16_t, PlaybackProgramSnapshot::kMidiKeyCount> key_references{};
     PlaybackProgramSnapshot snapshot{};
 
-    const auto result = Sf2PlaybackProgramPreparer{}.prepare(
-        pdta,
-        requestFor(
-            native.data(), native.size(),
-            modulation.data(), modulation.size(),
-            playback.data(), playback.size(),
-            dependencies.data(), dependencies.size(),
-            &snapshot));
+    PlaybackPrepareRequest request = requestFor(
+        native.data(), native.size(),
+        modulation.data(), modulation.size(),
+        playback.data(), playback.size(),
+        dependencies.data(), dependencies.size(),
+        &snapshot);
+    request.key_spans = key_spans.data();
+    request.key_zone_indices = key_references.data();
+    request.key_zone_index_capacity = key_references.size();
+    const auto result = Sf2PlaybackProgramPreparer{}.prepare(pdta, request);
 
     assert(result.status == PlaybackPrepareStatus::Ok);
     assert(result.resolve_status == ResolveProgramStatus::Ok);
@@ -159,6 +164,9 @@ void testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes() {
     assert(result.stereo_pair_count == 0);
     assert(result.required_native_capacity == 1);
     assert(result.required_zone_capacity == 1);
+    assert(result.required_key_index_capacity > 0);
+    assert(result.required_key_index_capacity <= key_references.size());
+    assert(result.max_candidates_per_key == 1);
     assert(result.dependency_count == 1);
     assert(result.required_dependency_capacity == 1);
     assert(result.supported_modulator_records == 0);
@@ -174,6 +182,9 @@ void testFmProgramPreparesQualifiedSnapshotAndResolvedDefaultRoutes() {
     assert(snapshot.bank_generation == 3);
     assert(snapshot.zones == playback.data());
     assert(snapshot.zone_count == 1);
+    assert(snapshot.key_spans == key_spans.data());
+    assert(snapshot.key_zone_indices == key_references.data());
+    assert(snapshot.key_reference_count == result.required_key_index_capacity);
     assert(dependencies[0] == 0);
     assert(playback[0].sample_id == 0);
     assert(playback[0].note_on_gain.enabled);

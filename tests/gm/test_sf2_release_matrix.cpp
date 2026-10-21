@@ -13,6 +13,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -290,6 +291,9 @@ int main(int argc, char** argv) {
     std::array<NativeResolvedZone, PlaybackProgramSnapshot::kMaxZones> native{};
     std::array<ResolvedZoneModulation, PlaybackProgramSnapshot::kMaxZones> modulation{};
     std::array<PlaybackZone, PlaybackProgramSnapshot::kMaxZones> playback{};
+    std::array<gm_synth::gm::PlaybackProgramKeySpan, PlaybackProgramSnapshot::kMidiKeyCount> key_spans{};
+    std::vector<std::uint16_t> key_zone_indices(
+        PlaybackProgramSnapshot::kMaxZones * PlaybackProgramSnapshot::kMidiKeyCount);
     std::array<SampleId, PlaybackProgramSnapshot::kMaxZones> dependencies{};
     Sf2PlaybackProgramPreparer preparer(44100);
     MatrixStats stats{};
@@ -337,6 +341,9 @@ int main(int argc, char** argv) {
         request.modulation_capacity = modulation.size();
         request.playback_zones = playback.data();
         request.playback_capacity = playback.size();
+        request.key_spans = key_spans.data();
+        request.key_zone_indices = key_zone_indices.data();
+        request.key_zone_index_capacity = key_zone_indices.size();
         request.dependencies = dependencies.data();
         request.dependency_capacity = dependencies.size();
         request.snapshot = &snapshot;

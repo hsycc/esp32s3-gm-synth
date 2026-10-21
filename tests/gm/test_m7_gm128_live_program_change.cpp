@@ -20,6 +20,7 @@
 
 namespace {
 
+using gm_synth::gm::PlaybackProgramSnapshot;
 using gm_synth::gm::PlaybackProgramSnapshotExchange;
 using gm_synth::gm::ProgramChangeControlService;
 using gm_synth::gm::ProgramChangeMailbox;
@@ -94,17 +95,23 @@ struct WorkspaceStorage {
     std::vector<NativeResolvedZone> native;
     std::vector<ResolvedZoneModulation> modulation;
     std::vector<gm_synth::gm::PlaybackZone> playback;
+    std::array<gm_synth::gm::PlaybackProgramKeySpan, PlaybackProgramSnapshot::kMidiKeyCount> key_spans{};
+    std::vector<std::uint16_t> key_zone_indices;
     std::vector<SampleId> dependencies;
     ProgramChangePrepareWorkspace workspace{};
 
     WorkspaceStorage()
-        : native(256), modulation(256), playback(256), dependencies(512) {
+        : native(256), modulation(256), playback(256),
+          key_zone_indices(256u * PlaybackProgramSnapshot::kMidiKeyCount), dependencies(512) {
         workspace.native_scratch = native.data();
         workspace.native_capacity = native.size();
         workspace.modulation_scratch = modulation.data();
         workspace.modulation_capacity = modulation.size();
         workspace.playback_zones = playback.data();
         workspace.playback_capacity = playback.size();
+        workspace.key_spans = key_spans.data();
+        workspace.key_zone_indices = key_zone_indices.data();
+        workspace.key_zone_index_capacity = key_zone_indices.size();
         workspace.dependencies = dependencies.data();
         workspace.dependency_capacity = dependencies.size();
         workspace.policy = PlaybackPreparePolicy::StrictQualified;
@@ -160,6 +167,9 @@ bool prepareInitialProgram(
     request.modulation_capacity = storage.workspace.modulation_capacity;
     request.playback_zones = storage.workspace.playback_zones;
     request.playback_capacity = storage.workspace.playback_capacity;
+    request.key_spans = storage.workspace.key_spans;
+    request.key_zone_indices = storage.workspace.key_zone_indices;
+    request.key_zone_index_capacity = storage.workspace.key_zone_index_capacity;
     request.dependencies = storage.workspace.dependencies;
     request.dependency_capacity = storage.workspace.dependency_capacity;
     request.snapshot = &storage.workspace.snapshot;

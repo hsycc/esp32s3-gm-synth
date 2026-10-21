@@ -28,7 +28,8 @@ struct ResolvedVoiceBatch {
 
 // Realtime-safe resolver over immutable prepared playback metadata. It does no
 // allocation, storage I/O, SF2 parsing, logarithms or floating-point pitch
-// conversion. The scan is bounded by PlaybackProgramSnapshot::kMaxZones.
+// conversion. Legacy snapshots scan at most kLinearScanZoneLimit zones;
+// indexed snapshots scan only the immutable candidate span for the incoming key.
 class ZoneResolver {
 public:
     // Compatibility path used by existing direct tests/callers. It applies only

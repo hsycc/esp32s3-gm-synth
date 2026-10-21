@@ -1,3 +1,4 @@
+#include "gm/PlaybackProgramKeyIndex.h"
 #include "gm/PlaybackProgramSnapshot.h"
 #include "gm/ZoneResolver.h"
 #include "realtime/BlockEventScheduler.h"
@@ -9,9 +10,11 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <vector>
 
 namespace {
 
+using gm_synth::gm::PlaybackProgramKeySpan;
 using gm_synth::gm::PlaybackProgramSnapshot;
 using gm_synth::gm::PlaybackProgramSnapshotExchange;
 using gm_synth::gm::PlaybackZone;
@@ -609,6 +612,71 @@ void testScheduledEventToZoneToVoiceToRenderPath() {
     assert(voices.activeVoiceCount() == 0);
 }
 
+
+void testResolverUsesKeyIndexForLargeProgram() {
+    constexpr std::size_t kZoneCount = 720;
+    constexpr std::uint8_t kKey = 42;
+
+    std::vector<PlaybackZone> zones(kZoneCount);
+    for (std::size_t index = 0; index < zones.size(); ++index) {
+        PlaybackZone& zone = zones[index];
+        zone.sample_id = static_cast<std::uint32_t>(index);
+        const std::uint8_t key = static_cast<std::uint8_t>(index % 128u);
+        zone.key_low = key;
+        zone.key_high = key;
+        zone.velocity_low = 1;
+        zone.velocity_high = 127;
+        zone.root_key = key;
+        zone.key_tracking = false;
+        zone.root_phase_increment_q32 = kPhaseOneQ32;
+        assert(zone.valid());
+    }
+
+    std::array<PlaybackProgramKeySpan, PlaybackProgramSnapshot::kMidiKeyCount> spans{};
+    std::vector<std::uint16_t> references(kZoneCount);
+    const auto build = gm_synth::gm::buildPlaybackProgramKeyIndex(
+        zones.data(),
+        zones.size(),
+        spans.data(),
+        references.data(),
+        references.size());
+    assert(build.status == gm_synth::gm::PlaybackProgramKeyIndexBuildStatus::Ok);
+    assert(build.required_references == kZoneCount);
+    assert(build.max_candidates_per_key == 6);
+
+    PlaybackProgramSnapshot snapshot{};
+    snapshot.channel = 3;
+    snapshot.bank = 0;
+    snapshot.program = 17;
+    snapshot.token = 101;
+    snapshot.bank_generation = 11;
+    snapshot.zones = zones.data();
+    snapshot.zone_count = static_cast<std::uint16_t>(zones.size());
+    snapshot.key_spans = spans.data();
+    snapshot.key_zone_indices = references.data();
+    snapshot.key_reference_count = build.required_references;
+    assert(snapshot.valid());
+
+    ResolvedVoiceBatch batch{};
+    ZoneResolver resolver;
+    assert(resolver.resolveNoteOn(snapshot, 3, kKey, 100, 9001, &batch) == ZoneResolveStatus::Ok);
+    assert(batch.count == 6);
+    constexpr std::array<std::uint32_t, 6> kExpected{{42, 170, 298, 426, 554, 682}};
+    for (std::size_t index = 0; index < kExpected.size(); ++index) {
+        assert(batch.voices[index].sample_id == kExpected[index]);
+    }
+
+    PlaybackProgramSnapshot missing_index = snapshot;
+    missing_index.key_spans = nullptr;
+    missing_index.key_zone_indices = nullptr;
+    missing_index.key_reference_count = 0;
+    assert(!missing_index.valid());
+    batch.clear();
+    assert(resolver.resolveNoteOn(missing_index, 3, kKey, 100, 9002, &batch) ==
+           ZoneResolveStatus::InvalidArgument);
+    assert(batch.count == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -626,6 +694,7 @@ int main() {
     testDisabledSampleRegionPreservesDescriptorPlayback();
     testRealtimeApplierSharesNoteInstanceAcrossLayersAndChokesOldTrigger();
     testProgramRuntimeCommitRequiresMatchingPreparedIdentity();
+    testResolverUsesKeyIndexForLargeProgram();
     testScheduledEventToZoneToVoiceToRenderPath();
     std::cout << "playback zone runtime tests passed\n";
     return 0;
