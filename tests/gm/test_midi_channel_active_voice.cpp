@@ -221,6 +221,43 @@ void testLiveGainPanAndPitchUpdateAlreadySoundingVoice() {
     assert(f.applier.stats().active_voice_updates >= 7);
 }
 
+void testCc21RefreshesSoundingVoiceFilter() {
+    RuntimeFixture f;
+    f.zone.note_on_filter.enabled = true;
+    f.zone.note_on_filter.initial_cutoff_cents = 9000;
+    f.zone.note_on_filter.velocity_to_cutoff_cents = 0;
+    f.zone.note_on_filter.cc21_to_cutoff_cents = -2400;
+    assert(f.applier.apply(cc(21, 127), f.voices));
+    assert(f.applier.apply(noteOn(60), f.voices));
+
+    struct Snapshot { bool found = false; std::int32_t a0 = 0; std::int32_t offset = 0; };
+    const auto capture = [](void* ptr, Voice& voice) -> bool {
+        auto* out = static_cast<Snapshot*>(ptr);
+        out->found = true;
+        out->a0 = voice.currentLowpassConfig().a0_q24;
+        out->offset = voice.realtimeControl().cc21_filter_offset_cents;
+        return false;
+    };
+    Snapshot high{};
+    f.voices.updateActiveVoices(2, capture, &high);
+    assert(high.found && high.offset == 0);
+    assert(f.applier.apply(cc(21, 0), f.voices));
+    Snapshot low{};
+    f.voices.updateActiveVoices(2, capture, &low);
+    assert(low.found && low.offset == -2400);
+    assert(low.a0 != high.a0);
+    assert(f.applier.apply(cc(21, 64), f.voices));
+    Snapshot mid{};
+    f.voices.updateActiveVoices(2, capture, &mid);
+    assert(mid.found && mid.offset < 0 && mid.offset > -2400);
+    assert(mid.a0 != low.a0 && mid.a0 != high.a0);
+    assert(f.applier.apply(cc(121, 0), f.voices));
+    Snapshot reset{};
+    f.voices.updateActiveVoices(2, capture, &reset);
+    assert(reset.found && reset.offset == -2400);
+    assert(reset.a0 == low.a0);
+}
+
 void testCc91AndCc93UpdatePreparedEffectsSendState() {
     RuntimeFixture f;
     assert(f.applier.apply(noteOn(60), f.voices));
@@ -324,6 +361,7 @@ void testResetControllersReleasesSustainAndRecentersActivePitch() {
 
 int main() {
     testLiveGainPanAndPitchUpdateAlreadySoundingVoice();
+    testCc21RefreshesSoundingVoiceFilter();
     testCc91AndCc93UpdatePreparedEffectsSendState();
     testSustainDefersNoteOffUntilPedalRelease();
     testAllNotesOffRespectsSustainAndAllSoundOffIsImmediate();
