@@ -337,6 +337,7 @@ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
         kSf2MaxFilterCutoffCents);
     candidate.note_on_filter.velocity_to_cutoff_cents =
         modulation.velocity_to_filter_fc_cents;
+    candidate.note_on_filter.cc21_to_cutoff_cents = modulation.cc21_to_filter_fc_cents;
     candidate.note_on_filter.resonance_cb = static_cast<std::int16_t>(
         std::clamp<std::int32_t>(native.initialFilterQCb(), 0, 960));
     candidate.note_on_filter.velocity_to_resonance_cb =
