@@ -1,0 +1,47 @@
+name: apply-generic-noteon-temp
+
+on:
+  push:
+    branches:
+      - agent/source-export-2a5c75a8
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout formal branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/m6-sf2-playback-prepare-v1
+          fetch-depth: 0
+
+      - name: Reconstruct and apply compatibility patch
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "2a5c75a85833e268199164d76f526397c597793a"
+          git fetch origin agent/source-export-2a5c75a8:refs/remotes/origin/source-export-2a5c75a8
+          {
+            git show origin/source-export-2a5c75a8:tools/tmp/generic-noteon.patch.00
+            git show origin/source-export-2a5c75a8:tools/tmp/generic-noteon.patch.01
+            git show origin/source-export-2a5c75a8:tools/tmp/generic-noteon.patch.02
+            git show origin/source-export-2a5c75a8:tools/tmp/generic-noteon.patch.03
+          } > /tmp/generic-noteon.patch
+          git apply --check -p1 /tmp/generic-noteon.patch
+          git apply -p1 /tmp/generic-noteon.patch
+          git diff --check
+
+      - name: Run Phase G host validation
+        run: bash scripts/run_phase_g_host_tests.sh
+
+      - name: Commit and push formal branch
+        run: |
+          set -euo pipefail
+          git config user.name "songyi.huang"
+          git config user.email "hsycc0316@gmail.com"
+          git add firmware tests
+          git diff --cached --check
+          git commit -m "m7: qualify generic prepared note-on modulation"
+          git push origin HEAD:agent/m6-sf2-playback-prepare-v1
