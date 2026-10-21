@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -54,6 +55,24 @@ private:
     std::ifstream file_;
     std::uint64_t size_ = 0;
 };
+
+// Host-only PCM16 seam probe; a discontinuity is a listening-review signal.
+bool pcmPoint(RandomAccessReader& reader, const Sf2PdtaReader& pdta,
+              std::int64_t index, std::int32_t* value) {
+    if (value == nullptr || index < 0 ||
+        static_cast<std::uint64_t>(index) >= pdta.smplPointCount()) {
+        return false;
+    }
+    std::uint8_t bytes[2]{};
+    if (!reader.readAt(pdta.smplPayloadOffset() +
+            static_cast<std::uint64_t>(index) * 2u, bytes, sizeof(bytes))) {
+        return false;
+    }
+    *value = static_cast<std::int16_t>(
+        static_cast<std::uint16_t>(bytes[0]) |
+        (static_cast<std::uint16_t>(bytes[1]) << 8u));
+    return true;
+}
 
 std::int32_t generatorValue(const NativeResolvedZone& zone, std::uint16_t oper) {
     return zone.generators.value(oper, 0);
@@ -141,6 +160,23 @@ int main(int argc, char** argv) {
             empty_loop += bad_order ? 1u : 0u;
             loop_after_end += bad_end ? 1u : 0u;
 
+            const bool normalized = zone.sampleModes() == 1 &&
+                bad_start && zone.sample_start < zone.loop_end &&
+                zone.loop_end <= zone.sample_end &&
+                zone.loop_start >= static_cast<std::int64_t>(zone.shdr_start) &&
+                zone.loop_end <= static_cast<std::int64_t>(zone.shdr_end);
+            std::int32_t seam_first = 0;
+            std::int32_t seam_last = 0;
+            std::int32_t pre_last = 0;
+            const bool seam_readable = normalized &&
+                pcmPoint(reader, pdta, zone.sample_start, &seam_first) &&
+                pcmPoint(reader, pdta, zone.loop_end - 1, &seam_last) &&
+                pcmPoint(reader, pdta, zone.loop_end - 2, &pre_last);
+            const std::int32_t seam_jump = seam_readable
+                ? std::abs(seam_first - seam_last) : -1;
+            const std::int32_t terminal_step = seam_readable
+                ? std::abs(seam_last - pre_last) : -1;
+
             std::cout << "M7_LOOP_DETAIL"
                       << " asset=" << asset
                       << " bank=" << preset.bank
@@ -167,6 +203,9 @@ int main(int argc, char** argv) {
                       << " bad_start=" << (bad_start ? 1 : 0)
                       << " bad_order=" << (bad_order ? 1 : 0)
                       << " bad_end=" << (bad_end ? 1 : 0)
+                      << " normalized=" << (normalized ? 1 : 0)
+                      << " seam_pcm16_jump=" << seam_jump
+                      << " terminal_pcm16_step=" << terminal_step
                       << '\n';
         }
         if (program_invalid) {

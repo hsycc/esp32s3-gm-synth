@@ -6,6 +6,7 @@ on:
     paths:
       - "firmware/sf2/**"
       - "tests/gm/test_sf2_issue_diagnostics.cpp"
+      - "tests/gm/test_sf2_loop_inventory.cpp"
       - "scripts/run_m7_sf2_issue_diagnostics.sh"
       - "assets/sf2/full/**"
       - "assets/sf2/subsets/**"
