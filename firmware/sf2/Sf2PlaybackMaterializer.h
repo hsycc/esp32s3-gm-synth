@@ -70,6 +70,9 @@ enum PlaybackMaterializationIssue : std::uint64_t {
     PlaybackIssueGainAboveUnityClamped = std::uint64_t{1} << 21,
     PlaybackIssueIgnoredInvalidPresetGenerator = std::uint64_t{1} << 22,
     PlaybackIssueInvalidFixedVelocity = std::uint64_t{1} << 23,
+    // Loop start lies before a later playback start but end remains valid.
+    // The playback interval is intersected with the loop interval safely.
+    PlaybackIssueLoopStartClamped = std::uint64_t{1} << 24,
 };
 
 struct PlaybackMaterializationResult {
