@@ -436,11 +436,16 @@ bool PhysicalMusicStress::enqueueTimeline(
     for (std::uint8_t channel = 0; channel < 6; ++channel) {
         for (std::uint8_t note = 0; note < 4; ++note) {
             const std::uint8_t key = static_cast<std::uint8_t>(60 + channel * 4 + note);
+            // Keep the original 24-NoteOn peak free of dynamic filters.
+            // The four notes originally on channel 5 are routed to the
+            // unfiltered channel 4; channel 5 is reserved for the isolated
+            // sustained CC21 filter test at p8.
+            const std::uint8_t note_channel = channel == 5u ? 4u : channel;
             if (!pushEvent(
                     queue,
                     p7,
                     realtime::EventType::NoteOn,
-                    channel,
+                    note_channel,
                     key,
                     static_cast<std::uint8_t>(90 + note * 8))) {
                 return false;
@@ -451,6 +456,25 @@ bool PhysicalMusicStress::enqueueTimeline(
     const std::uint64_t p8 = phaseFrame(8, 16);
     const std::uint64_t p9 = phaseFrame(9, 16);
     const std::uint64_t p10 = phaseFrame(10, 16);
+    // Stop 16 of the 24 dry/full-FX voices before starting four sustained
+    // dynamic-filter voices. This prevents the filter-specific qualification
+    // from silently raising the already qualified normal 24-voice workload.
+    // Three CC120 + four NoteOn bring the preloaded event queue exactly to its
+    // 128-event bound; do not grow this timeline without capacity review.
+    constexpr std::array<std::uint8_t, 3> kRetireBurstChannels{0u, 1u, 4u};
+    for (const std::uint8_t channel : kRetireBurstChannels) {
+        if (!pushEvent(queue, p8, realtime::EventType::ControlChange,
+                       channel, 120, 0)) {
+            return false;
+        }
+    }
+    for (std::uint8_t note = 0; note < 4; ++note) {
+        if (!pushEvent(queue, p8, realtime::EventType::NoteOn,
+                       5, static_cast<std::uint8_t>(80u + note),
+                       static_cast<std::uint8_t>(90u + note * 8u))) {
+            return false;
+        }
+    }
     if (!pushEvent(queue, p8, realtime::EventType::ControlChange, 5, 21, 64) ||
         !pushEvent(queue, p9, realtime::EventType::ControlChange, 5, 21, 127) ||
         !pushEvent(queue, p10, realtime::EventType::ControlChange, 5, 21, 0)) {
@@ -541,7 +565,7 @@ bool PhysicalMusicStress::enqueueTimeline(
 
     ESP_LOGI(
         kTag,
-        "music_stress: TIMELINE_ARMED events=%u measured_blocks=%u duration_frames=%llu includes=sustain,release,percussion,pitch,cc,cc21_filter_sweep,program_handoff,gm_reset",
+        "music_stress: TIMELINE_ARMED events=%u measured_blocks=%u duration_frames=%llu includes=sustain,release,percussion,pitch,cc,isolated_cc21_filter_sweep,program_handoff,gm_reset",
         static_cast<unsigned>(timeline_events_enqueued_),
         static_cast<unsigned>(measured_blocks),
         static_cast<unsigned long long>(measured_blocks * kFramesPerBlock));
