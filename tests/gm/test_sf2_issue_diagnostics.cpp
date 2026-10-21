@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -110,6 +111,7 @@ const char* statusName(PlaybackPrepareStatus status) {
         case PlaybackPrepareStatus::ResolveFailed: return "resolve_failed";
         case PlaybackPrepareStatus::ModulatorResolveFailed: return "modulator_resolve_failed";
         case PlaybackPrepareStatus::ZoneCapacityExceeded: return "zone_capacity_exceeded";
+        case PlaybackPrepareStatus::KeyIndexCapacityExceeded: return "key_index_capacity_exceeded";
         case PlaybackPrepareStatus::DependencyCapacityExceeded: return "dependency_capacity_exceeded";
         case PlaybackPrepareStatus::UnrepresentableZone: return "unrepresentable_zone";
         case PlaybackPrepareStatus::UnqualifiedZone: return "unqualified_zone";
@@ -144,15 +146,22 @@ int main(int argc, char** argv) {
     std::array<NativeResolvedZone, PlaybackProgramSnapshot::kMaxZones> native{};
     std::array<ResolvedZoneModulation, PlaybackProgramSnapshot::kMaxZones> modulation{};
     std::array<PlaybackZone, PlaybackProgramSnapshot::kMaxZones> playback{};
+    std::array<gm_synth::gm::PlaybackProgramKeySpan, PlaybackProgramSnapshot::kMidiKeyCount>
+        key_spans{};
+    std::vector<std::uint16_t> key_zone_indices(
+        PlaybackProgramSnapshot::kMaxZones * PlaybackProgramSnapshot::kMidiKeyCount);
     std::array<SampleId, PlaybackProgramSnapshot::kMaxZones> dependencies{};
     Sf2PlaybackProgramPreparer preparer(44100);
 
-    std::array<std::size_t, 10> status_counts{};
+    constexpr std::size_t kPrepareStatusCount =
+        static_cast<std::size_t>(PlaybackPrepareStatus::SnapshotInvalid) + 1u;
+    std::array<std::size_t, kPrepareStatusCount> status_counts{};
     std::array<std::size_t, kIssueDefs.size()> issue_counts{};
     std::size_t rejected = 0;
     std::size_t accepted = 0;
     std::size_t max_required_native = 0;
     std::size_t max_required_playback = 0;
+    std::size_t max_required_key_index = 0;
     std::size_t max_required_dependencies = 0;
 
     for (std::size_t preset_index = 0; preset_index < pdta.presetCount(); ++preset_index) {
@@ -175,6 +184,9 @@ int main(int argc, char** argv) {
         request.modulation_capacity = modulation.size();
         request.playback_zones = playback.data();
         request.playback_capacity = playback.size();
+        request.key_spans = key_spans.data();
+        request.key_zone_indices = key_zone_indices.data();
+        request.key_zone_index_capacity = key_zone_indices.size();
         request.dependencies = dependencies.data();
         request.dependency_capacity = dependencies.size();
         request.snapshot = &snapshot;
@@ -186,6 +198,9 @@ int main(int argc, char** argv) {
         }
         max_required_native = std::max(max_required_native, result.required_native_capacity);
         max_required_playback = std::max(max_required_playback, result.required_zone_capacity);
+        max_required_key_index = std::max(
+            max_required_key_index,
+            result.required_key_index_capacity);
         max_required_dependencies = std::max(
             max_required_dependencies,
             result.required_dependency_capacity);
@@ -213,6 +228,7 @@ int main(int argc, char** argv) {
                   << " native_zones=" << result.native_zone_count
                   << " required_native_capacity=" << result.required_native_capacity
                   << " required_playback_capacity=" << result.required_zone_capacity
+                  << " required_key_index_capacity=" << result.required_key_index_capacity
                   << " required_dependency_capacity=" << result.required_dependency_capacity
                   << " stereo_pairs=" << result.stereo_pair_count
                   << " supported_modulators=" << result.supported_modulator_records
@@ -237,12 +253,15 @@ int main(int argc, char** argv) {
               << " rejected=" << rejected
               << " status_zone_capacity="
               << status_counts[static_cast<std::size_t>(PlaybackPrepareStatus::ZoneCapacityExceeded)]
+              << " status_key_index_capacity="
+              << status_counts[static_cast<std::size_t>(PlaybackPrepareStatus::KeyIndexCapacityExceeded)]
               << " status_unrepresentable="
               << status_counts[static_cast<std::size_t>(PlaybackPrepareStatus::UnrepresentableZone)]
               << " status_unqualified="
               << status_counts[static_cast<std::size_t>(PlaybackPrepareStatus::UnqualifiedZone)]
               << " max_required_native=" << max_required_native
               << " max_required_playback=" << max_required_playback
+              << " max_required_key_index=" << max_required_key_index
               << " max_required_dependencies=" << max_required_dependencies
               << '\n';
 
