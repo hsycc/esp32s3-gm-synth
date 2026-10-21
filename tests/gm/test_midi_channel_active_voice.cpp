@@ -244,17 +244,20 @@ void testCc21RefreshesSoundingVoiceFilter() {
     assert(f.applier.apply(cc(21, 0), f.voices));
     Snapshot low{};
     f.voices.updateActiveVoices(2, capture, &low);
-    assert(low.found && low.offset == -2400);
+    assert(low.found && low.offset ==
+           gm_synth::sf2::positiveLinearToAmount(127, -2400));
     assert(low.a0 != high.a0);
     assert(f.applier.apply(cc(21, 64), f.voices));
     Snapshot mid{};
     f.voices.updateActiveVoices(2, capture, &mid);
-    assert(mid.found && mid.offset < 0 && mid.offset > -2400);
+    assert(mid.found && mid.offset < 0 &&
+           mid.offset > gm_synth::sf2::positiveLinearToAmount(127, -2400));
     assert(mid.a0 != low.a0 && mid.a0 != high.a0);
     assert(f.applier.apply(cc(121, 0), f.voices));
     Snapshot reset{};
     f.voices.updateActiveVoices(2, capture, &reset);
-    assert(reset.found && reset.offset == -2400);
+    assert(reset.found && reset.offset ==
+           gm_synth::sf2::positiveLinearToAmount(127, -2400));
     assert(reset.a0 == low.a0);
 }
 
