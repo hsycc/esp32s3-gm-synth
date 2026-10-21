@@ -25,6 +25,7 @@ using gm_synth::sf2::PlaybackIssueFixedVelocityPending;
 using gm_synth::sf2::PlaybackIssueGainAboveUnityClamped;
 using gm_synth::sf2::PlaybackIssueIgnoredInvalidPresetGenerator;
 using gm_synth::sf2::PlaybackIssueInvalidLoop;
+using gm_synth::sf2::PlaybackIssueLoopStartClamped;
 using gm_synth::sf2::PlaybackIssueLfoPending;
 using gm_synth::sf2::PlaybackIssueModEnvelopePending;
 using gm_synth::sf2::PlaybackIssuePanLawApproximation;
@@ -366,6 +367,38 @@ void testHardAddressFailureDoesNotMutateOutput() {
     assert(output.key_low == 17);
 }
 
+void testLoopStartClampsOnlyWhenPlaybackWindowIntersectsLoop() {
+    NativeResolvedZone native = baseZone();
+    native.generators.set(54, 1);
+    native.sample_start = 140;
+    native.flags |= NativeZoneFlagInvalidLoopRange;
+    PlaybackZone output{};
+    const auto normalized = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(normalized.status == PlaybackMaterializationStatus::Qualified);
+    assert(normalized.hasIssue(PlaybackIssueLoopStartClamped));
+    assert(!normalized.hasIssue(PlaybackIssueInvalidLoop));
+    assert(output.sample_region.enabled);
+    assert(output.sample_region.start_frame == 40);
+    assert(output.sample_region.loop_start_frame == 40);
+    assert(output.sample_region.loop_end_frame == 80);
+    assert(output.valid());
+
+    // A loop entirely before playback start must still fail transactionally.
+    native.sample_start = 180;
+    output.sample_id = 777;
+    const auto invalid = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(invalid.status == PlaybackMaterializationStatus::Unrepresentable);
+    assert(invalid.hasIssue(PlaybackIssueInvalidLoop));
+    assert(output.sample_id == 777);
+
+    // Until-release loop mode is intentionally outside this narrow allowance.
+    native.sample_start = 140;
+    native.generators.set(54, 3);
+    const auto release = Sf2PlaybackMaterializer{}.materialize(native, &output);
+    assert(release.status == PlaybackMaterializationStatus::Unrepresentable);
+    assert(release.hasIssue(PlaybackIssueInvalidLoop));
+}
+
 void testHardLoopSampleModeRomAndStereoFailuresAreExplicit() {
     PlaybackZone output{};
 
@@ -431,6 +464,7 @@ int main() {
     testResolvedControllerAmountsAreCopiedIntoPlaybackZone();
     testStaticPanAndGainUseQualifiedEqualPowerLaw();
     testHardAddressFailureDoesNotMutateOutput();
+    testLoopStartClampsOnlyWhenPlaybackWindowIntersectsLoop();
     testHardLoopSampleModeRomAndStereoFailuresAreExplicit();
     testMalformedPresetGeneratorWarningSurvivesMaterialization();
     testInvalidArgumentsAreTransactional();
