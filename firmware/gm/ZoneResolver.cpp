@@ -155,6 +155,24 @@ sf2::Sf2NoteOnTargetDeltas preparedNoteOnTargetDeltas(
     return deltas;
 }
 
+std::int32_t preparedPanSf2Units(
+    const PlaybackZone& zone,
+    const sf2::Sf2NoteOnTargetDeltas& deltas) {
+    const std::int32_t side_offset =
+        zone.note_on_gain.stereo_pan_offset_sf2_units;
+    const std::int64_t generator_base =
+        static_cast<std::int64_t>(zone.note_on_gain.pan_sf2_units) - side_offset;
+    const std::int32_t generator_pan = static_cast<std::int32_t>(
+        std::clamp<std::int64_t>(
+            generator_base + deltas.pan_sf2_units,
+            -500,
+            500));
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(generator_pan) + side_offset,
+        -1000,
+        1000));
+}
+
 voice::SampleRegion preparedSampleRegion(
     const PlaybackZone& zone,
     const sf2::Sf2NoteOnTargetDeltas& deltas) {
@@ -730,6 +748,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
         const sf2::Sf2NoteOnTargetDeltas note_on_deltas =
             preparedNoteOnTargetDeltas(zone, key, effective_velocity);
+        const std::int32_t pan_sf2_units = preparedPanSf2Units(zone, note_on_deltas);
         const std::int32_t initial_attenuation_cb =
             effectiveInitialAttenuationCb(zone, effective_velocity, note_on_deltas);
         voice::VoiceStartParams& params = batch->voices[batch->count];
@@ -751,7 +770,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
                 effective_velocity,
-                zone.note_on_gain.pan_sf2_units,
+                pan_sf2_units,
                 &params.gain_left_q15,
                 &params.gain_right_q15);
         }
@@ -780,7 +799,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                     initial_attenuation_cb,
                     zone.note_on_gain.velocity_to_attenuation_cb,
                     effective_velocity,
-                    zone.note_on_gain.pan_sf2_units,
+                    pan_sf2_units,
                     zone.mod_lfo.volume_depth_cb,
                     nullptr,
                     zone.note_on_gain.volume_to_attenuation_cb,
@@ -835,6 +854,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
         const sf2::Sf2NoteOnTargetDeltas note_on_deltas =
             preparedNoteOnTargetDeltas(zone, key, effective_velocity);
+        const std::int32_t pan_sf2_units = preparedPanSf2Units(zone, note_on_deltas);
         const std::int32_t initial_attenuation_cb =
             effectiveInitialAttenuationCb(zone, effective_velocity, note_on_deltas);
         voice::VoiceStartParams& params = batch->voices[batch->count];
@@ -861,7 +881,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 initial_attenuation_cb,
                 zone.note_on_gain.velocity_to_attenuation_cb,
                 effective_velocity,
-                zone.note_on_gain.pan_sf2_units,
+                pan_sf2_units,
                 channel_state.volume,
                 zone.note_on_gain.volume_to_attenuation_cb,
                 channel_state.pan,
@@ -881,7 +901,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 sf2::channelEffectsSendSf2Units(
                     zone.effects_send.chorus_sf2_units,
                     channel_state.chorus_send,
-                    zone.effects_send.chorus_cc_amount));
+                    zone.effects_send.chorus_send_cc_amount));
         }
         prepareVolumeEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.envelope);
@@ -905,7 +925,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                     initial_attenuation_cb,
                     zone.note_on_gain.velocity_to_attenuation_cb,
                     effective_velocity,
-                    zone.note_on_gain.pan_sf2_units,
+                    pan_sf2_units,
                     zone.mod_lfo.volume_depth_cb,
                     &channel_state,
                     zone.note_on_gain.volume_to_attenuation_cb,
@@ -935,7 +955,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.realtime_control.pan_amount = zone.note_on_gain.pan_amount;
         params.realtime_control.expression_to_attenuation_cb =
             zone.note_on_gain.expression_to_attenuation_cb;
-        params.realtime_control.pan_sf2_units = zone.note_on_gain.pan_sf2_units;
+        params.realtime_control.pan_sf2_units = static_cast<std::int16_t>(pan_sf2_units);
         params.realtime_control.reverb_send_base_units =
             zone.effects_send.reverb_sf2_units;
         params.realtime_control.chorus_send_base_units =
