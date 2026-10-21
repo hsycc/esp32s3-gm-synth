@@ -61,13 +61,7 @@ def is_prepared_note_on_runtime_route(route: Route) -> bool:
         return False
     if route.amount_source != 0 and not is_note_on_source(route.amount_source):
         return False
-    if route.destination not in PREPARED_NOTE_ON_DESTINATIONS:
-        return False
-
-    # Keep pan explicit until the runtime represents authored/stereo base pan
-    # separately from the NoteOn destination delta. Otherwise the SF2 clamp
-    # would be applied in the wrong order.
-    return route.destination != 17
+    return route.destination in PREPARED_NOTE_ON_DESTINATIONS
 
 
 def currently_supported(route: Route) -> bool:
