@@ -10,6 +10,7 @@ void MidiChannelState::resetControllers() {
     // controllers, Pitch Bend and parameter selection instead. A full GM System
     // On reset is a separate operation and restores mix/program defaults too.
     modulation_wheel = 0;
+    filter_controller_21 = 0;
     channel_pressure = 0;
     expression = 127;
     sustain = 0;
@@ -48,6 +49,12 @@ std::uint32_t MidiChannelState::applyControlChange(
         case 1:
             modulation_wheel = value;
             return ChannelControlVibratoChanged;
+        case 21:
+            if (filter_controller_21 == value) {
+                return ChannelControlNone;
+            }
+            filter_controller_21 = value;
+            return ChannelControlFilterChanged;
         case 32:
             bank_lsb = value;
             return ChannelControlBankChanged;
@@ -119,7 +126,8 @@ std::uint32_t MidiChannelState::applyControlChange(
                 ChannelControlGainChanged |
                 ChannelControlSustainChanged |
                 ChannelControlRpnSelectionChanged |
-                ChannelControlVibratoChanged;
+                ChannelControlVibratoChanged |
+                ChannelControlFilterChanged;
         case 123:
             return ChannelControlAllNotesOff;
         default:
