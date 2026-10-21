@@ -40,6 +40,8 @@ struct ResolvedZoneModulation {
 
     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t pan_amount = kSf2DefaultPanAmount;
+    // SF2 sourceOper 0x0195: negative unipolar linear CC21 -> filter cutoff.
+    std::int32_t cc21_to_filter_fc_cents = 0;
     std::int32_t expression_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
     std::int32_t channel_pressure_to_vib_lfo_pitch_cents =
         kSf2DefaultVibratoControllerAmountCents;
