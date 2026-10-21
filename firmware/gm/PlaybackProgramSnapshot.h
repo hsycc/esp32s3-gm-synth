@@ -14,6 +14,14 @@
 
 namespace gm_synth::gm {
 
+// Kept with the snapshot because the immutable snapshot owns the lifetime
+// contract for both zones and the key-index metadata. PlaybackProgramKeyIndex.h
+// builds these spans but does not own them.
+struct PlaybackProgramKeySpan {
+    std::uint32_t begin = 0;
+    std::uint16_t count = 0;
+};
+
 // Compact parameters whose final value depends on the incoming NoteOn and the
 // current MIDI channel controller state. Keeping the raw SoundFont attenuation
 // summing node here is important: a negative preset initialAttenuation may
@@ -238,11 +246,12 @@ struct PlaybackZone {
 };
 
 struct PlaybackProgramSnapshot {
-    // This is a realtime scan bound, not an inline-storage size. The checked-in
-    // SF2 analysis manifests are validated against it in CI. GeneralUser's
-    // largest currently resolved program has 200 zones, so 256 leaves bounded
-    // headroom without inflating every per-channel snapshot object.
-    static constexpr std::size_t kMaxZones = 256;
+    // Legacy/direct callers may omit an index for small programs. Larger
+    // programs are accepted only with an immutable key index, keeping NoteOn
+    // work bounded by the per-key candidate count instead of total zone count.
+    static constexpr std::size_t kMidiKeyCount = 128;
+    static constexpr std::size_t kLinearScanZoneLimit = 256;
+    static constexpr std::size_t kMaxZones = 1024;
 
     std::uint8_t channel = 0;
     std::uint16_t bank = 0;
@@ -250,11 +259,14 @@ struct PlaybackProgramSnapshot {
     std::uint32_t token = 0;
     std::uint32_t bank_generation = 0;
 
-    // Caller-owned immutable storage. The pointed-to zone array must remain
-    // alive and unchanged from READY publication until the snapshot is retired
-    // and acknowledged by the control domain.
+    // Caller-owned immutable storage. The pointed-to zone array and optional
+    // key-index arrays must remain alive and unchanged from READY publication
+    // until the snapshot is retired and acknowledged by the control domain.
     const PlaybackZone* zones = nullptr;
     std::uint16_t zone_count = 0;
+    const PlaybackProgramKeySpan* key_spans = nullptr;
+    const std::uint16_t* key_zone_indices = nullptr;
+    std::uint32_t key_reference_count = 0;
 
     bool valid() const {
         if (channel >= 16 || token == 0 || bank_generation == 0 ||
@@ -263,6 +275,43 @@ struct PlaybackProgramSnapshot {
         }
         for (std::size_t i = 0; i < zone_count; ++i) {
             if (!zones[i].valid()) {
+                return false;
+            }
+        }
+
+        const bool has_any_index_state =
+            key_spans != nullptr || key_zone_indices != nullptr || key_reference_count != 0;
+        if (!has_any_index_state) {
+            return zone_count <= kLinearScanZoneLimit;
+        }
+        if (key_spans == nullptr ||
+            (key_reference_count != 0 && key_zone_indices == nullptr) ||
+            (zone_count > kLinearScanZoneLimit && key_reference_count == 0)) {
+            return false;
+        }
+
+        // Full immutable-index validation belongs to the control domain. Match
+        // the builder's stable per-key ordering exactly so a corrupt/partial
+        // index can never be published and later dereferenced by audio code.
+        for (std::size_t key = 0; key < kMidiKeyCount; ++key) {
+            const PlaybackProgramKeySpan& span = key_spans[key];
+            if (span.begin > key_reference_count ||
+                span.count > key_reference_count - span.begin) {
+                return false;
+            }
+            std::uint32_t cursor = span.begin;
+            const std::uint32_t end = span.begin + span.count;
+            for (std::size_t zone_index = 0; zone_index < zone_count; ++zone_index) {
+                const PlaybackZone& zone = zones[zone_index];
+                if (key < zone.key_low || key > zone.key_high) {
+                    continue;
+                }
+                if (cursor >= end || key_zone_indices[cursor] != zone_index) {
+                    return false;
+                }
+                ++cursor;
+            }
+            if (cursor != end) {
                 return false;
             }
         }
