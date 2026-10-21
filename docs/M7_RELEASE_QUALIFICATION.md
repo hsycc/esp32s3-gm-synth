@@ -4,9 +4,33 @@ Software/release-image checkpoint: `22b48b2f8ef58d01c3c0c39ddea47c7d40f330a9`
 
 Physical long-run evidence: `benchmarks/M7_PHYSICAL_LONGRUN_2026-10-20.md`.
 
-M7 remains **ACTIVE** while representative audible-release observations and the planned compatibility extensions are still open. The automated N16R8 physical long-run itself is now closed PASS.
+The automated N16R8 long-run for checkpoint `22b48b2f` is PASS. The later CC21/KeyIndex/loop-geometry code has passed CI, but has **not** yet been independently requalified on physical hardware; M7 audio-listening and post-change physical evidence remain open.
 
-## Software release matrix
+## Current host compatibility checkpoint — 2026-10-21
+
+At formal development HEAD `4079d8d4` (PR #15 merged), the M7 full-bank matrix and issue diagnostics confirm all program identities in these exact checked-in SF2 assets as StrictQualified:
+
+| Bank | Programs qualified | Rejected | Unsupported modulators | Preview zones |
+|---|---:|---:|---:|---:|
+| FM/GM Open full | 5760/5760 | 0 | 0 | 0 |
+| GeneralUser GS full | 287/287 | 0 | 0 | 0 |
+| FluidR3 GM full | 189/189 | 0 | 0 | 0 |
+
+This covers **host Program Prepare semantics only**, not audio listening, generalized third-party SF2 files, true linked stereo, or updated DSP/I2S physical performance.
+
+The GeneralUser six previously rejected programs contain seven continuous-loop zones where playback sample-start lies inside the old loop interval. Only this bounded case is normalized to use playback sample-start as the loop start. The original loop issue remains visible via `PlaybackIssueLoopStartClamped`.
+
+Loop audio A/B export (PR #16) produces mono native-rate WAVs for samples 604, 602 and 62: direct / 16 / 32 / 64-frame linear overlap. PCM16 measurements from the real-bank CI:
+
+| Sample | Direct wrap step | 16f | 32f | 64f | Interpretation |
+|---:|---:|---:|---:|---:|---|
+| 604 | 13665 | 12145 | 1096 | 2531 | 32f reduces immediate wrap jump, but local peaks remain |
+| 602 | 1511 | 1718 | 468 | 206 | 16f makes direct wrap worse; audition 32/64f |
+| 62 | 137 | 41 | 187 | 100 | already low; longer fades are not consistently better |
+
+These are objective PCM step values, **not listening results**. Crossfading overlaps loop tail/head and advances the source position after the overlap, changing loop-period timing. No Crossfade is enabled in embedded DSP solely on these numbers.
+
+## Historical software release matrix — 2026-10-20 checkpoint
 
 The production `Sf2PlaybackProgramPreparer` classifies complete native SoundFonts program-by-program. Acceptance means `StrictQualified`; unsupported or malformed programs remain explicit rejects rather than being silently approximated.
 
@@ -24,16 +48,11 @@ M7 supports the FluidR3-style data shape where a sample is tagged `leftSample` o
 
 This is **not** a claim of general reciprocal linked-stereo support. A genuine linked sample/pair that is not representable by the current runtime remains an explicit `StereoOrLinkedSample` reject.
 
-## Large-program boundary
+## Indexed large-program playback — current
 
-The current release runtime keeps `PlaybackProgramSnapshot::kMaxZones=256`; this is a realtime linear-scan bound and must not simply be raised to 720 to improve import percentages.
+`PlaybackProgramSnapshot::kMaxZones=1024`; immutable `PlaybackProgramKeyIndex` is built in Program Prepare and carried across snapshot publication/retirement. Programs above 256 zones require this index. The audio domain scans only key candidates, not all 720 zones; the synthetic 720-zone test resolves key 42 by scanning six candidates.
 
-Measured rejected large-program shapes are:
-
-- GeneralUser GS: 4 programs, up to 320 zones; maximum 25 key candidates and 5 key+velocity matches.
-- FluidR3 GM: 12 programs, up to 720 zones; maximum 36 key candidates and 8 key+velocity matches.
-
-The next compatibility stage therefore targets a compact caller-owned key index prepared outside the audio domain. The intent is to make NoteOn inspect only the key's candidate span rather than linearly scanning every zone while preserving the existing READY/commit/ACK lifetime contract.
+This resolves the prior 320–720-zone host qualification blockers without changing realtime ownership or allocating in NoteOn.
 
 ## M7.2 / robustness evidence
 
@@ -94,8 +113,9 @@ For M7 closure:
 
 ## Remaining M7 work
 
-1. Extend only the real-bank custom-modulator routes that can be represented with correct SF2 semantics; keep unsupported routes explicit rather than silently dropping them.
-2. Replace the >256-zone linear NoteOn boundary with a compact key-indexed snapshot so the observed 320–720-zone presets remain bounded in realtime.
-3. Investigate the remaining invalid-loop and scale-tuning special cases after those two broad compatibility classes are closed.
-4. Record representative audible observations separately.
-5. Re-run an appropriate physical regression after realtime-core compatibility changes, then freeze final public compatibility/polyphony wording.
+1. Listen to and compare the twelve PR #16 A/B files, including the pitch/timbre and periodicity effects of overlapping the loop boundaries. Do not equate improved PCM step magnitude with perceptual approval.
+2. Decide per sample (604, 602, 62) whether direct loop, a **bounded** crossfade, or another authoring-side edit is appropriate. New DSP behavior requires a separate gated runtime implementation with no generic extra work for unaffected samples.
+3. Build, flash and physically validate the **current post-CC21 and loop-fix image** on N16R8: 44.1kHz / 64 frames, backlog/DMA hard gate, normal/full-FX 24 voices and heavy DSP 8 voices, and the 131072-block production-shaped long run. Retain logs and exact app SHA.
+4. Record real-SF2 melodic sustain/loop, drums, effects and CC21 sweep listening; ES8311 mono hardware does not prove stereo imaging. Use host stereo PCM reference for left/right.
+5. Only after new hardware and listening evidence, freeze M7 release/polyphony wording and update this document's physical checkpoint.
+
