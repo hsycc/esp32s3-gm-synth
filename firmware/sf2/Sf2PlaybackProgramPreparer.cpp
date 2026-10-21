@@ -3,6 +3,7 @@
 #include "Sf2StereoPair.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 namespace gm_synth::sf2 {
@@ -160,12 +161,17 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     Sf2PdtaReader& pdta,
     const PlaybackPrepareRequest& request) const {
     PlaybackPrepareResult result{};
+    const bool has_any_key_index_storage =
+        request.key_spans != nullptr || request.key_zone_indices != nullptr ||
+        request.key_zone_index_capacity != 0;
     if (request.channel >= 16 || request.token == 0 ||
         request.bank_generation == 0 || request.snapshot == nullptr ||
         (request.native_capacity != 0 && request.native_scratch == nullptr) ||
         (request.modulation_capacity != 0 && request.modulation_scratch == nullptr) ||
         (request.playback_capacity != 0 && request.playback_zones == nullptr) ||
-        (request.dependency_capacity != 0 && request.dependencies == nullptr)) {
+        (request.dependency_capacity != 0 && request.dependencies == nullptr) ||
+        (request.key_zone_index_capacity != 0 && request.key_zone_indices == nullptr) ||
+        (has_any_key_index_storage && request.key_spans == nullptr)) {
         result.status = PlaybackPrepareStatus::InvalidArgument;
         return result;
     }
@@ -411,6 +417,46 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
             request.dependencies);
     }
 
+    const bool requires_key_index =
+        required_playback_zones > gm::PlaybackProgramSnapshot::kLinearScanZoneLimit;
+    const bool build_key_index = request.key_spans != nullptr;
+    if (requires_key_index && !build_key_index) {
+        std::array<
+            gm::PlaybackProgramKeySpan,
+            gm::kPlaybackProgramMidiKeyCount> query_spans{};
+        const gm::PlaybackProgramKeyIndexBuildResult query =
+            gm::buildPlaybackProgramKeyIndex(
+                request.playback_zones,
+                required_playback_zones,
+                query_spans.data(),
+                nullptr,
+                0);
+        result.required_key_index_capacity = query.required_references;
+        result.status = PlaybackPrepareStatus::KeyIndexCapacityExceeded;
+        return result;
+    }
+
+    gm::PlaybackProgramKeyIndexBuildResult key_index_result{};
+    if (build_key_index) {
+        key_index_result = gm::buildPlaybackProgramKeyIndex(
+            request.playback_zones,
+            required_playback_zones,
+            request.key_spans,
+            request.key_zone_indices,
+            request.key_zone_index_capacity);
+        result.required_key_index_capacity = key_index_result.required_references;
+        result.max_candidates_per_key = key_index_result.max_candidates_per_key;
+        if (key_index_result.status ==
+            gm::PlaybackProgramKeyIndexBuildStatus::ReferenceCapacityExceeded) {
+            result.status = PlaybackPrepareStatus::KeyIndexCapacityExceeded;
+            return result;
+        }
+        if (key_index_result.status != gm::PlaybackProgramKeyIndexBuildStatus::Ok) {
+            result.status = PlaybackPrepareStatus::SnapshotInvalid;
+            return result;
+        }
+    }
+
     gm::PlaybackProgramSnapshot candidate{};
     candidate.channel = request.channel;
     candidate.bank = request.bank;
@@ -419,6 +465,11 @@ PlaybackPrepareResult Sf2PlaybackProgramPreparer::prepare(
     candidate.bank_generation = request.bank_generation;
     candidate.zones = request.playback_zones;
     candidate.zone_count = static_cast<std::uint16_t>(required_playback_zones);
+    if (build_key_index) {
+        candidate.key_spans = request.key_spans;
+        candidate.key_zone_indices = request.key_zone_indices;
+        candidate.key_reference_count = key_index_result.required_references;
+    }
     if (!candidate.valid()) {
         result.status = PlaybackPrepareStatus::SnapshotInvalid;
         return result;
