@@ -23,6 +23,8 @@ ROUTE_RE = re.compile(
     r"transform=(?P<transform>\d+)\s+count=(?P<count>\d+)\s*$"
 )
 
+PREPARED_NOTE_ON_DESTINATIONS = {7, 9, 11, 17, 28, 34, 36, 38, 48, 52}
+
 
 @dataclass(frozen=True)
 class Route:
@@ -50,6 +52,22 @@ def exact(route: Route, source: int, destination: int) -> bool:
         and route.amount_source == 0
         and route.transform == 0
     )
+
+
+def is_prepared_note_on_runtime_route(route: Route) -> bool:
+    if route.transform != 0:
+        return False
+    if not is_note_on_source(route.source):
+        return False
+    if route.amount_source != 0 and not is_note_on_source(route.amount_source):
+        return False
+    if route.destination not in PREPARED_NOTE_ON_DESTINATIONS:
+        return False
+
+    # Keep pan explicit until the runtime represents authored/stereo base pan
+    # separately from the NoteOn destination delta. Otherwise the SF2 clamp
+    # would be applied in the wrong order.
+    return route.destination != 17
 
 
 def currently_supported(route: Route) -> bool:
@@ -92,6 +110,8 @@ def currently_supported(route: Route) -> bool:
         return True
     if exact(route, 0x00DD, 15):
         return True
+    if is_prepared_note_on_runtime_route(route):
+        return True
     return False
 
 
@@ -104,7 +124,7 @@ def classify(route: Route) -> str:
     if source_is_note_on and amount_source_is_note_on:
         if route.destination in (0, 4):
             return "sample_address_note_on"
-        if route.destination in (7, 9, 11, 17, 28, 34, 36, 38, 48, 52):
+        if route.destination in PREPARED_NOTE_ON_DESTINATIONS:
             return "prepared_note_on_candidate"
         return "note_on_destination_pending"
 
