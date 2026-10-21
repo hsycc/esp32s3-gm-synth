@@ -397,6 +397,9 @@ void prepareDynamicFilterTable(
         : 0;
     std::int64_t min_offset = -lfo_extent + std::min<std::int64_t>(0, env_depth);
     std::int64_t max_offset = lfo_extent + std::max<std::int64_t>(0, env_depth);
+    const std::int64_t cc21_extent = zone.note_on_filter.cc21_to_cutoff_cents;
+    min_offset += std::min<std::int64_t>(0, cc21_extent);
+    max_offset += std::max<std::int64_t>(0, cc21_extent);
     if (min_offset == 0 && max_offset == 0) {
         return;
     }
@@ -576,6 +579,9 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     update.chorus_send_units = voice.chorusSendUnits();
     update.vibrato_pitch_depth_cents = voice.vibratoLfoConfig().pitch_depth_cents;
     update.mod_lfo_gain_table = voice.modLfoConfig().gain_table;
+    update.cc21_filter_offset_cents = sf2::positiveLinearToAmount(
+        static_cast<std::uint8_t>(127u - context->state->filter_controller_21),
+        source.cc21_to_filter_fc_cents);
 
     if (source.gain_enabled) {
         sf2::channelNoteOnGainQ15(
@@ -971,6 +977,10 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.realtime_control.modulation_wheel_to_vibrato_pitch_cents =
             zone.vibrato_lfo.modulation_wheel_to_pitch_cents;
         params.realtime_control.mod_lfo_volume_depth_cb = zone.mod_lfo.volume_depth_cb;
+        params.realtime_control.cc21_to_filter_fc_cents = zone.note_on_filter.cc21_to_cutoff_cents;
+        params.realtime_control.cc21_filter_offset_cents = sf2::positiveLinearToAmount(
+            static_cast<std::uint8_t>(127u - channel_state.filter_controller_21),
+            zone.note_on_filter.cc21_to_cutoff_cents);
         ++batch->count;
     }
 
@@ -1046,6 +1056,7 @@ bool RealtimeProgramEventApplier::apply(
             ChannelControlEffectsChanged |
             ChannelControlPitchRangeChanged |
             ChannelControlVibratoChanged |
+            ChannelControlFilterChanged |
             ChannelControlResetControllers;
         if ((action & kRefreshMask) != 0 &&
             (action & ChannelControlAllSoundOff) == 0) {
