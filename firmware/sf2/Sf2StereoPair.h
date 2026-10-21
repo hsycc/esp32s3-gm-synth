@@ -244,9 +244,11 @@ inline void applyStereoBasePan(gm::PlaybackZone* zone, bool left_channel) {
         return;
     }
     const std::int32_t amplitude = recoverStaticAmplitudeQ15(*zone);
+    const std::int32_t side_offset = left_channel ? -500 : 500;
     const std::int32_t effective_pan =
-        static_cast<std::int32_t>(zone->note_on_gain.pan_sf2_units) +
-        (left_channel ? -500 : 500);
+        static_cast<std::int32_t>(zone->note_on_gain.pan_sf2_units) + side_offset;
+    zone->note_on_gain.stereo_pan_offset_sf2_units =
+        static_cast<std::int16_t>(side_offset);
     zone->note_on_gain.pan_sf2_units = static_cast<std::int16_t>(
         std::clamp<std::int32_t>(effective_pan, -1000, 1000));
     zone->gain_left_q15 = multiplyStereoQ15(
