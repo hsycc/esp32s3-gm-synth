@@ -29,6 +29,17 @@ void logI2sWorstBlockProfile(
 
     for (std::size_t index = 0; index < profile.retained; ++index) {
         const auto& block = profile.slowest[index];
+        const auto& stages = block.stages;
+        ESP_LOGI(
+            kTag,
+            "i2s_worst: STAGES rank=%u stream_block=%u stage_valid=%u setup_prepare_us=%u event_apply_us=%u voice_render_us=%u effects_finalize_us=%u note=diagnostic_only_event_heavy",
+            static_cast<unsigned>(index + 1u),
+            static_cast<unsigned>(block.stream_block),
+            stages.valid ? 1u : 0u,
+            static_cast<unsigned>(stages.setup_prepare_us),
+            static_cast<unsigned>(stages.event_apply_us),
+            static_cast<unsigned>(stages.voice_render_us),
+            static_cast<unsigned>(stages.effects_finalize_us));
         const auto& events = block.events;
         const auto& voices = block.voices;
         ESP_LOGI(
