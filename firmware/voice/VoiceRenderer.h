@@ -180,6 +180,8 @@ struct VoiceRealtimeControlConfig {
     std::int32_t channel_pressure_to_vibrato_pitch_cents = 0;
     std::int32_t modulation_wheel_to_vibrato_pitch_cents = 0;
     std::int32_t mod_lfo_volume_depth_cb = 0;
+    std::int32_t cc21_to_filter_fc_cents = 0;
+    std::int32_t cc21_filter_offset_cents = 0;
 };
 
 struct VoiceRuntimeControlUpdate {
@@ -190,6 +192,7 @@ struct VoiceRuntimeControlUpdate {
     std::int16_t chorus_send_units = 0;
     std::int32_t vibrato_pitch_depth_cents = 0;
     LfoGainTable mod_lfo_gain_table{};
+    std::int32_t cc21_filter_offset_cents = 0;
 
     bool valid() const {
         return phase_increment_q32 != 0 && mod_lfo_gain_table.valid() &&
