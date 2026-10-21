@@ -6,6 +6,7 @@ on:
     paths:
       - "firmware/gm/MidiChannelState.*"
       - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/PlaybackProgramKeyIndex.*"
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
       - "firmware/sf2/Sf2ModulationMath.*"
@@ -24,6 +25,7 @@ on:
     paths:
       - "firmware/gm/MidiChannelState.*"
       - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/PlaybackProgramKeyIndex.*"
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
       - "firmware/sf2/Sf2ModulationMath.*"
