@@ -12,7 +12,8 @@ def sample_log(version="abcdef0", gate="0x00000000", cc=3):
         parts += [
             "I gm_synth: i2s_qual: RESULT blocks=131072 render_us[min/avg/max]=130/743/2006 render_deadline_misses=5",
             "I gm_synth: i2s_qual: REALTIME_HEALTH render_soft_overruns=5 max_backlog_us=559 final_backlog_us=0 min_dma_margin_us=11051 backlog_healthy=1",
-            f"I gm_synth: i2s_qual: HARD_GATE failure_flags={gate}"]
+            f"I gm_synth: i2s_qual: HARD_GATE failure_flags={gate}",
+            "I gm_synth: i2s_qual: PATH startup_prime_blocks=16 startup_prime_send_queue_overflows=1 active_synth_send_queue_overflows=0"]
     parts += [
         "I gm_synth: i2s_worst: STAGES rank=1 stream_block=10 stage_valid=0 setup_prepare_us=0 event_apply_us=0 voice_render_us=0 effects_finalize_us=0",
         "I gm_synth: i2s_worst: BLOCK rank=1 frame=1024 render_us=2100 events=0 note_on=0",
