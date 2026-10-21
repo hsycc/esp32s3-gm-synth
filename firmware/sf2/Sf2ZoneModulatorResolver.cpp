@@ -256,17 +256,11 @@ bool isIgnoredSf201VelocityFilterCancellation(
 }
 
 bool isPreparedNoteOnRuntimeRoute(const Sf2PdtaReader::Modulator& modulator) {
-    if (modulator.transform_oper != 0 ||
-        !isSupportedSf2NoteOnSourceOper(modulator.source_oper) ||
-        (modulator.amount_source_oper != 0 &&
-         !isSupportedSf2NoteOnSourceOper(modulator.amount_source_oper)) ||
-        !isPreparedNoteOnDestination(modulator.destination_oper)) {
-        return false;
-    }
-
-    // Pan stays explicit until stereo-side base pan is represented separately;
-    // otherwise the required generator clamp would occur in the wrong order.
-    return modulator.destination_oper != kPanDestination;
+    return modulator.transform_oper == 0 &&
+        isSupportedSf2NoteOnSourceOper(modulator.source_oper) &&
+        (modulator.amount_source_oper == 0 ||
+         isSupportedSf2NoteOnSourceOper(modulator.amount_source_oper)) &&
+        isPreparedNoteOnDestination(modulator.destination_oper);
 }
 
 Sf2PreparedNoteOnModulator preparedRoute(
