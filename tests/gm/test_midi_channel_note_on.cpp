@@ -142,6 +142,34 @@ void testCc7Cc11AndCc10AffectSubsequentNoteOn() {
     assert(batch.voices[0].gain_left_q15 > 0);
 }
 
+void testCc21PreparesFilterForFullControllerRange() {
+    PlaybackZone zone = controllerZone();
+    zone.note_on_filter.enabled = true;
+    zone.note_on_filter.initial_cutoff_cents = 9000;
+    zone.note_on_filter.velocity_to_cutoff_cents = 0;
+    zone.note_on_filter.cc21_to_cutoff_cents = -2400;
+    const auto program = programFor(&zone);
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    MidiChannelState state{};
+    state.resetAll();
+    assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 30, &batch) ==
+           ZoneResolveStatus::Ok);
+    assert(batch.voices[0].dynamic_lowpass_table.enabled);
+    assert(batch.voices[0].dynamic_lowpass_table.min_offset_cents == -2400);
+    assert(batch.voices[0].dynamic_lowpass_table.max_offset_cents == 0);
+    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents == -2400);
+    state.applyControlChange(21, 64);
+    assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 31, &batch) ==
+           ZoneResolveStatus::Ok);
+    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents < 0);
+    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents > -2400);
+    state.applyControlChange(21, 127);
+    assert(resolver.resolveNoteOn(program, state, 2, 60, 100, 32, &batch) ==
+           ZoneResolveStatus::Ok);
+    assert(batch.voices[0].realtime_control.cc21_filter_offset_cents == 0);
+}
+
 void testPitchBendUsesRpnSensitivityWithoutFloatingPoint() {
     const PlaybackZone zone = controllerZone();
     const PlaybackProgramSnapshot program = programFor(&zone);
@@ -226,6 +254,7 @@ void testRealtimeApplierOwnsSampleAccurateChannelState() {
 int main() {
     testDefaultGmVolumeIsAppliedOnlyOnChannelStatePath();
     testCc7Cc11AndCc10AffectSubsequentNoteOn();
+    testCc21PreparesFilterForFullControllerRange();
     testPitchBendUsesRpnSensitivityWithoutFloatingPoint();
     testRealtimeApplierOwnsSampleAccurateChannelState();
     std::cout << "GM channel-state NoteOn runtime checks passed\n";
