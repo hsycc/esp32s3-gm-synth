@@ -338,6 +338,9 @@ bool PhysicalMusicStress::enqueueTimeline(
         return block_start_frame + block * kFramesPerBlock;
     };
 
+    // Enable only during physical music stress, after the unprofiled
+    // polyphony sweep. No NoteOn clock reads in normal firmware.
+    event_applier_.enableNoteOnBurstTiming();
     const std::uint64_t p0 = phaseFrame(0, 16);
     if (!pushEvent(queue, p0, realtime::EventType::ControlChange, 0, 91, 100) ||
         !pushEvent(queue, p0, realtime::EventType::ControlChange, 0, 93, 100)) {
@@ -624,6 +627,17 @@ bool PhysicalMusicStress::validateAndLog(
         static_cast<unsigned>(handoff_after_take.taken),
         static_cast<unsigned>(handoff_after_take.read_retries),
         latest_programs_ok ? 1u : 0u);
+
+    const auto note_burst = event_applier_.noteOnBurstTiming();
+    ESP_LOGI(
+        kTag,
+        "music_stress: NOTE_ON_BURST frame=%llu notes=%u zone_resolve_total_us=%u voice_start_total_us=%u zone_resolve_max_event_us=%u voice_start_max_event_us=%u timing_gate=diagnostic_only",
+        static_cast<unsigned long long>(note_burst.block_start_frame),
+        static_cast<unsigned>(note_burst.note_on_count),
+        static_cast<unsigned>(note_burst.zone_resolve_us),
+        static_cast<unsigned>(note_burst.voice_start_us),
+        static_cast<unsigned>(note_burst.max_zone_resolve_us),
+        static_cast<unsigned>(note_burst.max_voice_start_us));
 
     const bool pass =
         max_stable_polyphony_ >= kMinimumQualifiedPolyphony &&
