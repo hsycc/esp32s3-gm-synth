@@ -502,6 +502,11 @@ bool runI2sTask(TaskContext& context) {
     std::uint64_t block_start_frame = context.block_start_frame;
     PcmStats pcm_stats{};
     realtime::RealtimeHealthTracker health_tracker(kBlockBudgetUs, dma_window_us);
+    // Qualification-only safety net: terminate a sustained over-budget
+    // workload before its pinned high-priority producer starves CPU1 IDLE and
+    // triggers Task WDT. Never substitute this for the normal DMA hard gate.
+    constexpr std::uint32_t kSustainedOverrunAbortBlocks = 128u;
+    std::uint32_t consecutive_actual_work_overruns = 0u;
 
     const auto renderAndWrite = [&](bool measure,
                                     LatencyStats* render_stats,
@@ -565,6 +570,27 @@ bool runI2sTask(TaskContext& context) {
             write_stats->add(write_us);
             cycle_stats->add(cycle_us);
             health_tracker.addBlock(render_us, producer_work_us);
+            // Use actual renderer wall time, including diagnostic overhead:
+            // profiling subtracts that overhead from the ordinary stats,
+            // but the CPU still spends those cycles in the pinned task.
+            const std::uint32_t actual_work_us =
+                addUs(renderer_call_us, downmix_us);
+            if (actual_work_us > kBlockBudgetUs) {
+                ++consecutive_actual_work_overruns;
+            } else {
+                consecutive_actual_work_overruns = 0u;
+            }
+            if (consecutive_actual_work_overruns >= kSustainedOverrunAbortBlocks) {
+                ESP_LOGE(
+                    kTag,
+                    "i2s_qual: SUSTAINED_OVERLOAD consecutive_blocks=%u actual_work_us=%u render_us=%u diagnostic_overhead_us=%u block_budget_us=%u reason=cpu1_idle_starvation_risk qualification=FAIL",
+                    static_cast<unsigned>(consecutive_actual_work_overruns),
+                    static_cast<unsigned>(actual_work_us),
+                    static_cast<unsigned>(render_us),
+                    static_cast<unsigned>(diagnostic_overhead_us),
+                    static_cast<unsigned>(kBlockBudgetUs));
+                return false;
+            }
             if (cycle_us > kBlockBudgetUs) {
                 ++(*cycle_over_budget);
             }
