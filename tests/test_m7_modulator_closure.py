@@ -32,7 +32,7 @@ class M7ModulatorClosureTests(unittest.TestCase):
         )
         self.assertTrue(modulator_closure.currently_supported(route))
 
-    def test_note_on_pan_remains_explicitly_pending(self):
+    def test_note_on_pan_matches_runtime_prepared_route(self):
         route = modulator_closure.Route(
             asset="generaluser_gs",
             scope="instrument",
@@ -43,11 +43,7 @@ class M7ModulatorClosureTests(unittest.TestCase):
             transform=0,
             count=1,
         )
-        self.assertFalse(modulator_closure.currently_supported(route))
-        self.assertEqual(
-            modulator_closure.classify(route),
-            "prepared_note_on_candidate",
-        )
+        self.assertTrue(modulator_closure.currently_supported(route))
 
     def test_sample_address_is_supported_while_arbitrary_cc_stays_pending(self):
         sample_address = modulator_closure.Route(
