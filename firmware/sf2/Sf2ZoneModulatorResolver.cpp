@@ -14,6 +14,7 @@ constexpr std::uint16_t kVelocityNegativeLinearSourceOper = 0x0102u;
 constexpr std::uint16_t kVelocityAttenuationSourceOper = 0x0502u;
 constexpr std::uint16_t kChannelVolumeSourceOper = 0x0587u;
 constexpr std::uint16_t kChannelPanSourceOper = 0x028Au;
+constexpr std::uint16_t kCc21NegativeLinearSourceOper = 0x0195u;
 constexpr std::uint16_t kChannelExpressionSourceOper = 0x058Bu;
 constexpr std::uint16_t kChannelPressureSourceOper = 0x000Du;
 constexpr std::uint16_t kModulationWheelSourceOper = 0x0081u;
@@ -63,6 +64,7 @@ struct ModulatorScan {
     NoteOnRouteSet initial_filter_fc_note_on{};
     RouteValue channel_volume{};
     RouteValue channel_pan{};
+    RouteValue cc21_filter_fc{};
     RouteValue channel_expression{};
     RouteValue channel_pressure_vibrato{};
     RouteValue modulation_wheel_vibrato{};
@@ -438,6 +440,9 @@ bool scanModulators(
             } else {
                 ++scan.unsupported_records;
             }
+        } else if (exactRoute(modulator, kCc21NegativeLinearSourceOper, kInitialFilterFcDestination)) {
+            remember(&scan.cc21_filter_fc, modulator);
+            ++scan.supported_channel_control_records;
         } else if (exactRoute(modulator, kChannelVolumeSourceOper, kInitialAttenuationDestination)) {
             remember(&scan.channel_volume, modulator);
             ++scan.supported_channel_control_records;
@@ -578,6 +583,12 @@ ResolvedZoneModulation combine(
         preset_local.channel_volume,
         instrument_global.channel_volume,
         instrument_local.channel_volume);
+    resolved.cc21_to_filter_fc_cents = combinedRoute(
+        0,
+        preset_global.cc21_filter_fc,
+        preset_local.cc21_filter_fc,
+        instrument_global.cc21_filter_fc,
+        instrument_local.cc21_filter_fc);
     resolved.pan_amount = combinedRoute(
         kSf2DefaultPanAmount,
         preset_global.channel_pan,
