@@ -901,7 +901,7 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
                 sf2::channelEffectsSendSf2Units(
                     zone.effects_send.chorus_sf2_units,
                     channel_state.chorus_send,
-                    zone.effects_send.chorus_send_cc_amount));
+                    zone.effects_send.chorus_cc_amount));
         }
         prepareVolumeEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.envelope);
