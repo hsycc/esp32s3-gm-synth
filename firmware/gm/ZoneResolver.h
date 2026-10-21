@@ -94,6 +94,17 @@ struct RealtimeProgramEventStats {
     std::uint64_t voice_start_failures = 0;
 };
 
+// Physical-only attribution of the densest NoteOn event block. This is
+// deliberately disabled by default to preserve ordinary realtime cost.
+struct NoteOnBurstTiming {
+    std::uint64_t block_start_frame = 0;
+    std::uint32_t note_on_count = 0;
+    std::uint32_t zone_resolve_us = 0;
+    std::uint32_t voice_start_us = 0;
+    std::uint32_t max_zone_resolve_us = 0;
+    std::uint32_t max_voice_start_us = 0;
+};
+
 // Production-shaped event adapter. MIDI channel state is fixed-size and owned
 // by the audio-side applier, so sample-accurate channel events update both the
 // state observed by future NoteOn events and already-sounding Voices.
@@ -110,6 +121,16 @@ public:
         voice::VoicePool& voices);
 
     const RealtimeProgramEventStats& stats() const { return stats_; }
+    void enableNoteOnBurstTiming() {
+        note_on_burst_timing_enabled_ = true;
+        note_on_burst_current_ = NoteOnBurstTiming{};
+        note_on_burst_worst_ = NoteOnBurstTiming{};
+    }
+    NoteOnBurstTiming noteOnBurstTiming() const {
+        return note_on_burst_current_.note_on_count >
+                   note_on_burst_worst_.note_on_count
+            ? note_on_burst_current_ : note_on_burst_worst_;
+    }
     const MidiChannelState& channelState(std::uint8_t channel) const {
         return channel_states_.channel(channel);
     }
@@ -125,6 +146,9 @@ private:
     ResolvedVoiceBatch batch_{};
     std::uint32_t next_note_instance_id_ = 1;
     RealtimeProgramEventStats stats_{};
+    bool note_on_burst_timing_enabled_ = false;
+    NoteOnBurstTiming note_on_burst_current_{};
+    NoteOnBurstTiming note_on_burst_worst_{};
 };
 
 }  // namespace gm_synth::gm
