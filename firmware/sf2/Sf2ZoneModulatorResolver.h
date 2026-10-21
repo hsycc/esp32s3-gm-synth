@@ -3,6 +3,7 @@
 #include "Sf2FilterMath.h"
 #include "Sf2ModulationMath.h"
 #include "Sf2NoteOnModulatorSet.h"
+#include "Sf2NoteOnModulatorTargets.h"
 #include "Sf2PdtaReader.h"
 
 #include <array>
