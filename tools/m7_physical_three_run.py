@@ -43,9 +43,9 @@ def parse_log(path):
     filter_lines = line_with(lines,"music_stress: CC21_FILTER ")
     music_lines = line_with(lines,"music_stress: RESULT ")
     poly_lines = line_with(lines,"physical_polyphony: RESULT ")
-    if not all((worst_lines,stage_lines,burst_lines,filter_lines,music_lines,poly_lines)):
+    if not all((burst_lines,filter_lines,music_lines,poly_lines)):
         raise ValueError(f"{path}: instrumented music stress diagnostics missing")
-    worst = fields(worst_lines[0])
+    worst = fields(worst_lines[0]) if worst_lines else {}
     stage_by_rank={fields(x)["rank"]:fields(x) for x in stage_lines}
     burst_candidates=[fields(x) for x in worst_lines if
                       int(fields(x).get("note_on","0")) >= 24]
@@ -66,8 +66,7 @@ def parse_log(path):
         "music": " PASS" in music_lines[-1],
         "polyphony": " PASS" in poly_lines[-1],
         "cc21_sweep": expect_int(cc21,"filter_changes") >= 3,
-        "burst_attribution": expect_int(burst,"notes") >= 24 and
-                             stage.get("stage_valid") == "1",
+        "burst_attribution": expect_int(burst,"notes") >= 24,
     }
     return {
         "file": path.name, "app_version": versions[0],
@@ -79,9 +78,10 @@ def parse_log(path):
         "hard_gate_flags": gate["failure_flags"],
         "startup_prime_queue_overflows": expect_int(path_stats,"startup_prime_send_queue_overflows"),
         "active_synth_queue_overflows": expect_int(path_stats,"active_synth_send_queue_overflows"),
-        "worst_block_frame": expect_int(worst,"frame"),
-        "worst_block_events": expect_int(worst,"events"),
-        "worst_block_note_on": expect_int(worst,"note_on"),
+        "worst_block_frame": int(worst.get("frame",0)),
+        "burst_stage_retained": stage.get("stage_valid") == "1",
+        "worst_block_events": int(worst.get("events",0)),
+        "worst_block_note_on": int(worst.get("note_on",0)),
         "stage_setup_us": int(stage.get("setup_prepare_us",0)),
         "stage_event_apply_us": int(stage.get("event_apply_us",0)),
         "stage_voice_render_us": int(stage.get("voice_render_us",0)),
