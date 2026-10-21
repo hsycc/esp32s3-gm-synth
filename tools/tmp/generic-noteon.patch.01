@@ -1,0 +1,201 @@
+reverb_send_units = zone.effects_send.reverb_sf2_units;
+             params.chorus_send_units = zone.effects_send.chorus_sf2_units;
+         }
+-        prepareVolumeEnvelope(zone, key, effective_velocity, &params.envelope);
++        prepareVolumeEnvelope(
++            zone, key, effective_velocity, note_on_deltas, &params.envelope);
+         prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
+         if (zone.vibrato_lfo.enabled) {
+             params.vibrato_lfo.enabled = true;
+@@ -638,9 +689,11 @@
+                     &params.mod_lfo.gain_table);
+             }
+         }
+-        prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
++        prepareModEnvelope(
++            zone, key, effective_velocity, note_on_deltas, &params.mod_envelope);
+         if (zone.note_on_filter.enabled) {
+-            prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
++            prepareDynamicFilterTable(
++                zone, key, effective_velocity, note_on_deltas, &params.dynamic_lowpass_table);
+         }
+         ++batch->count;
+     }
+@@ -673,8 +726,10 @@
+         }
+ 
+         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
++        const sf2::Sf2NoteOnTargetDeltas note_on_deltas =
++            preparedNoteOnTargetDeltas(zone, key, effective_velocity);
+         const std::int32_t initial_attenuation_cb =
+-            effectiveInitialAttenuationCb(zone, effective_velocity);
++            effectiveInitialAttenuationCb(zone, effective_velocity, note_on_deltas);
+         voice::VoiceStartParams& params = batch->voices[batch->count];
+         params = voice::VoiceStartParams{};
+         params.sample_id = zone.sample_id;
+@@ -684,7 +739,8 @@
+         params.exclusive_class = zone.exclusive_class;
+         params.note_instance_id = note_instance_id;
+ 
+-        const std::uint64_t key_increment = keyTrackedPhaseIncrement(zone, key);
++        const std::uint64_t key_increment = keyTrackedPhaseIncrement(
++            zone, key, note_on_deltas.fine_tune_cents);
+         params.phase_increment_q32 = bend_cents == 0
+             ? key_increment
+             : transposeCents(key_increment, bend_cents);
+@@ -720,7 +776,8 @@
+                     channel_state.chorus_send,
+                     zone.effects_send.chorus_cc_amount));
+         }
+-        prepareVolumeEnvelope(zone, key, effective_velocity, &params.envelope);
++        prepareVolumeEnvelope(
++            zone, key, effective_velocity, note_on_deltas, &params.envelope);
+         prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
+         if (zone.vibrato_lfo.enabled) {
+             params.vibrato_lfo.enabled = true;
+@@ -750,9 +807,11 @@
+                     &params.mod_lfo.gain_table);
+             }
+         }
+-        prepareModEnvelope(zone, key, effective_velocity, &params.mod_envelope);
++        prepareModEnvelope(
++            zone, key, effective_velocity, note_on_deltas, &params.mod_envelope);
+         if (zone.note_on_filter.enabled) {
+-            prepareDynamicFilterTable(zone, key, effective_velocity, &params.dynamic_lowpass_table);
++            prepareDynamicFilterTable(
++                zone, key, effective_velocity, note_on_deltas, &params.dynamic_lowpass_table);
+         }
+         params.realtime_control.enabled = true;
+         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
+diff -ruN '--exclude=*.o' s3orig/firmware/sf2/Sf2NoteOnModulatorTargets.h s3src/firmware/sf2/Sf2NoteOnModulatorTargets.h
+--- s3orig/firmware/sf2/Sf2NoteOnModulatorTargets.h	2026-10-21 03:52:34.000000000 +0000
++++ s3src/firmware/sf2/Sf2NoteOnModulatorTargets.h	2026-10-21 03:55:28.806683315 +0000
+@@ -53,6 +53,33 @@
+     }
+ }
+ 
++// Destinations whose generator-domain value is already represented by
++// PlaybackZone and can therefore be evaluated once at NoteOn. FilterQ (9)
++// keeps its dedicated payload so the already-qualified FluidR3 path is not
++// double-counted. Pan (17) remains pending until stereo-side base pan and the
++// generator clamp are represented in the correct SF2 order.
++inline bool isRuntimeGenericPreparedNoteOnDestination(std::uint16_t destination_oper) {
++    switch (destination_oper) {
++        case 7:
++        case 11:
++        case 28:
++        case 34:
++        case 36:
++        case 38:
++        case 48:
++        case 52:
++            return true;
++        default:
++            return false;
++    }
++}
++
++inline bool isRuntimeGenericPreparedNoteOnRoute(
++    const Sf2PreparedNoteOnModulator& route) {
++    return route.valid() &&
++        isRuntimeGenericPreparedNoteOnDestination(route.destination_oper);
++}
++
+ inline bool applyPreparedNoteOnModulator(
+     const Sf2PreparedNoteOnModulator& route,
+     std::uint8_t key,
+diff -ruN '--exclude=*.o' s3orig/firmware/sf2/Sf2PlaybackMaterializer.cpp s3src/firmware/sf2/Sf2PlaybackMaterializer.cpp
+--- s3orig/firmware/sf2/Sf2PlaybackMaterializer.cpp	2026-10-21 03:52:34.000000000 +0000
++++ s3src/firmware/sf2/Sf2PlaybackMaterializer.cpp	2026-10-21 03:55:28.808600092 +0000
+@@ -133,6 +133,17 @@
+     }
+ }
+ 
++bool hasPreparedDestination(
++    const Sf2PreparedNoteOnModulatorSet& routes,
++    std::uint16_t destination_oper) {
++    for (std::size_t index = 0; index < routes.count; ++index) {
++        if (routes.routes[index].destination_oper == destination_oper) {
++            return true;
++        }
++    }
++    return false;
++}
++
+ }  // namespace
+ 
+ PlaybackMaterializationResult Sf2PlaybackMaterializer::materialize(
+@@ -340,6 +351,9 @@
+         candidate.note_on_filter.additional_cutoff_routes[
+             candidate.note_on_filter.additional_cutoff_route_count++] = route;
+     }
++    if (modulation.preparedNoteOnRoutesFullyRepresented()) {
++        candidate.prepared_note_on_modulators = modulation.prepared_note_on_routes;
++    }
+ 
+     const std::int32_t static_vibrato_depth = native.generators.value(6, 0);
+     candidate.vibrato_lfo.enabled =
+@@ -387,7 +401,10 @@
+     candidate.mod_envelope.enabled = candidate.mod_envelope.pitch_depth_cents != 0 ||
+         candidate.mod_envelope.filter_depth_cents != 0 ||
+         candidate.mod_envelope.velocity_positive_to_filter_depth_cents != 0 ||
+-        candidate.mod_envelope.velocity_negative_to_filter_depth_cents != 0;
++        candidate.mod_envelope.velocity_negative_to_filter_depth_cents != 0 ||
++        hasPreparedDestination(candidate.prepared_note_on_modulators, 7u) ||
++        hasPreparedDestination(candidate.prepared_note_on_modulators, 11u) ||
++        hasPreparedDestination(candidate.prepared_note_on_modulators, 28u);
+     candidate.mod_envelope.envelope.delay_frames = timecentsToFrames(
+         native.generators.value(25, -12000),
+         output_sample_rate_);
+diff -ruN '--exclude=*.o' s3orig/firmware/sf2/Sf2ZoneModulatorResolver.cpp s3src/firmware/sf2/Sf2ZoneModulatorResolver.cpp
+--- s3orig/firmware/sf2/Sf2ZoneModulatorResolver.cpp	2026-10-21 03:52:34.000000000 +0000
++++ s3src/firmware/sf2/Sf2ZoneModulatorResolver.cpp	2026-10-21 03:55:28.807720491 +0000
+@@ -624,16 +624,39 @@
+     const std::uint32_t prepared_records = sumCategory(
+         &ModulatorScan::supported_prepared_note_on_records,
+         preset_global, preset_local, instrument_global, instrument_local);
+-    if (combinePreparedNoteOnLevels(
+-            preset_global.prepared_note_on,
+-            preset_local.prepared_note_on,
+-            instrument_global.prepared_note_on,
+-            instrument_local.prepared_note_on,
+-            &resolved.prepared_note_on_routes)) {
++    Sf2PreparedNoteOnModulatorSet combined_prepared{};
++    bool prepared_ok = combinePreparedNoteOnLevels(
++        preset_global.prepared_note_on,
++        preset_local.prepared_note_on,
++        instrument_global.prepared_note_on,
++        instrument_local.prepared_note_on,
++        &combined_prepared);
++    if (prepared_ok) {
++        for (std::size_t index = 0; index < combined_prepared.count; ++index) {
++            const Sf2PreparedNoteOnModulator& route = combined_prepared.routes[index];
++            if (route.destination_oper == kInitialFilterQDestination) {
++                prepared_ok = replacePreparedNoteOnModulator(
++                    &resolved.velocity_to_filter_q_cb.additional_routes,
++                    route);
++            } else if (isRuntimeGenericPreparedNoteOnRoute(route)) {
++                prepared_ok = replacePreparedNoteOnModulator(
++                    &resolved.prepared_note_on_routes,
++                    route);
++            } else {
++                prepared_ok = false;
++            }
++            if (!prepared_ok) {
++                break;
++            }
++        }
++    }
++    if (prepared_ok) {
+         resolved.supported_prepared_note_on_records = clampU16(prepared_records);
+     } else {
+-        // Conservative overflow behavior: do not publish a partial route set.
+-        // The raw records remain explicit unsupported telemetry.
++        // Conservative overflow/partition behavior: do not publish a partial
++        // route set. Raw records remain explicit unsupported telemetry.
++        resolved.velocity_to_filter_q_cb.additional_routes =
++            Sf2PreparedNoteOnModulatorSet{};
+         resolved.prepared_note_on_routes = Sf2PreparedNoteOnModulatorSet{};
+         resolved.supported_prepared_note_on_records = 0;
+         route_overflow_records = saturatingAdd32(
+diff -ruN '--exclude=*.o' s3orig/firmware/sf2/Sf2ZoneModulatorResolver.h s3src/firmware/sf2/Sf2ZoneModulatorResolve
