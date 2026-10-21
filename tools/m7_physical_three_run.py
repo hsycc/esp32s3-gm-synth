@@ -26,6 +26,8 @@ def parse_log(path):
                 if (m := re.search(r"App version:\s*([0-9a-fA-F]+)",ln))]
     if not versions:
         raise ValueError(f"{path}: App version missing")
+    if not any("Returned from app_main()" in line for line in lines):
+        raise ValueError(f"{path}: incomplete boot log (no app_main completion)")
     result_lines = line_with(lines,"i2s_qual: RESULT blocks=")
     health_lines = line_with(lines,"i2s_qual: REALTIME_HEALTH ")
     gate_lines = line_with(lines,"i2s_qual: HARD_GATE ")
@@ -59,10 +61,14 @@ def parse_log(path):
     if any("task_wdt:" in x or "Guru Meditation" in x for x in lines):
         raise ValueError(f"{path}: crash/WDT detected")
     passes = {
-        "hard_gate": expect_int(gate,"failure_flags",16) == 0,
+        "hard_gate": all(expect_int(fields(x),"failure_flags",16) == 0
+                         for x in gate_lines),
+        "measured_blocks": all(expect_int(fields(x),"blocks") == 131072
+                               for x in result_lines),
         "active_synth_queue": expect_int(path_stats,"active_synth_send_queue_overflows") == 0,
-        "backlog": health.get("backlog_healthy") == "1" and
-                   expect_int(health,"final_backlog_us") == 0,
+        "backlog": all(fields(x).get("backlog_healthy") == "1" and
+                       expect_int(fields(x),"final_backlog_us") == 0
+                       for x in health_lines),
         "music": " PASS" in music_lines[-1],
         "polyphony": " PASS" in poly_lines[-1],
         "cc21_sweep": expect_int(cc21,"filter_changes") >= 3,
