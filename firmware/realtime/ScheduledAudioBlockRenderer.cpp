@@ -277,6 +277,7 @@ void ScheduledAudioBlockRenderer::render(
         static_cast<std::uint16_t>(kFramesPerBlock));
 
     ScheduledWorstBlockStages stage{};
+    (void)stage;  // ESP-only physical profiling; no host timing instrumentation.
 #if defined(ESP_PLATFORM)
     const bool time_burst = worst_profile_enabled_ && batch.count >= 8u;
     stage.valid = time_burst;
