@@ -1,0 +1,232 @@
+diff -ruN '--exclude=*.o' s3orig/firmware/gm/PlaybackProgramSnapshot.h s3src/firmware/gm/PlaybackProgramSnapshot.h
+--- s3orig/firmware/gm/PlaybackProgramSnapshot.h	2026-10-21 03:52:34.000000000 +0000
++++ s3src/firmware/gm/PlaybackProgramSnapshot.h	2026-10-21 03:55:28.808216481 +0000
+@@ -3,6 +3,8 @@
+ #include "sample/ProgramSnapshot.h"
+ #include "sf2/Sf2FilterMath.h"
+ #include "sf2/Sf2ModulationMath.h"
++#include "sf2/Sf2NoteOnModulatorSet.h"
++#include "sf2/Sf2NoteOnModulatorTargets.h"
+ #include "voice/VoiceRenderer.h"
+ 
+ #include <array>
+@@ -191,11 +193,27 @@
+     std::int32_t velocity_to_vol_env_attack_timecents = 0;
+     NoteOnGainConfig note_on_gain{};
+     NoteOnFilterConfig note_on_filter{};
++    // Immutable key/velocity modulation for generator destinations that are
++    // evaluated once at NoteOn. No allocation or bank parsing occurs here.
++    sf2::Sf2PreparedNoteOnModulatorSet prepared_note_on_modulators{};
+     VibratoLfoConfig vibrato_lfo{};
+     ModLfoConfig mod_lfo{};
+     ModEnvelopeConfig mod_envelope{};
+     EffectsSendConfig effects_send{};
+ 
++    bool preparedNoteOnModulatorsValid() const {
++        if (!prepared_note_on_modulators.valid()) {
++            return false;
++        }
++        for (std::size_t index = 0; index < prepared_note_on_modulators.count; ++index) {
++            if (!sf2::isRuntimeGenericPreparedNoteOnRoute(
++                    prepared_note_on_modulators.routes[index])) {
++                return false;
++            }
++        }
++        return true;
++    }
++
+     bool valid() const {
+         const bool sample_region_valid = !sample_region.enabled ||
+             (sample_region.start_frame < sample_region.end_frame &&
+@@ -208,6 +226,7 @@
+                root_key <= 127 && scale_tuning_cents_per_key <= 1200 &&
+                root_phase_increment_q32 != 0 && sample_region_valid &&
+                note_on_gain.valid() && note_on_filter.valid() &&
++               preparedNoteOnModulatorsValid() &&
+                vibrato_lfo.valid() && mod_lfo.valid() &&
+                mod_envelope.valid() && effects_send.valid();
+     }
+diff -ruN '--exclude=*.o' s3orig/firmware/gm/ZoneResolver.cpp s3src/firmware/gm/ZoneResolver.cpp
+--- s3orig/firmware/gm/ZoneResolver.cpp	2026-10-21 03:52:34.000000000 +0000
++++ s3src/firmware/gm/ZoneResolver.cpp	2026-10-21 03:55:28.809351974 +0000
+@@ -76,15 +76,36 @@
+         : velocity;
+ }
+ 
+-std::uint64_t keyTrackedPhaseIncrement(const PlaybackZone& zone, std::uint8_t key) {
+-    if (!zone.key_tracking) {
+-        return zone.root_phase_increment_q32;
+-    }
+-    const int key_delta = static_cast<int>(key) - static_cast<int>(zone.root_key);
+-    const int cents_delta = key_delta * static_cast<int>(zone.scale_tuning_cents_per_key);
+-    return cents_delta == 0
+-        ? zone.root_phase_increment_q32
+-        : ZoneResolver::transposeCents(zone.root_phase_increment_q32, cents_delta);
++sf2::Sf2NoteOnTargetDeltas preparedNoteOnTargetDeltas(
++    const PlaybackZone& zone,
++    std::uint8_t key,
++    std::uint8_t effective_velocity) {
++    sf2::Sf2NoteOnTargetDeltas deltas{};
++    for (std::size_t index = 0; index < zone.prepared_note_on_modulators.count; ++index) {
++        (void)sf2::applyPreparedNoteOnModulator(
++            zone.prepared_note_on_modulators.routes[index],
++            key,
++            effective_velocity,
++            &deltas);
++    }
++    return deltas;
++}
++
++std::uint64_t keyTrackedPhaseIncrement(
++    const PlaybackZone& zone,
++    std::uint8_t key,
++    std::int32_t fine_tune_cents) {
++    std::uint64_t increment = zone.root_phase_increment_q32;
++    if (zone.key_tracking) {
++        const int key_delta = static_cast<int>(key) - static_cast<int>(zone.root_key);
++        const int cents_delta = key_delta * static_cast<int>(zone.scale_tuning_cents_per_key);
++        if (cents_delta != 0) {
++            increment = ZoneResolver::transposeCents(increment, cents_delta);
++        }
++    }
++    return fine_tune_cents == 0
++        ? increment
++        : ZoneResolver::transposeCents(increment, fine_tune_cents);
+ }
+ 
+ std::int32_t effectiveFilterResonanceCb(
+@@ -103,9 +124,11 @@
+ 
+ std::int32_t effectiveInitialAttenuationCb(
+     const PlaybackZone& zone,
+-    std::uint8_t effective_velocity) {
++    std::uint8_t effective_velocity,
++    const sf2::Sf2NoteOnTargetDeltas& deltas) {
+     const std::int64_t summed =
+         static_cast<std::int64_t>(zone.note_on_gain.initial_attenuation_cb) +
++        deltas.attenuation_cb +
+         (zone.note_on_filter.enabled
+             ? sf2::resonanceDcAttenuationCb(
+                   effectiveFilterResonanceCb(zone, effective_velocity))
+@@ -118,9 +141,11 @@
+ 
+ std::int32_t effectiveModEnvFilterDepthCents(
+     const PlaybackZone& zone,
+-    std::uint8_t effective_velocity) {
++    std::uint8_t effective_velocity,
++    const sf2::Sf2NoteOnTargetDeltas& deltas) {
+     const std::int64_t summed =
+         static_cast<std::int64_t>(zone.mod_envelope.filter_depth_cents) +
++        deltas.mod_env_filter_cents +
+         sf2::positiveLinearToAmount(
+             effective_velocity,
+             zone.mod_envelope.velocity_positive_to_filter_depth_cents) +
+@@ -174,16 +199,26 @@
+     const PlaybackZone& zone,
+     std::uint8_t key,
+     std::uint8_t effective_velocity,
++    const sf2::Sf2NoteOnTargetDeltas& deltas,
+     voice::EnvelopeConfig* output) {
+     if (output == nullptr) {
+         return;
+     }
+     *output = zone.envelope;
++    const std::int32_t legacy_attack = sf2::velocityToFilterCutoffCents(
++        effective_velocity,
++        zone.velocity_to_vol_env_attack_timecents);
+     output->attack_frames = scaleEnvelopeFramesByTimecents(
+         output->attack_frames,
+-        sf2::velocityToFilterCutoffCents(
+-            effective_velocity,
+-            zone.velocity_to_vol_env_attack_timecents));
++        sf2::saturatingNoteOnTargetAdd(
++            legacy_attack,
++            deltas.vol_env_attack_timecents));
++    output->decay_frames = scaleEnvelopeFramesByTimecents(
++        output->decay_frames,
++        deltas.vol_env_decay_timecents);
++    output->release_frames = scaleEnvelopeFramesByTimecents(
++        output->release_frames,
++        deltas.vol_env_release_timecents);
+     applyEnvelopeKeyScaling(zone.envelope_key_scaling, key, output);
+ }
+ 
+@@ -232,6 +267,7 @@
+     const PlaybackZone& zone,
+     std::uint8_t key,
+     std::uint8_t effective_velocity,
++    const sf2::Sf2NoteOnTargetDeltas& deltas,
+     voice::DynamicLowpassTable* output) {
+     if (output == nullptr) {
+         return;
+@@ -246,7 +282,7 @@
+         : 0;
+     const std::int64_t lfo_extent = lfo_depth < 0 ? -lfo_depth : lfo_depth;
+     const std::int64_t env_depth = zone.mod_envelope.enabled
+-        ? static_cast<std::int64_t>(effectiveModEnvFilterDepthCents(zone, effective_velocity))
++        ? static_cast<std::int64_t>(effectiveModEnvFilterDepthCents(zone, effective_velocity, deltas))
+         : 0;
+     std::int64_t min_offset = -lfo_extent + std::min<std::int64_t>(0, env_depth);
+     std::int64_t max_offset = lfo_extent + std::max<std::int64_t>(0, env_depth);
+@@ -376,6 +412,7 @@
+     const PlaybackZone& zone,
+     std::uint8_t key,
+     std::uint8_t effective_velocity,
++    const sf2::Sf2NoteOnTargetDeltas& deltas,
+     voice::ModEnvelopeConfig* output) {
+     if (output == nullptr || !zone.mod_envelope.enabled) {
+         return;
+@@ -387,9 +424,19 @@
+         sf2::velocityToFilterCutoffCents(
+             effective_velocity,
+             zone.mod_envelope.velocity_to_attack_timecents));
++    output->envelope.decay_frames = scaleEnvelopeFramesByTimecents(
++        output->envelope.decay_frames,
++        deltas.mod_env_decay_timecents);
+     applyEnvelopeKeyScaling(zone.mod_envelope.key_scaling, key, &output->envelope);
+-    output->pitch_depth_cents = zone.mod_envelope.pitch_depth_cents;
+-    output->filter_depth_cents = effectiveModEnvFilterDepthCents(zone, effective_velocity);
++    output->pitch_depth_cents = static_cast<std::int32_t>(std::clamp<std::int64_t>(
++        static_cast<std::int64_t>(zone.mod_envelope.pitch_depth_cents) +
++            deltas.mod_env_pitch_cents,
++        -12000,
++        12000));
++    output->filter_depth_cents = effectiveModEnvFilterDepthCents(
++        zone,
++        effective_velocity,
++        deltas);
+ }
+ 
+ struct ActiveVoiceRefreshContext {
+@@ -581,8 +628,10 @@
+         }
+ 
+         const std::uint8_t effective_velocity = effectiveVelocity(zone, velocity);
++        const sf2::Sf2NoteOnTargetDeltas note_on_deltas =
++            preparedNoteOnTargetDeltas(zone, key, effective_velocity);
+         const std::int32_t initial_attenuation_cb =
+-            effectiveInitialAttenuationCb(zone, effective_velocity);
++            effectiveInitialAttenuationCb(zone, effective_velocity, note_on_deltas);
+         voice::VoiceStartParams& params = batch->voices[batch->count];
+         params = voice::VoiceStartParams{};
+         params.sample_id = zone.sample_id;
+@@ -591,7 +640,8 @@
+         params.velocity = effective_velocity;
+         params.exclusive_class = zone.exclusive_class;
+         params.note_instance_id = note_instance_id;
+-        params.phase_increment_q32 = keyTrackedPhaseIncrement(zone, key);
++        params.phase_increment_q32 = keyTrackedPhaseIncrement(
++            zone, key, note_on_deltas.fine_tune_cents);
+         params.loop_mode = zone.loop_mode;
+         params.sample_region = zone.sample_region;
+         params.gain_left_q15 = zone.gain_left_q15;
+@@ -609,7 +659,8 @@
+             params.reverb_send_units = zone.effects_send.reverb_sf2_units;
+             params.chorus_send_units = zone.effects_send.chorus_sf2_units;
+         }
+-        prepareVolumeEnvelope(zone, key, effective_velocity, &params.envelope);
++        prepareVolumeEnvelope(
++            zone, key, effective_velocity, note_on_deltas, &params.envelope);
+         prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
+         if (zone.vibrato_lfo.enabled) {
+             params.vibrato_lfo.enabled = true
