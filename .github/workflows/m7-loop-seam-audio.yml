@@ -1,0 +1,40 @@
+name: m7-loop-seam-audio
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/m7_loop_seam_audio.py'
+      - 'tests/test_m7_loop_seam_audio.py'
+      - '.github/workflows/m7-loop-seam-audio.yml'
+      - 'assets/sf2/full/GeneralUser-GS.sf2'
+
+jobs:
+  ab-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify seam renderer using synthetic samples
+        run: python -m unittest discover -s tests -p 'test_m7_loop_seam_audio.py' -v
+      - name: Render original and 16/32/64-frame loop crossfades
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/m7_loop_seam_audio.py assets/sf2/full/GeneralUser-GS.sf2 \
+            --output build/m7-loop-seam-audio --seconds 2.0
+          cat build/m7-loop-seam-audio/REPORT.md
+          test "$(find build/m7-loop-seam-audio -name '*.wav' | wc -l)" -eq 12
+      - name: Publish report summary
+        run: cat build/m7-loop-seam-audio/REPORT.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m7-generaluser-loop-seam-ab-wav
+          path: build/m7-loop-seam-audio/
+          if-no-files-found: error
+          retention-days: 90
