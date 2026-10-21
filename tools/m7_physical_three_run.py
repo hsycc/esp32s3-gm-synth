@@ -29,11 +29,14 @@ def parse_log(path):
     result_lines = line_with(lines,"i2s_qual: RESULT blocks=")
     health_lines = line_with(lines,"i2s_qual: REALTIME_HEALTH ")
     gate_lines = line_with(lines,"i2s_qual: HARD_GATE ")
-    if len(result_lines) != 2 or len(health_lines) != 2 or len(gate_lines) != 2:
+    path_lines = line_with(lines,"i2s_qual: PATH startup_prime_blocks=")
+    if (len(result_lines) != 2 or len(health_lines) != 2 or
+            len(gate_lines) != 2 or len(path_lines) != 2):
         raise ValueError(f"{path}: expected two complete I2S result/health/gate phases")
     render = fields(result_lines[-1])
     health = fields(health_lines[-1])
     gate = fields(gate_lines[-1])
+    path_stats = fields(path_lines[-1])
     worst_lines = line_with(lines,"i2s_worst: BLOCK rank=")
     stage_lines = line_with(lines,"i2s_worst: STAGES rank=")
     burst_lines = line_with(lines,"music_stress: NOTE_ON_BURST ")
@@ -57,6 +60,7 @@ def parse_log(path):
         raise ValueError(f"{path}: crash/WDT detected")
     passes = {
         "hard_gate": expect_int(gate,"failure_flags",16) == 0,
+        "active_synth_queue": expect_int(path_stats,"active_synth_send_queue_overflows") == 0,
         "backlog": health.get("backlog_healthy") == "1" and
                    expect_int(health,"final_backlog_us") == 0,
         "music": " PASS" in music_lines[-1],
@@ -73,6 +77,8 @@ def parse_log(path):
         "max_backlog_us": expect_int(health,"max_backlog_us"),
         "dma_margin_us": expect_int(health,"min_dma_margin_us"),
         "hard_gate_flags": gate["failure_flags"],
+        "startup_prime_queue_overflows": expect_int(path_stats,"startup_prime_send_queue_overflows"),
+        "active_synth_queue_overflows": expect_int(path_stats,"active_synth_send_queue_overflows"),
         "worst_block_frame": expect_int(worst,"frame"),
         "worst_block_events": expect_int(worst,"events"),
         "worst_block_note_on": expect_int(worst,"note_on"),
@@ -97,8 +103,8 @@ def report(runs):
            f"App version: {next(iter(versions))}",
            "Note: timing includes qualification instrumentation; compare against an instrumented baseline.",
            "",
-           "| Run | Render avg/max (us) | Soft overruns | Max backlog (us) | DMA margin (us) | Zone resolve burst (us) | Voice start burst (us) | CC21 changes | Gate |",
-           "|---|---:|---:|---:|---:|---:|---:|---:|---|"]
+           "| Run | Render avg/max (us) | Soft overruns | Max backlog (us) | DMA margin (us) | Zone resolve burst (us) | Voice start burst (us) | CC21 changes | Startup overflow (diagnostic) | Gate |",
+           "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
     all_pass=True
     for r in runs:
         passed=all(r["checks"].values())
@@ -106,7 +112,7 @@ def report(runs):
         lines.append(f"| {r['file']} | {r['render_avg_us']}/{r['render_max_us']} | "
                      f"{r['render_soft_overruns']} | {r['max_backlog_us']} | "
                      f"{r['dma_margin_us']} | {r['burst_zone_resolve_total_us']} | "
-                     f"{r['burst_voice_start_total_us']} | {r['filter_changes']} | "
+                     f"{r['burst_voice_start_total_us']} | {r['filter_changes']} | {r['startup_prime_queue_overflows']} | "
                      f"{'PASS' if passed else 'FAIL'} |")
     lines += ["",f"**Automated structural/hard-gate checks: {'PASS' if all_pass else 'FAIL'}**",
               "A PASS does not replace listening or prove the absence of audible clicks.",
