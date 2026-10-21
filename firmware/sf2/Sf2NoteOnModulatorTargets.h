@@ -57,19 +57,19 @@ inline bool isPreparedNoteOnDestination(std::uint16_t destination_oper) {
     }
 }
 
-// Destinations whose generator-domain value is already represented by
-// PlaybackZone and can therefore be evaluated once at NoteOn. Sample-start
-// address offsets (0/4) are applied to the prepared SampleRegion with a final
-// realizable-region clamp. FilterQ (9) keeps its dedicated payload so the
-// already-qualified FluidR3 path is not double-counted. Pan (17) remains
-// pending until stereo-side base pan and the generator clamp are represented
-// in the correct SF2 order.
+// Destinations whose generator-domain value is represented by PlaybackZone and
+// can therefore be evaluated once at NoteOn. Sample-start address offsets (0/4)
+// are applied to the prepared SampleRegion with a final realizable-region clamp.
+// Pan (17) is resolved in generator space first, clamped to -500..500, then has
+// the separately stored stereo-side offset applied. FilterQ (9) keeps its
+// dedicated payload so the already-qualified FluidR3 path is not double-counted.
 inline bool isRuntimeGenericPreparedNoteOnDestination(std::uint16_t destination_oper) {
     switch (destination_oper) {
         case 0:
         case 4:
         case 7:
         case 11:
+        case 17:
         case 28:
         case 34:
         case 36:
