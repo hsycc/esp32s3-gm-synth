@@ -25,6 +25,7 @@ enum ChannelControlAction : std::uint32_t {
     ChannelControlResetControllers = 1u << 8,
     ChannelControlAllNotesOff = 1u << 9,
     ChannelControlVibratoChanged = 1u << 10,
+    ChannelControlFilterChanged = 1u << 11,
 };
 
 struct MidiChannelState {
@@ -35,6 +36,8 @@ struct MidiChannelState {
     std::uint8_t program = 0;
 
     std::uint8_t modulation_wheel = 0;
+    // MIDI CC21 (SoundFont source operator 0x0195).
+    std::uint8_t filter_controller_21 = 0;
     std::uint8_t channel_pressure = 0;
     std::uint8_t volume = 100;
     std::uint8_t pan = 64;
