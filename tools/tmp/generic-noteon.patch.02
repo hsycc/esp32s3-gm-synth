@@ -1,0 +1,209 @@
+r.h
+--- s3orig/firmware/sf2/Sf2ZoneModulatorResolver.h	2026-10-21 03:52:34.000000000 +0000
++++ s3src/firmware/sf2/Sf2ZoneModulatorResolver.h	2026-10-21 03:55:28.807258803 +0000
+@@ -12,7 +12,7 @@
+ 
+ namespace gm_synth::sf2 {
+ 
+-struct ResolvedZoneModulationStorage {
++struct ResolvedZoneModulation {
+     std::int32_t velocity_to_attenuation_cb = kSf2DefaultVelocityAttenuationCb;
+     std::int32_t velocity_to_filter_fc_cents = kSf2DefaultVelocityFilterCutoffCents;
+     // Additional NoteOn-velocity routes exercised by real GM SoundFonts.
+@@ -31,8 +31,11 @@
+         initial_filter_fc_note_on_routes{};
+     std::uint8_t initial_filter_fc_note_on_route_count = 0;
+ 
+-    // M7 compatibility closure telemetry for prepared dual-source FilterQ
+-    // routes. The actual route payload is carried by velocity_to_filter_q_cb.
++    // Generic immutable NoteOn routes targeting generator domains already
++    // represented by PlaybackZone. FilterQ remains in its dedicated payload;
++    // pan/sample-address/controller-state routes stay explicit compatibility
++    // boundaries until their ordering/ownership semantics are represented.
++    Sf2PreparedNoteOnModulatorSet prepared_note_on_routes{};
+     std::uint16_t supported_prepared_note_on_records = 0;
+ 
+     std::int32_t volume_to_attenuation_cb = kSf2DefaultControllerAttenuationCb;
+@@ -55,33 +58,23 @@
+     std::uint16_t supported_effects_send_records = 0;
+     std::uint16_t unsupported_modulator_records = 0;
+ 
+-
+-};
+-
+-struct ResolvedZoneModulation : ResolvedZoneModulationStorage {
+-    // Alias the generic prepared-route name used by the production resolver to
+-    // the payload carried through the existing FilterQ field. This keeps the
+-    // current resolver implementation unchanged while Materializer copies the
+-    // exact same payload into PlaybackZone.
+-    Sf2PreparedNoteOnModulatorSet& prepared_note_on_routes;
+-
+-    ResolvedZoneModulation()
+-        : prepared_note_on_routes(velocity_to_filter_q_cb.additional_routes) {}
+-
+-    ResolvedZoneModulation(const ResolvedZoneModulation& other)
+-        : ResolvedZoneModulationStorage(other),
+-          prepared_note_on_routes(velocity_to_filter_q_cb.additional_routes) {}
+-
+-    ResolvedZoneModulation& operator=(const ResolvedZoneModulation& other) {
+-        if (this != &other) {
+-            ResolvedZoneModulationStorage::operator=(other);
++    bool preparedNoteOnRoutesFullyRepresented() const {
++        if (!prepared_note_on_routes.valid()) {
++            return false;
++        }
++        for (std::size_t index = 0; index < prepared_note_on_routes.count; ++index) {
++            if (!isRuntimeGenericPreparedNoteOnRoute(
++                    prepared_note_on_routes.routes[index])) {
++                return false;
++            }
+         }
+-        return *this;
++        return true;
+     }
+ 
+     bool hasUnsupportedModulators() const {
+         return unsupported_modulator_records != 0 ||
+-            !velocity_to_filter_q_cb.fullyRepresentedFilterQOnly();
++            !velocity_to_filter_q_cb.fullyRepresentedFilterQOnly() ||
++            !preparedNoteOnRoutesFullyRepresented();
+     }
+ 
+     bool fullySupported() const { return !hasUnsupportedModulators(); }
+--- s3orig/tests/sf2/test_sf2_note_on_modulation_runtime.cpp	2026-10-21 03:52:34.000000000 +0000
++++ s3src/tests/sf2/test_sf2_note_on_modulation_runtime.cpp	2026-10-21 03:56:44.238332215 +0000
+@@ -23,6 +23,8 @@
+ using gm_synth::sf2::ResolvedZoneModulation;
+ using gm_synth::sf2::Sf2NoteOnSourceRoute;
+ using gm_synth::sf2::Sf2PlaybackMaterializer;
++using gm_synth::sf2::Sf2PreparedNoteOnModulator;
++using gm_synth::sf2::addPreparedNoteOnModulator;
+ using gm_synth::sf2::attenuationCbToGainQ15;
+ using gm_synth::sf2::sf2PanChannelGainQ15;
+ using gm_synth::sf2::velocityToAttenuationCb;
+@@ -255,6 +257,116 @@
+     assert(zone.valid());
+ }
+ 
++void testGenericPreparedRoutesMaterializeWithoutDroppingPanBoundary() {
++    NativeResolvedZone native = baseNativeZone();
++    ResolvedZoneModulation modulation{};
++    assert(addPreparedNoteOnModulator(
++        &modulation.prepared_note_on_routes,
++        Sf2PreparedNoteOnModulator{0x0002u, 48u, 120, 0u}));
++    modulation.supported_prepared_note_on_records = 1;
++
++    PlaybackZone zone{};
++    const auto supported = Sf2PlaybackMaterializer{}.materialize(native, modulation, &zone);
++    assert(supported.playablePreview());
++    assert(!supported.hasIssue(PlaybackIssueCustomModulatorsPending));
++    assert(zone.prepared_note_on_modulators.count == 1);
++    assert(zone.prepared_note_on_modulators.routes[0].destination_oper == 48u);
++    assert(zone.valid());
++
++    ResolvedZoneModulation pan_pending{};
++    assert(addPreparedNoteOnModulator(
++        &pan_pending.prepared_note_on_routes,
++        Sf2PreparedNoteOnModulator{0x0203u, 17u, 250, 0u}));
++    const auto pending = Sf2PlaybackMaterializer{}.materialize(native, pan_pending, &zone);
++    assert(pending.playablePreview());
++    assert(pending.hasIssue(PlaybackIssueCustomModulatorsPending));
++    assert(zone.prepared_note_on_modulators.count == 0);
++    assert(zone.valid());
++}
++
++void testGenericPreparedPitchFilterGainAndFineTuneRunAtNoteOn() {
++    PlaybackZone zone{};
++    zone.sample_id = 1;
++    zone.root_key = 60;
++    zone.key_tracking = false;
++    zone.root_phase_increment_q32 = kPhaseOneQ32;
++    zone.note_on_gain.enabled = true;
++    zone.note_on_gain.velocity_to_attenuation_cb = 0;
++    zone.mod_envelope.enabled = true;
++    zone.mod_envelope.envelope.attack_frames = 1000;
++    zone.mod_envelope.envelope.decay_frames = 1000;
++    zone.mod_envelope.envelope.release_frames = 1000;
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 7u, 120, 0u}));
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 11u, 300, 0u}));
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 48u, 60, 0u}));
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 52u, 25, 0u}));
++    assert(zone.valid());
++
++    const PlaybackProgramSnapshot program = programFor(&zone);
++    ZoneResolver resolver;
++    ResolvedVoiceBatch batch{};
++    assert(resolver.resolveNoteOn(program, 2, 60, 127, 30, &batch) == ZoneResolveStatus::Ok);
++    assert(batch.count == 1);
++    assert(batch.voices[0].phase_increment_q32 == ZoneResolver::transposeCents(kPhaseOneQ32, 25));
++    assert(batch.voices[0].mod_envelope.enabled);
++    assert(batch.voices[0].mod_envelope.pitch_depth_cents == 119);
++    assert(batch.voices[0].mod_envelope.filter_depth_cents == 298);
++    const std::int32_t expected_amplitude = attenuationCbToGainQ15(60);
++    const std::int32_t expected_gain = multiplyQ15(
++        expected_amplitude,
++        sf2PanChannelGainQ15(0, true));
++    assert(batch.voices[0].gain_left_q15 == expected_gain);
++    assert(batch.voices[0].gain_right_q15 == expected_gain);
++}
++
++void testGenericPreparedEnvelopeTimeDestinationsRunAtNoteOn() {
++    PlaybackZone zone{};
++    zone.sample_id = 1;
++    zone.root_key = 60;
++    zone.root_phase_increment_q32 = kPhaseOneQ32;
++    zone.note_on_gain.enabled = true;
++    zone.note_on_gain.velocity_to_attenuation_cb = 0;
++    zone.envelope.attack_frames = 1000;
++    zone.envelope.decay_frames = 1000;
++    zone.envelope.release_frames = 1000;
++    zone.mod_envelope.enabled = true;
++    zone.mod_envelope.envelope.attack_frames = 1000;
++    zone.mod_envelope.envelope.decay_frames = 1000;
++    zone.mod_envelope.envelope.release_frames = 1000;
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 28u, 1200, 0u}));
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 34u, 1200, 0u}));
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 36u, 1200, 0u}));
++    assert(addPreparedNoteOnModulator(
++        &zone.prepared_note_on_modulators,
++        Sf2PreparedNoteOnModulator{0x0002u, 38u, 1200, 0u}));
++    assert(zone.valid());
++
++    const PlaybackProgramSnapshot program = programFor(&zone);
++    ZoneResolver resolver;
++    ResolvedVoiceBatch batch{};
++    assert(resolver.resolveNoteOn(program, 2, 60, 127, 31, &batch) == ZoneResolveStatus::Ok);
++    assert(batch.count == 1);
++    assert(batch.voices[0].envelope.attack_frames == 1989);
++    assert(batch.voices[0].envelope.decay_frames == 1989);
++    assert(batch.voices[0].envelope.release_frames == 1989);
++    assert(batch.voices[0].mod_envelope.enabled);
++    assert(batch.voices[0].mod_envelope.envelope.decay_frames == 1989);
++}
++
+ void testLegacyPlaybackZoneKeepsPreparedStaticGain() {
+     PlaybackZone zone{};
+     zone.sample_id = 1;
+@@ -280,6 +392,9 @@
+     testFixedVelocityIsAppliedAfterZoneSelection();
+     testGenericNoteOnFilterSourcesMaterializeAndRun();
+     testInvalidGenericRouteRemainsSoftCompatibilityIssue();
++    testGenericPreparedRoutesMaterializeWithoutDroppingPanBoundary();
++    testGenericPreparedPitchFilterGainAndFineTuneRunAtNoteOn();
++    testGenericPreparedEnvelopeTimeDestinationsRunAtNoteOn();
+     testLegacyPlaybackZoneKeepsPreparedStaticGain();
+     std::cout << "SF2 note-on modulation runtime checks pass
