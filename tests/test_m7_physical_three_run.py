@@ -63,6 +63,16 @@ class M7PhysicalCompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"crash/WDT"):
             self.parse(sample_log()+"\ntask_wdt: Task watchdog got triggered")
 
+    def test_wdt_reported_before_missing_completion(self):
+        crashed=sample_log().replace("I main_task: Returned from app_main()","")
+        crashed+="\nE task_wdt: Task watchdog got triggered"
+        with self.assertRaisesRegex(ValueError,"crash/WDT"):
+            self.parse(crashed)
+
+    def test_multiple_boot_sessions_are_rejected(self):
+        with self.assertRaisesRegex(ValueError,"multiple boot sessions"):
+            self.parse(sample_log()+"\n"+sample_log())
+
     def test_comparison_requires_same_firmware(self):
         a=self.parse(sample_log())
         b=self.parse(sample_log(version="1234567"))
