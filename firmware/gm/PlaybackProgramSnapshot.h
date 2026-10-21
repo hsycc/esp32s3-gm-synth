@@ -62,6 +62,7 @@ struct NoteOnFilterConfig {
     std::int32_t initial_cutoff_cents = 13500;
     std::int32_t velocity_to_cutoff_cents = -2400;
     std::int16_t resonance_cb = 0;
+    std::int32_t cc21_to_cutoff_cents = 0;
     // File-defined NoteOn velocity -> initialFilterQ routes. The historical
     // single negative-linear amount remains assignment-compatible, while the
     // prepared payload also carries the real-bank dual-source velocity route.
