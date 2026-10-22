@@ -237,8 +237,15 @@ void ScheduledAudioBlockRenderer::finalize(std::int16_t* interleaved_stereo) {
         mix_.data(),
         kFramesPerBlock);
 
+    const bool master_bypass = master_gain_q15_ == voice::kQ15Unity;
     for (std::size_t index = 0; index < mix_.size(); ++index) {
-        const std::int32_t value = mix_[index];
+        // Post-FX master affects dry + chorus/reverb together. Keep the
+        // common unity path exactly bit-identical and division-free.
+        const std::int32_t value = master_bypass
+            ? mix_[index]
+            : static_cast<std::int32_t>(
+                  (static_cast<std::int64_t>(mix_[index]) * master_gain_q15_) /
+                  voice::kQ15Unity);
         const std::int64_t magnitude = value >= 0
             ? static_cast<std::int64_t>(value)
             : -static_cast<std::int64_t>(value);
