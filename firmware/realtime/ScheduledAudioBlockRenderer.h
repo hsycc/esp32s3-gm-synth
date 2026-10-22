@@ -58,6 +58,13 @@ struct ScheduledWorstBlockStages {
     bool valid = false;
     std::uint32_t setup_prepare_us = 0;
     std::uint32_t event_apply_us = 0;
+    // Optional ESP-only per-event timings within the event-apply stage;
+    // recording them adds clock calls and must never be treated as the
+    // non-instrumented production event cost.
+    std::uint32_t note_on_apply_us = 0;
+    std::uint32_t cc120_apply_us = 0;
+    std::uint32_t other_cc_apply_us = 0;
+    std::uint32_t other_event_apply_us = 0;
     std::uint32_t voice_render_us = 0;
     std::uint32_t effects_finalize_us = 0;
 };
