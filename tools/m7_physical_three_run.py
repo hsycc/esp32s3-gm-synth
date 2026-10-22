@@ -21,7 +21,11 @@ def expect_int(record, field, base=10):
     return int(record[field], base)
 
 def parse_log(path):
-    # ESP-IDF monitor emits ANSI SGR color codes even when captured with\n    # macOS script. Strip those *before* parsing fields: otherwise the last\n    # token in a colored line is e.g. "backlog_healthy=1\\x1b[0m".\n    text = re.sub(r"\\x1b\\[[0-?]*[ -/]*[@-~]", "",\n                  path.read_text(errors="replace"))\n    lines = text.splitlines()
+    # ESP-IDF monitor emits ANSI SGR codes when captured with macOS script.
+    # Strip those codes before parsing the final field on a colored line.
+    cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "",
+                     path.read_text(errors="replace"))
+    lines = cleaned.splitlines()
     versions = [m.group(1) for ln in lines
                 if (m := re.search(r"App version:\s*([0-9a-fA-F]+)",ln))]
     if not versions:
