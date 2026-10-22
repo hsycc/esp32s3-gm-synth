@@ -452,6 +452,30 @@ void prepareDynamicFilterTable(
     *output = candidate;
 }
 
+// A dynamic filter table already contains the base (zero-offset) biquad
+// whenever one reachable endpoint is zero. Reuse that identical coefficient
+// set instead of calculating the same resonant lowpass a tenth time at NoteOn.
+// The other path continues to prepare the exact independent base coefficients.
+void prepareNoteOnFilterBundle(
+    const PlaybackZone& zone,
+    std::uint8_t key,
+    std::uint8_t effective_velocity,
+    const sf2::Sf2NoteOnTargetDeltas& deltas,
+    voice::BiquadLowpassConfig* base,
+    voice::DynamicLowpassTable* dynamic) {
+    if (base == nullptr || dynamic == nullptr || !zone.note_on_filter.enabled) {
+        return;
+    }
+    prepareDynamicFilterTable(zone, key, effective_velocity, deltas, dynamic);
+    if (dynamic->enabled && dynamic->min_offset_cents == 0) {
+        *base = dynamic->points.front();
+    } else if (dynamic->enabled && dynamic->max_offset_cents == 0) {
+        *base = dynamic->points.back();
+    } else {
+        prepareNoteOnFilter(zone, key, effective_velocity, base);
+    }
+}
+
 void prepareModLfoGainTable(
     std::int32_t initial_attenuation_cb,
     std::int32_t velocity_to_attenuation_cb,
@@ -791,7 +815,9 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareVolumeEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.envelope);
-        prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
+        prepareNoteOnFilterBundle(
+            zone, key, effective_velocity, note_on_deltas,
+            &params.lowpass, &params.dynamic_lowpass_table);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
             params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
@@ -821,10 +847,6 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareModEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.mod_envelope);
-        if (zone.note_on_filter.enabled) {
-            prepareDynamicFilterTable(
-                zone, key, effective_velocity, note_on_deltas, &params.dynamic_lowpass_table);
-        }
         ++batch->count;
     }
 
@@ -916,7 +938,9 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareVolumeEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.envelope);
-        prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
+        prepareNoteOnFilterBundle(
+            zone, key, effective_velocity, note_on_deltas,
+            &params.lowpass, &params.dynamic_lowpass_table);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
             params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
@@ -947,10 +971,6 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareModEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.mod_envelope);
-        if (zone.note_on_filter.enabled) {
-            prepareDynamicFilterTable(
-                zone, key, effective_velocity, note_on_deltas, &params.dynamic_lowpass_table);
-        }
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
