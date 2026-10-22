@@ -32,14 +32,18 @@ void logI2sWorstBlockProfile(
         const auto& stages = block.stages;
         ESP_LOGI(
             kTag,
-            "i2s_worst: STAGES rank=%u stream_block=%u stage_valid=%u setup_prepare_us=%u event_apply_us=%u voice_render_us=%u effects_finalize_us=%u note=diagnostic_only_event_heavy",
+            "i2s_worst: STAGES rank=%u stream_block=%u stage_valid=%u setup_prepare_us=%u event_apply_us=%u voice_render_us=%u effects_finalize_us=%u note_on_apply_us=%u cc120_apply_us=%u other_cc_apply_us=%u other_event_apply_us=%u note=diagnostic_only_event_heavy",
             static_cast<unsigned>(index + 1u),
             static_cast<unsigned>(block.stream_block),
             stages.valid ? 1u : 0u,
             static_cast<unsigned>(stages.setup_prepare_us),
             static_cast<unsigned>(stages.event_apply_us),
             static_cast<unsigned>(stages.voice_render_us),
-            static_cast<unsigned>(stages.effects_finalize_us));
+            static_cast<unsigned>(stages.effects_finalize_us),
+            static_cast<unsigned>(stages.note_on_apply_us),
+            static_cast<unsigned>(stages.cc120_apply_us),
+            static_cast<unsigned>(stages.other_cc_apply_us),
+            static_cast<unsigned>(stages.other_event_apply_us));
         const auto& events = block.events;
         const auto& voices = block.voices;
         ESP_LOGI(
