@@ -23,6 +23,24 @@ Only when worst-block profile is armed on physical ESP and an event batch has >=
 - These subtype sums are within Event Apply but include an additional timer read per event; they are **diagnostic-only** and not an uninstrumented performance regression baseline. Ranking/profiling still depends on the existing render measurement. No allocation, logging, file I/O, or I2C inside render.
 - Correlate Stage buckets against `i2s_worst: BLOCK` event counts and `music_stress: NOTE_ON_BURST` aggregate to identify whether the next fast path belongs in channel controller refresh, static/dynamic filter table preparation, or VoicePool start.
 
+## Actual product-path peak optimization
+
+For a SoundFont zone with a dynamic filter range whose minimum or maximum
+offset is zero, the generated 9-point coefficient table *already contains*
+the base `initialFilterFc/Q` biquad as one endpoint. The resolver previously
+recomputed that identical base coefficient set separately on each NoteOn.
+M8 now reuses the exact first/last coefficient entry and falls back to the
+previous standalone computation if neither endpoint is zero or no valid
+dynamic table exists. This changes no sample/key/velocity dependence,
+controller timeline or pitch/filter interpolation; the regression test
+compares all Q24 coefficient fields against independent reference
+`prepareResonantLowpassQ24` for three notes.
+
+The physical CC21 fixture with `cc21_to_cutoff_cents=-2400` should take
+this exact-match path. It is a small general-purpose fast path for real
+SoundFont zones; do not claim a measured microsecond win without new
+instrumented N16R8 logs.
+
 ## CI and physical acceptance
 
 - All host tests, SF2 real-bank / M7 matrix, QEMU/ESP builds must pass after the **final** M8 commit. Host test demonstrates exact unity, half-volume, mute, rejected invalid gain, and unchanged scheduler sequencing.
