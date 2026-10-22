@@ -103,6 +103,18 @@ config GM_SYNTH_I2S_QUAL_ENABLE
         enables it with the verified board pin map as the physical compile/
         runtime gate.
 
+config GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15
+    int "Post-FX synth master volume (Q15, 0..32767)"
+    default 32767
+    range 0 32767
+    help
+        Applies to synthesized audio only, after chorus/reverb and before
+        I2S downmix. The 441-Hz codec-isolation reference tone deliberately
+        bypasses this parameter. 32767 is exact unity; 16384 is about -6 dB
+        amplitude and 0 mutes the synth. This is independent of ES8311 DAC
+        attenuation and MIDI channel CC7/CC11. Default preserves M7 PCM
+        checksum and CPU qualification baseline.
+
 config GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB
     int "ES8311 DAC output attenuation in dB (0..12)"
     default 12
