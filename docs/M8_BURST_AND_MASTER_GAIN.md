@@ -9,7 +9,7 @@
 ## Independent volume stages
 
 1. **Per-channel musical controls**: keep MIDI CC7 and CC11 existing behavior. These are not a master control.
-2. **Post-FX digital Master Gain**: `ScheduledAudioBlockRenderer::setMasterGainQ15(0..32767)`, with `32767` as **exact bypass**. Applies to complete dry+wet output immediately before final signed-int16 saturation; preserves existing PCM checksum at unity, bounds input and disallows digital amplification. `0` mutes. Must be called before render or from the audio owner at a safe block boundary; concurrent setting from another task is not supported by the non-atomic API.
+2. **Post-FX digital Master Gain**: `ScheduledAudioBlockRenderer::setMasterGainQ15(0..32767)`, with `32767` as **exact bypass**. Physical builds also expose `CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15`, applied before the I2S run starts. The independent 441-Hz reference tone bypasses synth master. Applies to complete dry+wet output immediately before final signed-int16 saturation; preserves existing PCM checksum at unity, bounds input and disallows digital amplification. `0` mutes. Must be called before render or from the audio owner at a safe block boundary; concurrent setting from another task is not supported by the non-atomic API.
 3. **ES8311 DAC analog-output-layer volume control** (ES8311 digital volume register): `CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB` (0..12 dB); baseline remains **-12 dB / reg 0xA7**; -6 dB becomes 0xB3 and 0 dB 0xBF. This qualification-only configuration is read/written on control thread during codec startup, with readback gate and accurate `volume_db=-N` log. Never I2C in the audio task.
 4. **PA**: GPIO48 remains only enable; this PR does not infer a variable analog amplifier gain.
 
@@ -44,7 +44,7 @@ instrumented N16R8 logs.
 ## CI and physical acceptance
 
 - All host tests, SF2 real-bank / M7 matrix, QEMU/ESP builds must pass after the **final** M8 commit. Host test demonstrates exact unity, half-volume, mute, rejected invalid gain, and unchanged scheduler sequencing.
-- First physical run with Master unity and DAC -12 dB: require same master checksum as prechange `fe69915701738934`, all 128 MIDI events applied, CC21 changes >=3, zero hard-gate flags, no WDT, final backlog 0, and full `Returned from app_main()`.
+- First physical run with Master unity (`CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15=32767`) and DAC -12 dB (`CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB=12`): require same master checksum as prechange `fe69915701738934`, all 128 MIDI events applied, CC21 changes >=3, zero hard-gate flags, no WDT, final backlog 0, and full `Returned from app_main()`.
 - Compare new Event Apply subtype timings cautiously; categorize time cost first, then implement real semantic-preserving optimizations in a subsequent testable change. Do not optimize by merely moving test events into separate blocks.
 - Only after stable default configuration test, consider -6 dB DAC loudness listening trial as a **separate** run. Qualify actual output clip/gain, not just software clipping flags.
 
