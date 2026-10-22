@@ -216,6 +216,46 @@ void testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance() {
     assert(batch.voices[0].envelope.decay_frames == 200);
 }
 
+void testDynamicFilterEndpointIsBitEquivalentToBaseBiquad() {
+    PlaybackZone zone{};
+    zone.sample_id = 0;
+    zone.root_key = 60;
+    zone.root_phase_increment_q32 = kPhaseOneQ32;
+    zone.note_on_filter.enabled = true;
+    zone.note_on_filter.initial_cutoff_cents = 9000;
+    zone.note_on_filter.velocity_to_cutoff_cents = 0;
+    zone.note_on_filter.cc21_to_cutoff_cents = -2400;
+
+    const PlaybackProgramSnapshot program = programFor(&zone);
+    assert(program.valid());
+    ZoneResolver resolver;
+    MidiChannelState channel{};
+    channel.resetAll();
+    ResolvedVoiceBatch batch{};
+    BiquadLowpassConfig expected{};
+    assert(prepareResonantLowpassQ24(9000, 0, 44100, &expected));
+
+    for (const std::uint8_t key : {std::uint8_t{60}, std::uint8_t{61},
+                                   std::uint8_t{83}}) {
+        assert(resolver.resolveNoteOn(program, channel, 2, key, 90, key, &batch) ==
+               ZoneResolveStatus::Ok);
+        assert(batch.count == 1);
+        const auto& params = batch.voices[0];
+        assert(params.dynamic_lowpass_table.enabled);
+        assert(params.dynamic_lowpass_table.min_offset_cents == -2400);
+        assert(params.dynamic_lowpass_table.max_offset_cents == 0);
+        const auto& endpoint = params.dynamic_lowpass_table.points.back();
+        assert(endpoint.a0_q24 == expected.a0_q24);
+        assert(endpoint.a1_q24 == expected.a1_q24);
+        assert(endpoint.b1_q24 == expected.b1_q24);
+        assert(endpoint.b2_q24 == expected.b2_q24);
+        assert(params.lowpass.a0_q24 == expected.a0_q24);
+        assert(params.lowpass.a1_q24 == expected.a1_q24);
+        assert(params.lowpass.b1_q24 == expected.b1_q24);
+        assert(params.lowpass.b2_q24 == expected.b2_q24);
+    }
+}
+
 void testVelocityDspRoutesApplyOnceAtNoteOn() {
     PlaybackZone zone{};
     zone.sample_id = 0;
@@ -293,6 +333,7 @@ int main() {
     testDelayAttackHoldDecayStagesRenderInOrder();
     testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance();
     testVelocityDspRoutesApplyOnceAtNoteOn();
+    testDynamicFilterEndpointIsBitEquivalentToBaseBiquad();
     std::cout << "SF2 filter/envelope runtime checks passed\n";
     return 0;
 }
