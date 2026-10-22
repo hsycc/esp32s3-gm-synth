@@ -44,9 +44,9 @@ class M7PhysicalCompareTests(unittest.TestCase):
 
     def test_colored_esp_idf_monitor_capture(self):
         # ESP-IDF 6.1 serial logs end each line with an ANSI reset code.
-        # Without stripping it the backlog_healthy field reads "1\\x1b[0m".
-        colored="\\n".join(
-            "\\x1b[0;32m"+line+"\\x1b[0m"
+        # Without stripping it the backlog_healthy field includes ESC[0m.
+        colored="\n".join(
+            "\x1b[0;32m"+line+"\x1b[0m"
             for line in sample_log().splitlines())
         r=self.parse(colored)
         self.assertTrue(all(r["checks"].values()))
