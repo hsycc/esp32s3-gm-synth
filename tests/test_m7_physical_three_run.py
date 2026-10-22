@@ -42,6 +42,16 @@ class M7PhysicalCompareTests(unittest.TestCase):
         self.assertEqual(r["burst_zone_resolve_total_us"],360)
         self.assertEqual(r["render_max_us"],2006)
 
+    def test_colored_esp_idf_monitor_capture(self):
+        # ESP-IDF 6.1 serial logs end each line with an ANSI reset code.
+        # Without stripping it the backlog_healthy field reads "1\\x1b[0m".
+        colored="\\n".join(
+            "\\x1b[0;32m"+line+"\\x1b[0m"
+            for line in sample_log().splitlines())
+        r=self.parse(colored)
+        self.assertTrue(all(r["checks"].values()))
+        self.assertEqual(r["render_max_us"],2006)
+
     def test_zero_soft_overruns_need_no_retained_worst_block(self):
         no_worst="\n".join(line for line in sample_log().splitlines()
                            if "i2s_worst:" not in line)
