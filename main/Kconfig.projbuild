@@ -103,6 +103,18 @@ config GM_SYNTH_I2S_QUAL_ENABLE
         enables it with the verified board pin map as the physical compile/
         runtime gate.
 
+config GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB
+    int "ES8311 DAC output attenuation in dB (0..12)"
+    default 12
+    range 0 12
+    help
+        Qualification-only ES8311 volume (-12 dB by default, matching all
+        previously validated physical baselines). Set to 6 for a +6 dB
+        audible evaluation, but retain 12 during M7/M8 performance A/B
+        measurements. Each integer dB corresponds to two 0.5 dB ES8311
+        register steps. No change to per-channel MIDI CC7/CC11 or digital
+        post-FX master level. Rebuild/flash the image after changing this.
+
 config GM_SYNTH_I2S_QUAL_BCLK_GPIO
     int "I2S BCLK GPIO (-1 = unconfigured)"
     default -1
