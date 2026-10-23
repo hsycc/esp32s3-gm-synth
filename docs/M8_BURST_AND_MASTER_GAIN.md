@@ -57,3 +57,84 @@ instrumented N16R8 logs.
 5. DAC loudness trial; external PA/speaker clipping still needs listening or analog measurement.
 
 Current M8 is a functional volume-control and diagnostic stage, **not yet proven to reduce the 2292-us worst-case**.
+
+## M8 N16R8 physical A/B execution (frozen HEAD `bb31908bf4af5c966e2f17075e54b08d9a3d057c`)
+
+At this checkpoint the full 13/13 GitHub Actions suite passed. Freeze this
+SHA for physical acceptance: do not mix it with subsequent M8 commits and do
+not use an unreviewed `-dirty` image as a release evidence artifact.
+
+1. Use a **new detached worktree** to preserve any changes in the existing
+   developer checkout:
+
+   ```sh
+   cd ~/work/esp32s3-gm-synth
+   git fetch origin
+   git worktree add --detach ../esp32s3-gm-synth-m8-physical bb31908bf4af5c966e2f17075e54b08d9a3d057c
+   cd ../esp32s3-gm-synth-m8-physical
+   test -z "$(git status --porcelain)" || { echo "DIRTY WORKTREE"; exit 1; }
+   git rev-parse HEAD
+   ```
+
+2. Build with the previously installed **ESP-IDF 6.1** environment:
+
+   ```sh
+   bash scripts/build_m7_release_idf.sh
+   grep -E '^CONFIG_GM_SYNTH_I2S_QUAL_(MASTER_GAIN_Q15|DAC_ATTENUATION_DB)=' sdkconfig.m7release
+   ```
+
+   Require `MASTER_GAIN_Q15=32767` and `DAC_ATTENUATION_DB=12`.
+   Retain 44.1 kHz, 64 frames, eight 64-frame DMA descriptors, 4.5 MiB
+   PCM arena, 24 Full-FX voices and eight Heavy-DSP stable voices. Record the
+   ELF SHA-256 and full commit ID along with the runtime App version:
+
+   ```sh
+   mkdir -p reports/m8-physical
+   shasum -a 256 build-m7-release/*.elf | tee reports/m8-physical/elf-sha256.txt
+   git rev-parse HEAD > reports/m8-physical/source-commit.txt
+   ```
+
+3. Flash once using the actual detected device path (example below), then
+   record an **independent boot per run**. Exit the monitor with Ctrl+].
+   Do not reset again after the monitor has already initiated a boot.
+
+   ```sh
+   python "$IDF_PATH/tools/idf.py" -B build-m7-release -p /dev/cu.usbmodem1101 flash
+   script -q reports/m8-physical/m8-run1.log /bin/zsh -c 'python "$IDF_PATH/tools/idf.py" -B build-m7-release -p /dev/cu.usbmodem1101 monitor'
+   ```
+
+   If Run 1 passes, repeat fresh monitor/boot captures as
+   `m8-run2.log` and `m8-run3.log` with the same untouched ELF.
+
+4. Per-run acceptance gates:
+   - Runtime App version matches the frozen commit and has no unreviewed
+     `-dirty` suffix; record matching ELF SHA for all three runs.
+   - Complete clean-SF2 and music-stress I2S qualifications both PASS, with
+     both HARD_GATE flags exactly `0x00000000`.
+   - Music-stress PCM checksum remains `fe69915701738934`, all 128 MIDI
+     events are processed, CC21 updates >=3, no Task WDT/panic, final
+     backlog zero and `Returned from app_main()` present.
+   - Compare Top-N worst Block, `event_apply_us`, `note_on_apply_us`,
+     `other_cc_apply_us`, `voice_render_us`, soft overruns and
+     DMA minimum margin to the M7 three-run baseline. Peak reduction is
+     a **measured** result, never inferred from CI.
+   - Do not merge PR #17 until the older `95aa189-dirty` firmware's
+     local diffs have been examined and provenance documented.
+
+5. Collect key diagnostic lines without suppressing the original logs:
+
+   ```sh
+   grep -E 'App version:|i2s_qual: (PASS|HARD_GATE|SUSTAINED_OVERLOAD)|i2s_worst: (SUMMARY|STAGES|BLOCK)|music_stress: (RESULT|NOTE_ON_BURST|CC21_FILTER)|task_wdt:|Guru Meditation|Returned from app_main' reports/m8-physical/m8-run1.log
+   ```
+
+6. Loudness trials are **separate** from baseline timing runs. Only after
+   the unity/-12-dB image passes, build a second controlled image using a
+   separate SDKCONFIG defaults override with
+   `CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB=6`, retain master unity,
+   and record the altered image hash. Check the actual speaker and DAC
+   outputs for audible/analog clipping. Never compare its timing/PCM evidence
+   as if it were the original frozen image.
+
+Any failed hard gate, WDT, inconsistent checksum or dirty-image provenance is
+a stop condition, not an invitation to quietly tune DMA buffers or loosen
+acceptance limits.
