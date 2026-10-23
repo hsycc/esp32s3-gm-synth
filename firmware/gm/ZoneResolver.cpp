@@ -594,6 +594,7 @@ void prepareModEnvelope(
 struct ActiveVoiceRefreshContext {
     const MidiChannelState* state = nullptr;
     int bend_cents = 0;
+    std::uint8_t inverse_cc21 = 0;
 };
 
 bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
@@ -621,7 +622,7 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     update.vibrato_pitch_depth_cents = voice.vibratoLfoConfig().pitch_depth_cents;
     update.mod_lfo_gain_table = voice.modLfoConfig().gain_table;
     update.cc21_filter_offset_cents = sf2::positiveLinearToAmount(
-        static_cast<std::uint8_t>(127u - context->state->filter_controller_21),
+        context->inverse_cc21,
         source.cc21_to_filter_fc_cents);
 
     if (source.gain_enabled) {
@@ -1037,7 +1038,10 @@ std::size_t RealtimeProgramEventApplier::refreshActiveVoices(
     std::uint8_t channel,
     voice::VoicePool& voices) {
     const MidiChannelState& state = channel_states_.channel(channel);
-    ActiveVoiceRefreshContext context{&state, ZoneResolver::pitchBendCents(state)};
+    ActiveVoiceRefreshContext context{
+        &state,
+        ZoneResolver::pitchBendCents(state),
+        static_cast<std::uint8_t>(127u - state.filter_controller_21)};
     const std::size_t updated = voices.updateActiveVoices(
         channel,
         &refreshActiveVoice,
