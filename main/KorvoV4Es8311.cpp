@@ -51,10 +51,12 @@ constexpr unsigned kRegGp45 = 0x45;
 constexpr unsigned kRegChipId1 = 0xFD;
 constexpr unsigned kRegChipId2 = 0xFE;
 
-// ES8311 volume is 0.5 dB/LSB over -95.5..+32 dB in Espressif's
-// reference driver. Qualification uses -12 dB so the hardware reference tone
-// is unmistakably audible without approaching full speaker power.
-constexpr unsigned kQualificationVolumeMinus12Db = 0xA7;
+// ES8311 volume is 0.5 dB/LSB. The verified -12 dB baseline was 0xA7;
+// the same formula yields 0xB3 at -6 dB and 0xBF at 0 dB. DAC output volume
+// is separate from the post-FX software Master Gain and per-channel CC7/CC11.
+// Never write I2C registers in the realtime render task.
+constexpr unsigned kQualificationDacVolume =
+    0xBFu - 2u * CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB;
 
 // Fixed control-plane setup derived from Espressif's ES8311 reference driver
 // for slave mode, external MCLK, normal Philips I2S, 16-bit samples,
@@ -231,7 +233,7 @@ bool KorvoV4Es8311::prepareMuted() {
     unsigned mute_reg = 0;
     if (!readReg(kRegDacMute, mute_reg) ||
         !writeReg(kRegDacMute, (mute_reg & 0x9F) | 0x60) ||
-        !writeReg(kRegDacVolume, kQualificationVolumeMinus12Db)) {
+        !writeReg(kRegDacVolume, kQualificationDacVolume)) {
         shutdown();
         return false;
     }
@@ -246,7 +248,8 @@ bool KorvoV4Es8311::prepareMuted() {
     prepared_ = true;
     started_ = false;
     ESP_LOGI(kTag,
-             "es8311: CONTROL_PREPARED slave=1 fs=44100 mclk=11289600 format=i2s bits=16 volume_db=-12 pa_gpio=%d pa_level=%d chip_id=%02x%02x",
+             "es8311: CONTROL_PREPARED slave=1 fs=44100 mclk=11289600 format=i2s bits=16 volume_db=-%d pa_gpio=%d pa_level=%d chip_id=%02x%02x",
+             CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB,
              static_cast<int>(kPaEnable), gpio_get_level(kPaEnable), chip_id1, chip_id2);
     return true;
 }
@@ -267,7 +270,7 @@ bool KorvoV4Es8311::startMutedWithClocks() {
     unsigned mute_reg = 0;
     if (!readReg(kRegDacMute, mute_reg) ||
         !writeReg(kRegDacMute, (mute_reg & 0x9F) | 0x60) ||
-        !writeReg(kRegDacVolume, kQualificationVolumeMinus12Db)) {
+        !writeReg(kRegDacVolume, kQualificationDacVolume)) {
         return false;
     }
 
@@ -300,7 +303,7 @@ bool KorvoV4Es8311::startMutedWithClocks() {
         sdp_in == 0x0Cu &&
         system12 == 0x00u &&
         (dac_mute & 0x60u) == 0x60u &&
-        dac_volume == kQualificationVolumeMinus12Db &&
+        dac_volume == kQualificationDacVolume &&
         gpio44 == 0x58u &&
         gpio_get_level(kPaEnable) == 0;
 
@@ -350,7 +353,7 @@ bool KorvoV4Es8311::enableOutput() {
         mute_read_ok &&
         volume_read_ok &&
         (unmuted_reg & 0x60u) == 0u &&
-        volume_reg == kQualificationVolumeMinus12Db &&
+        volume_reg == kQualificationDacVolume &&
         pa_level == 1;
     if (!output_ok) {
         ESP_LOGE(
@@ -360,7 +363,7 @@ bool KorvoV4Es8311::enableOutput() {
             volume_read_ok ? 1u : 0u,
             unmuted_reg,
             volume_reg,
-            kQualificationVolumeMinus12Db,
+            kQualificationDacVolume,
             pa_level);
         (void)gpio_set_level(kPaEnable, 0);
         (void)writeReg(kRegDacMute, (unmuted_reg & 0x9F) | 0x60);

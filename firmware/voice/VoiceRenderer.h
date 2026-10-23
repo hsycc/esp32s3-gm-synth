@@ -292,6 +292,7 @@ public:
     bool beginFastRelease(std::uint32_t fade_frames);
     bool beginExclusiveRelease(std::uint32_t fade_frames);
     bool applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update);
+    bool applyCc21FilterOffset(std::int32_t offset_cents);
     VoiceRenderResult renderAdd(std::int32_t* interleaved_stereo, std::size_t frame_count);
     // Realtime path: takes a bit-equivalent steady-Sustain fast path when safe
     // and otherwise falls back to renderAdd(), which remains the reference path.

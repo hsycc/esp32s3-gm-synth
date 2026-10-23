@@ -435,21 +435,54 @@ void prepareDynamicFilterTable(
     constexpr std::int64_t kSegments =
         static_cast<std::int64_t>(voice::kLfoControlPointCount - 1u);
     const std::int64_t span = max_offset - min_offset;
+    std::int32_t previous_cutoff = 0;
     for (std::size_t index = 0; index < candidate.points.size(); ++index) {
         const std::int64_t numerator = span * static_cast<std::int64_t>(index);
         const std::int64_t offset = min_offset +
             (numerator + kSegments / 2) / kSegments;
         const std::int32_t cutoff = static_cast<std::int32_t>(
             static_cast<std::int64_t>(base_cutoff) + offset);
-        if (!sf2::prepareResonantLowpassQ24(
-                cutoff,
-                resonance_cb,
-                sf2::kSf2FilterOutputSampleRate,
-                &candidate.points[index])) {
+        // Quantized control points can resolve to the same cutoff.
+        // The resonance and output sample rate are constant within this
+        // table, so adjacent identical cutoffs have bit-identical Q24
+        // coefficients. Reuse the preceding point rather than recomputing
+        // the resonant biquad during a realtime NoteOn burst.
+        if (index != 0u && cutoff == previous_cutoff) {
+            candidate.points[index] = candidate.points[index - 1u];
+        } else if (!sf2::prepareResonantLowpassQ24(
+                       cutoff,
+                       resonance_cb,
+                       sf2::kSf2FilterOutputSampleRate,
+                       &candidate.points[index])) {
             return;
         }
+        previous_cutoff = cutoff;
     }
     *output = candidate;
+}
+
+// A dynamic filter table already contains the base (zero-offset) biquad
+// whenever one reachable endpoint is zero. Reuse that identical coefficient
+// set instead of calculating the same resonant lowpass a tenth time at NoteOn.
+// The other path continues to prepare the exact independent base coefficients.
+void prepareNoteOnFilterBundle(
+    const PlaybackZone& zone,
+    std::uint8_t key,
+    std::uint8_t effective_velocity,
+    const sf2::Sf2NoteOnTargetDeltas& deltas,
+    voice::BiquadLowpassConfig* base,
+    voice::DynamicLowpassTable* dynamic) {
+    if (base == nullptr || dynamic == nullptr || !zone.note_on_filter.enabled) {
+        return;
+    }
+    prepareDynamicFilterTable(zone, key, effective_velocity, deltas, dynamic);
+    if (dynamic->enabled && dynamic->min_offset_cents == 0) {
+        *base = dynamic->points.front();
+    } else if (dynamic->enabled && dynamic->max_offset_cents == 0) {
+        *base = dynamic->points.back();
+    } else {
+        prepareNoteOnFilter(zone, key, effective_velocity, base);
+    }
 }
 
 void prepareModLfoGainTable(
@@ -560,7 +593,23 @@ void prepareModEnvelope(
 
 struct ActiveVoiceRefreshContext {
     const MidiChannelState* state = nullptr;
+    int bend_cents = 0;
+    std::uint8_t inverse_cc21 = 0;
 };
+
+bool refreshCc21Only(void* opaque, voice::Voice& voice) {
+    const auto* state = static_cast<const MidiChannelState*>(opaque);
+    if (state == nullptr) {
+        return false;
+    }
+    const auto& source = voice.realtimeControl();
+    if (!source.enabled || source.unbent_phase_increment_q32 == 0) {
+        return false;
+    }
+    return voice.applyCc21FilterOffset(sf2::positiveLinearToAmount(
+        static_cast<std::uint8_t>(127u - state->filter_controller_21),
+        source.cc21_to_filter_fc_cents));
+}
 
 bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     auto* context = static_cast<ActiveVoiceRefreshContext*>(opaque);
@@ -574,7 +623,9 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     }
 
     voice::VoiceRuntimeControlUpdate update{};
-    const int bend_cents = ZoneResolver::pitchBendCents(*context->state);
+    // Pitch bend is channel-wide, not voice-specific. The caller computes
+    // it once for the entire active-voice refresh batch.
+    const int bend_cents = context->bend_cents;
     update.phase_increment_q32 = bend_cents == 0
         ? source.unbent_phase_increment_q32
         : ZoneResolver::transposeCents(source.unbent_phase_increment_q32, bend_cents);
@@ -585,7 +636,7 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     update.vibrato_pitch_depth_cents = voice.vibratoLfoConfig().pitch_depth_cents;
     update.mod_lfo_gain_table = voice.modLfoConfig().gain_table;
     update.cc21_filter_offset_cents = sf2::positiveLinearToAmount(
-        static_cast<std::uint8_t>(127u - context->state->filter_controller_21),
+        context->inverse_cc21,
         source.cc21_to_filter_fc_cents);
 
     if (source.gain_enabled) {
@@ -791,7 +842,9 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareVolumeEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.envelope);
-        prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
+        prepareNoteOnFilterBundle(
+            zone, key, effective_velocity, note_on_deltas,
+            &params.lowpass, &params.dynamic_lowpass_table);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
             params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
@@ -821,10 +874,6 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareModEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.mod_envelope);
-        if (zone.note_on_filter.enabled) {
-            prepareDynamicFilterTable(
-                zone, key, effective_velocity, note_on_deltas, &params.dynamic_lowpass_table);
-        }
         ++batch->count;
     }
 
@@ -916,7 +965,9 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareVolumeEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.envelope);
-        prepareNoteOnFilter(zone, key, effective_velocity, &params.lowpass);
+        prepareNoteOnFilterBundle(
+            zone, key, effective_velocity, note_on_deltas,
+            &params.lowpass, &params.dynamic_lowpass_table);
         if (zone.vibrato_lfo.enabled) {
             params.vibrato_lfo.enabled = true;
             params.vibrato_lfo.delay_frames = zone.vibrato_lfo.delay_frames;
@@ -947,10 +998,6 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareModEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.mod_envelope);
-        if (zone.note_on_filter.enabled) {
-            prepareDynamicFilterTable(
-                zone, key, effective_velocity, note_on_deltas, &params.dynamic_lowpass_table);
-        }
         params.realtime_control.enabled = true;
         params.realtime_control.gain_enabled = zone.note_on_gain.enabled;
         params.realtime_control.effects_send_enabled = zone.effects_send.enabled;
@@ -1004,7 +1051,11 @@ std::uint32_t RealtimeProgramEventApplier::allocateNoteInstanceId() {
 std::size_t RealtimeProgramEventApplier::refreshActiveVoices(
     std::uint8_t channel,
     voice::VoicePool& voices) {
-    ActiveVoiceRefreshContext context{&channel_states_.channel(channel)};
+    const MidiChannelState& state = channel_states_.channel(channel);
+    ActiveVoiceRefreshContext context{
+        &state,
+        ZoneResolver::pitchBendCents(state),
+        static_cast<std::uint8_t>(127u - state.filter_controller_21)};
     const std::size_t updated = voices.updateActiveVoices(
         channel,
         &refreshActiveVoice,
@@ -1036,10 +1087,14 @@ bool RealtimeProgramEventApplier::apply(
             event.channel,
             event.data1,
             event.data2);
-        const MidiChannelState& state = channel_states_.channel(event.channel);
-        if (action != ChannelControlNone) {
-            util::saturatingIncrement(stats_.controller_state_changes);
+        // An unchanged controller value cannot trigger a voice refresh,
+        // sustain release or all-sound-off. Preserve the event count while
+        // skipping the rest of the realtime event-dispatch path.
+        if (action == ChannelControlNone) {
+            return true;
         }
+        const MidiChannelState& state = channel_states_.channel(event.channel);
+        util::saturatingIncrement(stats_.controller_state_changes);
         if ((action & ChannelControlFilterChanged) != 0) {
             util::saturatingIncrement(stats_.filter_controller_changes);
         }
@@ -1066,8 +1121,15 @@ bool RealtimeProgramEventApplier::apply(
             ChannelControlVibratoChanged |
             ChannelControlFilterChanged |
             ChannelControlResetControllers;
-        if ((action & kRefreshMask) != 0 &&
-            (action & ChannelControlAllSoundOff) == 0) {
+        if (action == ChannelControlFilterChanged) {
+            // Pure CC21 refreshes only the filter destination. Composite
+            // actions (including CC121 reset) retain the full refresh path.
+            const std::size_t updated = voices.updateActiveVoices(
+                event.channel, &refreshCc21Only,
+                const_cast<MidiChannelState*>(&state));
+            util::saturatingAdd(stats_.active_voice_updates, updated);
+        } else if ((action & kRefreshMask) != 0 &&
+                   (action & ChannelControlAllSoundOff) == 0) {
             refreshActiveVoices(event.channel, voices);
         }
         return true;

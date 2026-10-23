@@ -234,6 +234,19 @@ bool runI2sTask(TaskContext& context) {
         return false;
     }
 
+    // Apply the configured synth master only before starting the I2S
+    // stream; never modify this non-atomic control concurrently with render().
+    if (!context.renderer->setMasterGainQ15(
+            CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15)) {
+        ESP_LOGE(kTag, "i2s_qual: invalid synth master gain configuration");
+        return false;
+    }
+    ESP_LOGI(
+        kTag,
+        "i2s_qual: AUDIO_LEVELS synth_master_q15=%d dac_attenuation_db=%d reference_tone_master_bypass=1",
+        CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15,
+        CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB);
+
     if (CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO < 0 ||
         CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO < 0 ||
         CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO < 0 ||

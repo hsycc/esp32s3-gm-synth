@@ -216,6 +216,97 @@ void testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance() {
     assert(batch.voices[0].envelope.decay_frames == 200);
 }
 
+void testDynamicFilterEndpointIsBitEquivalentToBaseBiquad() {
+    PlaybackZone zone{};
+    zone.sample_id = 0;
+    zone.root_key = 60;
+    zone.root_phase_increment_q32 = kPhaseOneQ32;
+    zone.note_on_filter.enabled = true;
+    zone.note_on_filter.initial_cutoff_cents = 9000;
+    zone.note_on_filter.velocity_to_cutoff_cents = 0;
+    zone.note_on_filter.cc21_to_cutoff_cents = -2400;
+
+    const PlaybackProgramSnapshot program = programFor(&zone);
+    assert(program.valid());
+    ZoneResolver resolver;
+    MidiChannelState channel{};
+    channel.resetAll();
+    ResolvedVoiceBatch batch{};
+    BiquadLowpassConfig expected{};
+    assert(prepareResonantLowpassQ24(9000, 0, 44100, &expected));
+
+    for (const std::uint8_t key : {std::uint8_t{60}, std::uint8_t{61},
+                                   std::uint8_t{83}}) {
+        assert(resolver.resolveNoteOn(program, channel, 2, key, 90, key, &batch) ==
+               ZoneResolveStatus::Ok);
+        assert(batch.count == 1);
+        const auto& params = batch.voices[0];
+        assert(params.dynamic_lowpass_table.enabled);
+        assert(params.dynamic_lowpass_table.min_offset_cents == -2400);
+        assert(params.dynamic_lowpass_table.max_offset_cents == 0);
+        const auto& endpoint = params.dynamic_lowpass_table.points.back();
+        assert(endpoint.a0_q24 == expected.a0_q24);
+        assert(endpoint.a1_q24 == expected.a1_q24);
+        assert(endpoint.b1_q24 == expected.b1_q24);
+        assert(endpoint.b2_q24 == expected.b2_q24);
+        assert(params.lowpass.a0_q24 == expected.a0_q24);
+        assert(params.lowpass.a1_q24 == expected.a1_q24);
+        assert(params.lowpass.b1_q24 == expected.b1_q24);
+        assert(params.lowpass.b2_q24 == expected.b2_q24);
+    }
+}
+
+void testQuantizedDynamicFilterPointsMatchIndependentBiquads() {
+    PlaybackZone zone{};
+    zone.sample_id = 0;
+    zone.root_key = 60;
+    zone.root_phase_increment_q32 = kPhaseOneQ32;
+    zone.note_on_filter.enabled = true;
+    zone.note_on_filter.initial_cutoff_cents = 9000;
+    // Disable the SF2 default -2400-cent velocity modulation so the
+    // independent reference cutoff remains exactly 9000 cents.
+    zone.note_on_filter.velocity_to_cutoff_cents = 0;
+    zone.note_on_filter.resonance_cb = 100;
+    // Only one cent over nine points: most control points share a
+    // quantized cutoff, exercising the adjacent-coefficient reuse path.
+    zone.note_on_filter.cc21_to_cutoff_cents = -1;
+
+    const PlaybackProgramSnapshot program = programFor(&zone);
+    assert(program.valid());
+    ZoneResolver resolver;
+    ResolvedVoiceBatch batch{};
+    assert(resolver.resolveNoteOn(program, 2, 60, 100, 42, &batch) ==
+           ZoneResolveStatus::Ok);
+    assert(batch.count == 1);
+    const auto& table = batch.voices[0].dynamic_lowpass_table;
+    assert(table.enabled);
+    assert(table.min_offset_cents == -1);
+    assert(table.max_offset_cents == 0);
+
+    constexpr std::int64_t segments =
+        static_cast<std::int64_t>(gm_synth::voice::kLfoControlPointCount - 1u);
+    bool saw_identical_neighbor = false;
+    for (std::size_t i = 0; i < table.points.size(); ++i) {
+        const std::int64_t numerator = static_cast<std::int64_t>(i);
+        const std::int64_t offset = -1 + (numerator + segments / 2) / segments;
+        BiquadLowpassConfig expected{};
+        assert(prepareResonantLowpassQ24(
+            static_cast<std::int32_t>(9000 + offset), 100, 44100, &expected));
+        const auto& actual = table.points[i];
+        assert(actual.a0_q24 == expected.a0_q24);
+        assert(actual.a1_q24 == expected.a1_q24);
+        assert(actual.b1_q24 == expected.b1_q24);
+        assert(actual.b2_q24 == expected.b2_q24);
+        if (i > 0 && actual.a0_q24 == table.points[i - 1].a0_q24 &&
+            actual.a1_q24 == table.points[i - 1].a1_q24 &&
+            actual.b1_q24 == table.points[i - 1].b1_q24 &&
+            actual.b2_q24 == table.points[i - 1].b2_q24) {
+            saw_identical_neighbor = true;
+        }
+    }
+    assert(saw_identical_neighbor);
+}
+
 void testVelocityDspRoutesApplyOnceAtNoteOn() {
     PlaybackZone zone{};
     zone.sample_id = 0;
@@ -293,6 +384,8 @@ int main() {
     testDelayAttackHoldDecayStagesRenderInOrder();
     testResolverAppliesKeyScaledEnvelopeEffectiveVelocityAndResonance();
     testVelocityDspRoutesApplyOnceAtNoteOn();
+    testDynamicFilterEndpointIsBitEquivalentToBaseBiquad();
+    testQuantizedDynamicFilterPointsMatchIndependentBiquads();
     std::cout << "SF2 filter/envelope runtime checks passed\n";
     return 0;
 }

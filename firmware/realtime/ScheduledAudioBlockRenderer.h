@@ -58,6 +58,13 @@ struct ScheduledWorstBlockStages {
     bool valid = false;
     std::uint32_t setup_prepare_us = 0;
     std::uint32_t event_apply_us = 0;
+    // Optional ESP-only per-event timings within the event-apply stage;
+    // recording them adds clock calls and must never be treated as the
+    // non-instrumented production event cost.
+    std::uint32_t note_on_apply_us = 0;
+    std::uint32_t cc120_apply_us = 0;
+    std::uint32_t other_cc_apply_us = 0;
+    std::uint32_t other_event_apply_us = 0;
     std::uint32_t voice_render_us = 0;
     std::uint32_t effects_finalize_us = 0;
 };
@@ -106,6 +113,20 @@ public:
 
     const ScheduledAudioStats& stats() const { return stats_; }
 
+    // Global digital post-FX master. Default is exact bypass so all existing
+    // SF2/MIDI/qualification PCM output remains bit-identical. 0=mute,
+    // 32767=unity; no amplification or uncontrolled clipping is allowed here.
+    // Set from the control/audio owner before rendering, not concurrently with
+    // render(). CC7/CC11 remain independent *per-channel* controllers.
+    bool setMasterGainQ15(std::int32_t gain_q15) {
+        if (gain_q15 < 0 || gain_q15 > voice::kQ15Unity) {
+            return false;
+        }
+        master_gain_q15_ = gain_q15;
+        return true;
+    }
+    std::int32_t masterGainQ15() const { return master_gain_q15_; }
+
     // Physical qualification diagnostic. Profiling is opt-in and normally off,
     // so production/QEMU rendering keeps the previous hot path. On ESP targets
     // elapsed time is captured around the pure renderer. Voice/event snapshots
@@ -147,6 +168,7 @@ private:
     std::array<std::int32_t, kSamplesPerBlock> chorus_send_{};
     voice::GlobalEffectsProcessor effects_{};
     ScheduledAudioStats stats_{};
+    std::int32_t master_gain_q15_ = voice::kQ15Unity;
 
     bool worst_profile_enabled_ = false;
     std::uint32_t last_profiled_render_us_ = 0;

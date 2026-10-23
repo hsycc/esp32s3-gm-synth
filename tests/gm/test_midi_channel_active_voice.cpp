@@ -229,6 +229,19 @@ void testCc21RefreshesSoundingVoiceFilter() {
     f.zone.note_on_filter.cc21_to_cutoff_cents = -2400;
     assert(f.applier.apply(cc(21, 127), f.voices));
     assert(f.applier.apply(noteOn(60), f.voices));
+    // CC21 must not perturb independent gain, pitch, or effects sends,
+    // including when another MIDI controller was updated beforehand.
+    assert(f.applier.apply(cc(7, 80), f.voices));
+    assert(f.applier.apply(pitchBend(16383), f.voices));
+    const VoiceSnapshot unaffected = activeVoice(f.voices);
+    const auto assertUnchanged = [&]() {
+        const VoiceSnapshot current = activeVoice(f.voices);
+        assert(current.phase_increment_q32 == unaffected.phase_increment_q32);
+        assert(current.gain_left_q15 == unaffected.gain_left_q15);
+        assert(current.gain_right_q15 == unaffected.gain_right_q15);
+        assert(current.reverb_send_units == unaffected.reverb_send_units);
+        assert(current.chorus_send_units == unaffected.chorus_send_units);
+    };
 
     struct Snapshot { bool found = false; std::int32_t a0 = 0; std::int32_t offset = 0; };
     const auto capture = [](void* ptr, Voice& voice) -> bool {
@@ -242,12 +255,14 @@ void testCc21RefreshesSoundingVoiceFilter() {
     f.voices.updateActiveVoices(2, capture, &high);
     assert(high.found && high.offset == 0);
     assert(f.applier.apply(cc(21, 0), f.voices));
+    assertUnchanged();
     Snapshot low{};
     f.voices.updateActiveVoices(2, capture, &low);
     assert(low.found && low.offset ==
            gm_synth::sf2::positiveLinearToAmount(127, -2400));
     assert(low.a0 != high.a0);
     assert(f.applier.apply(cc(21, 64), f.voices));
+    assertUnchanged();
     Snapshot mid{};
     f.voices.updateActiveVoices(2, capture, &mid);
     assert(mid.found && mid.offset < 0 &&

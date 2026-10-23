@@ -237,8 +237,15 @@ void ScheduledAudioBlockRenderer::finalize(std::int16_t* interleaved_stereo) {
         mix_.data(),
         kFramesPerBlock);
 
+    const bool master_bypass = master_gain_q15_ == voice::kQ15Unity;
     for (std::size_t index = 0; index < mix_.size(); ++index) {
-        const std::int32_t value = mix_[index];
+        // Post-FX master affects dry + chorus/reverb together. Keep the
+        // common unity path exactly bit-identical and division-free.
+        const std::int32_t value = master_bypass
+            ? mix_[index]
+            : static_cast<std::int32_t>(
+                  (static_cast<std::int64_t>(mix_[index]) * master_gain_q15_) /
+                  voice::kQ15Unity);
         const std::int64_t magnitude = value >= 0
             ? static_cast<std::int64_t>(value)
             : -static_cast<std::int64_t>(value);
@@ -312,6 +319,10 @@ void ScheduledAudioBlockRenderer::render(
 #endif
         while (event_index < batch.count &&
                batch.events[event_index].frame_offset == offset) {
+#if defined(ESP_PLATFORM)
+            const std::int64_t event_start_us = time_burst
+                ? esp_timer_get_time() : 0;
+#endif
             util::saturatingIncrement(stats_.events_attempted);
             const bool applied = apply_event_ != nullptr &&
                 apply_event_(apply_context_, batch.events[event_index].event, voices_);
@@ -320,6 +331,24 @@ void ScheduledAudioBlockRenderer::render(
             } else {
                 util::saturatingIncrement(stats_.events_rejected);
             }
+#if defined(ESP_PLATFORM)
+            if (time_burst) {
+                const std::int64_t elapsed = esp_timer_get_time() - event_start_us;
+                const std::uint32_t event_us = static_cast<std::uint32_t>(
+                    std::max<std::int64_t>(0, elapsed));
+                const RealtimeEvent& event = batch.events[event_index].event;
+                if (event.type == EventType::NoteOn) {
+                    stage.note_on_apply_us += event_us;
+                } else if (event.type == EventType::ControlChange &&
+                           event.data1 == 120u) {
+                    stage.cc120_apply_us += event_us;
+                } else if (event.type == EventType::ControlChange) {
+                    stage.other_cc_apply_us += event_us;
+                } else {
+                    stage.other_event_apply_us += event_us;
+                }
+            }
+#endif
             ++event_index;
         }
 #if defined(ESP_PLATFORM)

@@ -4,6 +4,19 @@
 
 namespace gm_synth::voice {
 
+bool Voice::applyCc21FilterOffset(std::int32_t offset_cents) {
+    if (!active_ || !params_.realtime_control.enabled ||
+        params_.realtime_control.unbent_phase_increment_q32 == 0) {
+        return false;
+    }
+    // CC21 changes only the filter destination. Keep the same immediate
+    // modulation refresh as the full runtime update, without recalculating
+    // unaffected gain, pitch, effects or Mod-LFO gain tables.
+    params_.realtime_control.cc21_filter_offset_cents = offset_cents;
+    refreshModulationState();
+    return true;
+}
+
 bool Voice::applyRuntimeControlUpdate(const VoiceRuntimeControlUpdate& update) {
     if (!active_ || !update.valid()) {
         return false;
