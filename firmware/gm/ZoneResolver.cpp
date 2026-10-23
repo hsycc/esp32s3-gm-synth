@@ -435,19 +435,28 @@ void prepareDynamicFilterTable(
     constexpr std::int64_t kSegments =
         static_cast<std::int64_t>(voice::kLfoControlPointCount - 1u);
     const std::int64_t span = max_offset - min_offset;
+    std::int32_t previous_cutoff = 0;
     for (std::size_t index = 0; index < candidate.points.size(); ++index) {
         const std::int64_t numerator = span * static_cast<std::int64_t>(index);
         const std::int64_t offset = min_offset +
             (numerator + kSegments / 2) / kSegments;
         const std::int32_t cutoff = static_cast<std::int32_t>(
             static_cast<std::int64_t>(base_cutoff) + offset);
-        if (!sf2::prepareResonantLowpassQ24(
-                cutoff,
-                resonance_cb,
-                sf2::kSf2FilterOutputSampleRate,
-                &candidate.points[index])) {
+        // Quantized control points can resolve to the same cutoff.
+        // The resonance and output sample rate are constant within this
+        // table, so adjacent identical cutoffs have bit-identical Q24
+        // coefficients. Reuse the preceding point rather than recomputing
+        // the resonant biquad during a realtime NoteOn burst.
+        if (index != 0u && cutoff == previous_cutoff) {
+            candidate.points[index] = candidate.points[index - 1u];
+        } else if (!sf2::prepareResonantLowpassQ24(
+                       cutoff,
+                       resonance_cb,
+                       sf2::kSf2FilterOutputSampleRate,
+                       &candidate.points[index])) {
             return;
         }
+        previous_cutoff = cutoff;
     }
     *output = candidate;
 }
