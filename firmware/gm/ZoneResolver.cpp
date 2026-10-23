@@ -1065,10 +1065,14 @@ bool RealtimeProgramEventApplier::apply(
             event.channel,
             event.data1,
             event.data2);
-        const MidiChannelState& state = channel_states_.channel(event.channel);
-        if (action != ChannelControlNone) {
-            util::saturatingIncrement(stats_.controller_state_changes);
+        // An unchanged controller value cannot trigger a voice refresh,
+        // sustain release or all-sound-off. Preserve the event count while
+        // skipping the rest of the realtime event-dispatch path.
+        if (action == ChannelControlNone) {
+            return true;
         }
+        const MidiChannelState& state = channel_states_.channel(event.channel);
+        util::saturatingIncrement(stats_.controller_state_changes);
         if ((action & ChannelControlFilterChanged) != 0) {
             util::saturatingIncrement(stats_.filter_controller_changes);
         }
