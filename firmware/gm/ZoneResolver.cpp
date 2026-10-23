@@ -593,6 +593,7 @@ void prepareModEnvelope(
 
 struct ActiveVoiceRefreshContext {
     const MidiChannelState* state = nullptr;
+    int bend_cents = 0;
 };
 
 bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
@@ -607,7 +608,9 @@ bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     }
 
     voice::VoiceRuntimeControlUpdate update{};
-    const int bend_cents = ZoneResolver::pitchBendCents(*context->state);
+    // Pitch bend is channel-wide, not voice-specific. The caller computes
+    // it once for the entire active-voice refresh batch.
+    const int bend_cents = context->bend_cents;
     update.phase_increment_q32 = bend_cents == 0
         ? source.unbent_phase_increment_q32
         : ZoneResolver::transposeCents(source.unbent_phase_increment_q32, bend_cents);
@@ -1033,7 +1036,8 @@ std::uint32_t RealtimeProgramEventApplier::allocateNoteInstanceId() {
 std::size_t RealtimeProgramEventApplier::refreshActiveVoices(
     std::uint8_t channel,
     voice::VoicePool& voices) {
-    ActiveVoiceRefreshContext context{&channel_states_.channel(channel)};
+    const MidiChannelState& state = channel_states_.channel(channel);
+    ActiveVoiceRefreshContext context{&state, ZoneResolver::pitchBendCents(state)};
     const std::size_t updated = voices.updateActiveVoices(
         channel,
         &refreshActiveVoice,
