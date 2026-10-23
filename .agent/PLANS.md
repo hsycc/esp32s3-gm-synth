@@ -4,7 +4,11 @@ This is the durable execution plan for the ESP32-S3 GM / native-SF2 synth. Keep 
 
 ## Current project position
 
-The project is now in **M7 — GM128 / user-SF2 release qualification**.
+The **M0–M8 source integration batch** is assembled on `agent/m6-sf2-playback-prepare-v1`. M7 PR #17 and M8 PR #18 have merged into that branch. Core implementation and tracked CI/physical stress work are complete for the tested configurations; representative audible approval and V1 release remain open.
+
+M8 reference: `bb31908b` three physical runs PASS with PCM checksum `fe69915701738934`, 24 nominal normal/full-FX sample voices, eight stable pathological heavy-DSP voices, no WDT/hard-gate failures and final backlog zero. User confirmed the recorded `-dirty` suffix is not a blocker for this source integration; retain the actual banner without claiming clean CI binary identity. See `benchmarks/M8_PHYSICAL_THREE_RUN_2026-10-24.md`.
+
+Current focus: integrate into `main` with CI, then complete audible tests, release DAC-level/headroom trials and final supported-asset packaging. These remain independent gates; no V1 publication is implied.
 
 M6 physical product qualification is complete at:
 
