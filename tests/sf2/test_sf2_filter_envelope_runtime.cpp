@@ -263,6 +263,9 @@ void testQuantizedDynamicFilterPointsMatchIndependentBiquads() {
     zone.root_phase_increment_q32 = kPhaseOneQ32;
     zone.note_on_filter.enabled = true;
     zone.note_on_filter.initial_cutoff_cents = 9000;
+    // Disable the SF2 default -2400-cent velocity modulation so the
+    // independent reference cutoff remains exactly 9000 cents.
+    zone.note_on_filter.velocity_to_cutoff_cents = 0;
     zone.note_on_filter.resonance_cb = 100;
     // Only one cent over nine points: most control points share a
     // quantized cutoff, exercising the adjacent-coefficient reuse path.
