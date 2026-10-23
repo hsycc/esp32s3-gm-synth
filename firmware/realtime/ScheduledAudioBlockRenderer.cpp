@@ -136,7 +136,8 @@ void ScheduledAudioBlockRenderer::insertWorstBlock(
 void ScheduledAudioBlockRenderer::recordWorstBlock(
     std::uint64_t block_start_frame,
     std::uint32_t render_us,
-    const BlockEventBatch& batch) {
+    const BlockEventBatch& batch,
+    const ScheduledWorstBlockStages& stages) {
     // Profiling may be armed before the I2S helper runs its warmup. Keep those
     // warmup blocks completely outside the measured Top-N/candidate window so
     // the profiler and realtime-health counters describe the same block range.
@@ -208,6 +209,7 @@ void ScheduledAudioBlockRenderer::recordWorstBlock(
     entry.stream_block = static_cast<std::size_t>(
         (block_start_frame - worst_profile_first_frame_) / kFramesPerBlock);
     entry.render_us = render_us;
+    entry.stages = stages;
     entry.events = event_context;
     entry.voices = captureProfileVoices();
     insertWorstBlock(entry);
@@ -274,6 +276,17 @@ void ScheduledAudioBlockRenderer::render(
         block_start_frame,
         static_cast<std::uint16_t>(kFramesPerBlock));
 
+    ScheduledWorstBlockStages stage{};
+    (void)stage;  // ESP-only physical profiling; no host timing instrumentation.
+#if defined(ESP_PLATFORM)
+    const bool time_burst = worst_profile_enabled_ && batch.count >= 8u;
+    stage.valid = time_burst;
+    if (time_burst) {
+        const auto now = esp_timer_get_time();
+        stage.setup_prepare_us = static_cast<std::uint32_t>(
+            std::max<std::int64_t>(0, now - worst_profile_start_us));
+    }
+#endif
     std::size_t cursor = 0;
     std::size_t event_index = 0;
     while (event_index < batch.count) {
@@ -281,10 +294,22 @@ void ScheduledAudioBlockRenderer::render(
             batch.events[event_index].frame_offset,
             kFramesPerBlock);
         if (offset > cursor) {
+#if defined(ESP_PLATFORM)
+            const auto voice_start_us = time_burst ? esp_timer_get_time() : 0;
+#endif
             renderSegment(cursor, offset - cursor);
+#if defined(ESP_PLATFORM)
+            if (time_burst) {
+                stage.voice_render_us += static_cast<std::uint32_t>(
+                    std::max<std::int64_t>(0, esp_timer_get_time() - voice_start_us));
+            }
+#endif
             cursor = offset;
         }
 
+#if defined(ESP_PLATFORM)
+        const auto events_start_us = time_burst ? esp_timer_get_time() : 0;
+#endif
         while (event_index < batch.count &&
                batch.events[event_index].frame_offset == offset) {
             util::saturatingIncrement(stats_.events_attempted);
@@ -297,13 +322,37 @@ void ScheduledAudioBlockRenderer::render(
             }
             ++event_index;
         }
+#if defined(ESP_PLATFORM)
+        if (time_burst) {
+            stage.event_apply_us += static_cast<std::uint32_t>(
+                std::max<std::int64_t>(0, esp_timer_get_time() - events_start_us));
+        }
+#endif
     }
 
     if (cursor < kFramesPerBlock) {
+#if defined(ESP_PLATFORM)
+        const auto voice_start_us = time_burst ? esp_timer_get_time() : 0;
+#endif
         renderSegment(cursor, kFramesPerBlock - cursor);
+#if defined(ESP_PLATFORM)
+        if (time_burst) {
+            stage.voice_render_us += static_cast<std::uint32_t>(
+                std::max<std::int64_t>(0, esp_timer_get_time() - voice_start_us));
+        }
+#endif
     }
 
+#if defined(ESP_PLATFORM)
+    const auto finalize_start_us = time_burst ? esp_timer_get_time() : 0;
+#endif
     finalize(interleaved_stereo);
+#if defined(ESP_PLATFORM)
+    if (time_burst) {
+        stage.effects_finalize_us = static_cast<std::uint32_t>(
+            std::max<std::int64_t>(0, esp_timer_get_time() - finalize_start_us));
+    }
+#endif
     util::saturatingIncrement(stats_.blocks_rendered);
     util::saturatingAdd(stats_.output_frames, static_cast<std::uint64_t>(kFramesPerBlock));
 
@@ -318,7 +367,7 @@ void ScheduledAudioBlockRenderer::render(
                 elapsed,
                 std::numeric_limits<std::uint32_t>::max()));
         last_profiled_render_us_ = render_us;
-        recordWorstBlock(block_start_frame, render_us, batch);
+        recordWorstBlock(block_start_frame, render_us, batch, stage);
     }
 #endif
 }
