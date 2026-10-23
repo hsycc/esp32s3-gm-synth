@@ -597,6 +597,20 @@ struct ActiveVoiceRefreshContext {
     std::uint8_t inverse_cc21 = 0;
 };
 
+bool refreshCc21Only(void* opaque, voice::Voice& voice) {
+    const auto* state = static_cast<const MidiChannelState*>(opaque);
+    if (state == nullptr) {
+        return false;
+    }
+    const auto& source = voice.realtimeControl();
+    if (!source.enabled || source.unbent_phase_increment_q32 == 0) {
+        return false;
+    }
+    return voice.applyCc21FilterOffset(sf2::positiveLinearToAmount(
+        static_cast<std::uint8_t>(127u - state->filter_controller_21),
+        source.cc21_to_filter_fc_cents));
+}
+
 bool refreshActiveVoice(void* opaque, voice::Voice& voice) {
     auto* context = static_cast<ActiveVoiceRefreshContext*>(opaque);
     if (context == nullptr || context->state == nullptr) {
@@ -1107,8 +1121,15 @@ bool RealtimeProgramEventApplier::apply(
             ChannelControlVibratoChanged |
             ChannelControlFilterChanged |
             ChannelControlResetControllers;
-        if ((action & kRefreshMask) != 0 &&
-            (action & ChannelControlAllSoundOff) == 0) {
+        if (action == ChannelControlFilterChanged) {
+            // Pure CC21 refreshes only the filter destination. Composite
+            // actions (including CC121 reset) retain the full refresh path.
+            const std::size_t updated = voices.updateActiveVoices(
+                event.channel, &refreshCc21Only,
+                const_cast<MidiChannelState*>(&state));
+            util::saturatingAdd(stats_.active_voice_updates, updated);
+        } else if ((action & kRefreshMask) != 0 &&
+                   (action & ChannelControlAllSoundOff) == 0) {
             refreshActiveVoices(event.channel, voices);
         }
         return true;
