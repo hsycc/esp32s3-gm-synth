@@ -1,101 +1,77 @@
-# ESP32-S3 N16R8 Hardware Bring-up
+# ESP32-S3 N16R8 Hardware Bring-up / M6 Qualification
 
-This checklist is the first real-hardware gate for M0 / M3 Phase C.
+## Purpose
+
+This document describes the remaining physical-hardware gate for M6 after the
+host GM128 semantic/residency/lifetime qualification completed.
 
 Reference target:
+
 - ESP32-S3-WROOM-1-N16R8 class module
-- 16 MiB flash
-- 8 MiB octal PSRAM
+- 16 MiB flash, DIO, 80 MHz
+- 8 MiB Octal PSRAM, 80 MHz
 - ESP-IDF v6.1
-- 240 MHz CPU
-- initial PCM residency arena: 4 MiB
+- CPU 240 MHz
+- normal firmware PCM arena: 4 MiB
+- dedicated M6 qualification-image PCM arena: 4.5 MiB
+- audio render block: 64 frames at 44.1 kHz (`~1451 us` budget)
 
-The first board run is intentionally limited to platform, storage and residency validation. I2S, MIDI, Voice DSP and effects are not part of this gate.
+The 4.5 MiB value is **not** a production-default change. Host full-bank
+qualification established it as the first tested arena that admits the
+representative 16-channel Active + worst READY transaction. The physical image
+exists to determine whether that arena leaves enough total N16R8 PSRAM/SRAM
+headroom for the rest of the runtime.
 
-## Current status
+See:
 
-The QEMU functional gate is complete on commit `86e492b` / `esp-idf-build #21`:
+- `benchmarks/GM128_HOST_QUALIFICATION_BASELINE_2026-10-18.md`
+- `benchmarks/N16R8_FLASH_STORAGE_BASELINE_2026-10-15.md`
+- `tasks/M6_GM128_VALIDATION.md`
 
-- real SF2 fixture generated into raw FATFS;
-- 16 MiB virtual flash image boots on ESP32-S3 QEMU;
-- 8 MiB Octal PSRAM is exposed;
-- `/sf2/test.sf2` mounts and opens through ESP-IDF VFS;
-- the real SF2 parses as 67 playable samples;
-- the 4/8/16/32/64 KiB storage sweep completes;
-- the 4 MiB residency arena initializes after the sweep.
+## 1. CI prerequisite
 
-See `benchmarks/QEMU_SF2_STORAGE_BASELINE_2026-10-15.md` for the exact QEMU telemetry. Those throughput numbers are functional telemetry only and are not hardware performance data.
+Do not use an arbitrary commit for hardware qualification. The corresponding
+GitHub `esp-idf-build` workflow must first prove:
 
-## 1. Build the normal firmware
+- normal production/default build still uses a 4 MiB PCM arena;
+- ESP32-S3 / N16R8 configuration checks pass;
+- QEMU boot succeeds;
+- real-SF2 raw-FATFS integration succeeds;
+- Program Prepare functional telemetry parses;
+- render telemetry parses for `1/4/8/12/16/18/20/24` Voices;
+- the dedicated physical M6 qualification image builds successfully.
 
-Use the repository-pinned ESP-IDF release:
+Host/QEMU timing is regression evidence only. Physical N16R8 measurements are
+the performance oracle.
 
-```bash
-. "$HOME/esp/esp-idf/export.sh"
-./scripts/build_idf.sh
-```
+## 2. Build one M6 qualification image
 
-Expected build target:
-
-```text
-IDF_TARGET = esp32s3
-Flash      = 16 MB
-PSRAM      = enabled, octal, 80 MHz
-PCM arena  = 4194304 bytes
-```
-
-The GitHub `esp-idf-build` workflow must also pass before using a commit as a hardware baseline.
-
-## 2. First boot: platform / PSRAM gate
-
-Typical local flow:
-
-```bash
-idf.py -p <PORT> flash monitor
-```
-
-Keep the complete first-boot serial log. Do not edit the reported memory numbers before attaching them to a benchmark/report.
-
-A passing first boot must show all of the following:
-
-1. firmware identifies itself as the M0/M3 bring-up target;
-2. ESP-IDF version is printed;
-3. detected PSRAM is consistent with an R8-class module;
-4. the largest PSRAM free block is at least the configured 4 MiB arena request;
-5. the PCM arena allocation succeeds;
-6. arena address satisfies `SampleResidencyManager::kAlignment`;
-7. `SampleResidencyManager::begin()` succeeds over the PSRAM arena;
-8. post-allocation PSRAM telemetry is printed;
-9. residency telemetry reports zero used bytes and one large initial free span;
-10. there is no reboot loop, cache error or PSRAM initialization warning.
-
-Record the exact serial-log values for:
-
-```text
-ESP-IDF version
-PSRAM total before arena
-PSRAM free before arena
-PSRAM largest free block before arena
-PSRAM minimum free before arena
-Requested PCM arena bytes
-PSRAM free after arena
-PSRAM largest free block after arena
-Residency capacity bytes
-Residency largest free span bytes
-```
-
-These measurements decide whether the production arena remains 4 MiB or can safely move toward 5–6 MiB. Do not infer this from the nominal 8 MiB module size alone.
-
-## 3. Internal Flash -> PSRAM benchmark
-
-The repository now has a dedicated real-hardware benchmark build which reuses the exact SF2 fixture already validated in QEMU.
-
-Build only:
+Activate the repository-pinned ESP-IDF v6.1 environment, then build:
 
 ```bash
 . "$HOME/esp/esp-idf/export.sh"
 ./scripts/build_hwbench_idf.sh
 ```
+
+The generated image is deliberately separate from the normal firmware. Its
+configuration must contain:
+
+```text
+CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304
+CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y
+```
+
+The checked-in raw FATFS fixture remains the pinned
+`FM_GM_Open_subset_6MiB.sf2` (`5,898,214` bytes, 67 playable samples). It is used
+for repeatable physical storage/Prepare timing. The larger full FM bank is used
+by host GM128 qualification; it does not fit the current 8 MiB benchmark FATFS
+partition and is not required to reproduce the hardware timing path.
+
+## 3. Flash once and capture one complete serial log
 
 Build and flash directly:
 
@@ -104,125 +80,182 @@ Build and flash directly:
 idf.py -B build-hwbench -p <PORT> monitor
 ```
 
-The hardware benchmark is intentionally separate from the production/default build. It uses:
+Save the complete first-boot log without editing values. One run should contain
+platform memory, storage, Program Prepare and render timing evidence.
+
+### Platform / memory markers
+
+Capture every line beginning with or containing:
 
 ```text
-SF2 fixture        = FM_GM_Open_subset_6MiB.sf2
-fixture bytes      = 5898214
-playable samples   = 67
-PCM arena          = 4194304 bytes
-benchmark bytes    = 4194304 bytes per chunk-size pass
-chunk sizes        = 4096 / 8192 / 16384 / 32768 / 65536 bytes
-storage path       = /sf2/test.sf2
+Detected physical PSRAM
+Requesting PCM residency arena
+PSRAM before arena
+INTERNAL_HEAP before arena
+PSRAM after arena
+INTERNAL_HEAP after arena
+PSRAM after Program Prepare
+INTERNAL_HEAP after Program Prepare
+PSRAM after render benchmark
+INTERNAL_HEAP after render benchmark
+M6_QUAL_MEMORY
 ```
 
-The temporary hardware benchmark currently reuses the configuration symbol `GM_SYNTH_QEMU_FLASH_SF2_TEST`; despite that historical name, the code path itself is only a raw-flash FATFS fixture + read-only VFS mount and is valid on physical ESP32-S3 hardware.
+Required physical checks:
 
-### Required benchmark evidence
+- detected PSRAM is consistent with 8 MiB R8;
+- 4.5 MiB contiguous arena allocation succeeds;
+- residency initializes over exactly `4,718,592` bytes;
+- no PSRAM/cache/reboot/Guru Meditation errors;
+- total/free/minimum/largest-free PSRAM is recorded before and after each phase;
+- total/free/minimum/largest-free internal SRAM is recorded before and after each phase;
+- final `M6_QUAL_MEMORY` shows zero stale-reference faults.
 
-The serial log must contain:
+Do not decide the production arena from nominal 8 MiB capacity. The remaining
+PSRAM after Voice/DSP/FX/runtime static allocations and minimum-free telemetry is
+what matters.
+
+## 4. Internal Flash -> PSRAM storage evidence
+
+The physical image keeps the established 4 MiB storage sweep so results remain
+directly comparable with the 2026-10-15 baseline.
+
+Expected source:
 
 ```text
-Detected physical PSRAM: 8388608 bytes
-QEMU FATFS mounted: base=/sf2 partition=qemu_sf2
-Storage benchmark VFS open: path=/sf2/test.sf2 file_bytes=5898214
-Storage benchmark SF2 parsed: playable_samples=67
-Storage benchmark source: path=/sf2/test.sf2 ... benchmark_bytes=4194304
-chunk=4096 bytes=4194304 ...
-chunk=8192 bytes=4194304 ...
-chunk=16384 bytes=4194304 ...
-chunk=32768 bytes=4194304 ...
-chunk=65536 bytes=4194304 ...
-Residency ready: capacity=4194304 used=0 ...
+path             = /sf2/test.sf2
+file bytes       = 5898214
+playable samples = 67
+benchmark bytes  = 4194304
+chunk sizes      = 4096 / 8192 / 16384 / 32768 / 65536
 ```
-
-The log prefix still says `QEMU FATFS mounted` because that message predates the hardware benchmark path. This wording is cosmetic; the physical run is valid as long as the firmware was built with `sdkconfig.hwbench.defaults` and flashed to the N16R8 board.
 
 For every chunk size record:
 
-- throughput MiB/s;
-- min latency;
-- average latency;
-- p50 latency;
-- p95 latency;
-- p99 latency;
-- max latency;
-- total elapsed time.
+- MiB/s;
+- elapsed time;
+- min / average / p50 / p95 / p99 / max latency.
 
-Do not compare these hardware numbers against the QEMU 2.3–2.4 MiB/s values as a pass/fail threshold. The QEMU figures are not representative of physical SPI flash timing.
+The established baseline was roughly 5.8–6.3 MiB/s and justified retaining a
+32 KiB source read chunk. New numbers should be compared for regression, not
+used as an audio-thread streaming target: filesystem I/O remains prohibited in
+the audio hot path.
 
-### Convert the serial log into a checked report
+## 5. Program Prepare physical evidence
 
-Save the complete benchmark serial output, for example as:
+The same boot then exercises the source-backed Program Prepare benchmark.
+Record the complete `program_prepare_bench:` telemetry, including:
+
+- cold Prepare latency and bytes loaded;
+- warm/reused Prepare latency;
+- deterministic cache pressure;
+- safe LRU eviction count/bytes;
+- commit/retire timing;
+- release-tail reference survival;
+- capacity/allocation failures;
+- residency high-water values.
+
+All storage work must remain in the control/storage domain.
+
+## 6. Voice DSP render matrix
+
+The qualification image measures the production render path in 64-frame blocks
+using deterministic looping PCM at fixed Voice counts:
 
 ```text
-reports/local/n16r8-flash.log
+1, 4, 8, 12, 16, 18, 20, 24 Voices
 ```
 
-Then run:
+The boot log must contain:
 
-```bash
-python -m tools.storage_benchmark.report reports/local/n16r8-flash.log \
-  --expected-bytes 4194304 \
-  --expected-samples 67 \
-  --title "N16R8 Internal Flash -> PSRAM" \
-  --output benchmarks/N16R8_FLASH_STORAGE.md
+```text
+render_bench: START ... timing_scope=hardware physical_timing_evidence=1
+render_bench: case voices=1 ...
+render_bench: case voices=4 ...
+...
+render_bench: case voices=24 ...
+render_bench: PASS ... timing_scope=hardware physical_timing_evidence=1
 ```
 
-The parser extracts the five chunk rows, PSRAM/SF2/residency metadata and tail latency, and returns a non-zero exit status if a required row is missing, the byte/sample expectations do not match, or a panic/failure signature is present.
+For each Voice count record:
 
-## 4. Hardware pass / fail rule
+- min / average / p50 / p95 / p99 / max render time;
+- deadline misses against the 1451 us block budget;
+- clipped samples;
+- deterministic checksum.
 
-### Platform pass
+### Interpreting the Voice matrix
 
-- build is clean under ESP-IDF v6.1;
-- N16R8 configuration assertions pass;
-- 4 MiB SPIRAM arena allocation succeeds on target;
-- residency manager initializes successfully;
-- measured remaining PSRAM is recorded for later Voice/FX budgeting.
+A case is not automatically a guaranteed product polyphony merely because one
+short benchmark pass completes. The useful first cut is:
 
-### Storage functional pass
+- **comfortable**: p99 and max remain materially below 1451 us, zero misses;
+- **borderline**: p99 approaches the budget or isolated max values consume most
+  of the margin;
+- **failed**: deadline misses occur or max repeatedly exceeds the block budget.
 
-- the pinned real SF2 mounts and opens from physical flash;
-- SF2 parser reports 67 playable samples;
-- all five 4 MiB benchmark passes complete with status `Ok`;
-- benchmark writes directly into the 4 MiB PSRAM arena without a second multi-MiB staging buffer;
-- no panic, invalid read, reboot, cache error or residency fault occurs.
+Final guaranteed polyphony still requires the physical long-running/worst-path
+stress listed below.
 
-### Fail
+## 7. What this image does not qualify
 
-Treat any of the following as a real platform/storage issue rather than bypassing the check:
+The qualification image intentionally does **not** start physical I2S output.
+Therefore it cannot prove:
 
-- detected PSRAM substantially below the R8 expectation;
-- largest free PSRAM block below 4 MiB at clean boot;
-- arena allocation failure;
-- unexpected Quad/Octal PSRAM mismatch;
-- flash-size mismatch;
-- SF2 fixture cannot mount/open/parse;
-- any storage sweep pass returns a failure status;
-- residency initialization failure;
-- repeated reset, Guru Meditation, cache or PSRAM errors.
+- I2S DMA underrun count;
+- end-to-end audio-task scheduling jitter;
+- codec/I2S integration;
+- final audible quality.
 
-A numeric throughput acceptance threshold will be set only after the first physical N16R8 result is captured. Before that point, inventing a threshold would be less useful than recording the real board baseline.
+Do not report "zero I2S underruns" from this image. That gate begins only after
+the actual I2S output task/DMA path is connected.
 
-## 5. SD-card benchmark comes second
+Likewise, the deterministic render benchmark exercises the real scheduler,
+Voice mixer and global effects processor, but it is not a substitute for the
+full-FM mixed-MIDI physical stress workload.
 
-Do not mix SD-card bring-up with the first Flash test. First prove the on-module Flash -> PSRAM path on N16R8. Then mount the chosen SD interface and run the same `VfsRandomAccessReader` + `runEspStorageBenchmarkSweep()` path against the same SF2 fixture.
+## 8. Final physical stress before declaring guaranteed polyphony
 
-That comparison will answer separately:
+After the one-shot qualification image establishes a safe arena and candidate
+Voice count, run the actual audio path with:
 
-1. whether internal Flash is fast enough for program preparation / cache refill;
-2. whether SD materially improves throughput;
-3. whether SD introduces worse p95/p99/max latency even when average throughput is higher.
+- dense sustained piano + sustain pedal;
+- repeated same-note retrigger;
+- drum bursts;
+- release-tail/pad accumulation;
+- mixed 16-channel MIDI;
+- repeated Program Change between materially different working sets;
+- representative filter/modulation/effects-heavy paths;
+- long-running playback.
 
-## 6. Gate before M4
+Record:
 
-Only after the physical evidence above is captured:
+- active / peak / admission Voice count;
+- render p95 / p99 / max;
+- deadline misses;
+- I2S underruns;
+- event queue high-water and drops;
+- invalid sample/fetch accesses;
+- Voice steals / transient steal tails;
+- internal SRAM minimum/largest-free;
+- total PSRAM minimum/largest-free;
+- sample-arena used/high-water/fragmentation.
 
-1. keep the measured 4 MiB arena if the remaining PSRAM margin is healthy, or revise it from evidence;
-2. record real Flash -> PSRAM throughput and tail latency;
-3. add SD -> PSRAM data if SD is part of the product architecture;
-4. re-run Program Prepare / cache-eviction scenarios on target;
-5. then begin M4 Voice DSP and I2S output integration.
+Only after this physical stress is green may a stable Voice count be called
+"guaranteed" and the final physical release benchmark be committed under
+`benchmarks/`.
 
-This ordering keeps storage/PSRAM faults separate from audio-DSP timing faults.
+## 9. Pass / fail boundary for the next board run
+
+The next board run is useful if it answers these questions in one log:
+
+1. Does a 4.5 MiB contiguous PCM arena allocate cleanly on the actual N16R8?
+2. What PSRAM and internal-SRAM reserve remains after Prepare and Render?
+3. What are cold/warm/eviction Prepare latencies?
+4. Which of 16 / 18 / 20 Voices retain comfortable 64-frame deadline margin?
+5. Are there any deadline, stale-reference, allocation, cache or reboot faults?
+
+If 4.5 MiB leaves insufficient runtime reserve, keep/reconsider the arena and
+residency policy rather than forcing the allocation. If render timing becomes
+borderline before 20 Voices, use the measured stable case as the candidate for
+the final I2S stress suite.

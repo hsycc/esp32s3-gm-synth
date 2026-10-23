@@ -133,15 +133,13 @@ Cloud/host CI covers host tests, deterministic SF2 analysis/conformance, ESP32-S
 
 Measurements that require the actual electrical/storage/audio characteristics of an N16R8 board remain on-device work: Program Prepare/cache timing, optional SD timing, I2S underruns, render deadlines and stable polyphony.
 
-## Status
+## Status — M0–M8 integrated development baseline (October 2026)
 
-**M1/M2/M2.5 are established and CI-backed. M3 software/integration plus the first physical N16R8 internal-Flash/PSRAM baseline are complete.**
+- **M0–M6 core implementation:** host/ESP-IDF and physical qualification complete for the documented N16R8 configuration.
+- **M7 GM128/native SF2:** program-level release matrices, representative multichannel behavior and real-hardware long runs are qualified for tested banks; not a claim of arbitrary SF2 support or subjective listening approval.
+- **M8 hot-path and volume controls:** M7/M8 development PRs #17 and #18 are merged into `agent/m6-sf2-playback-prepare-v1`. The frozen `bb31908b` M8 image completed three physical stress runs with zero hard-gate failures and unchanged PCM checksum. Digital master defaults to unity; ES8311 DAC remains -12 dB.
+- **V1 Release Candidate:** main-branch source integration, representative listening, output-level/headroom checks and release packaging are separate steps. No public V1 release is approved yet.
 
-The remaining M3 hardware gate is now narrower:
+The physical qualification output is **mono downmix via ES8311**, not a spatial-stereo speaker test. 24 normal/full-FX *sample voices* (not necessarily 24 keys on layered presets) and 8 pathological heavy-DSP voices are the measured stability envelope. Do not advertise the software 32-voice cap as a guaranteed realtime specification.
 
-- record the exact qualification board/module SKU;
-- measure on-target cold/warm Program Prepare latency using real sample dependencies;
-- measure cache-eviction and rapid Program Change prepare/commit/retire timing under arena pressure;
-- add SD -> PSRAM comparison only if SD is part of the intended product storage architecture.
-
-After those control/storage measurements, M4 Voice DSP/I2S integration can begin with the 4 MiB arena and 32 KiB source chunk as the current measured baseline.
+See `benchmarks/M8_PHYSICAL_THREE_RUN_2026-10-24.md`, `docs/V1_RELEASE_CLOSEOUT.md`, `docs/V1_AUDIBLE_ACCEPTANCE.md`, and `.agent/PLANS.md` for evidence and remaining gates.

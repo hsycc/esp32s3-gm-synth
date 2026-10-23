@@ -1,5 +1,6 @@
 #include "ProgramPrepareBenchmark.h"
 
+#include "QualificationIdleMonitor.h"
 #include "sdkconfig.h"
 
 #include "esp_log.h"
@@ -53,6 +54,14 @@ bool fillFromSource(void* opaque, std::uint8_t* destination, std::size_t pcm_byt
     auto& context = *static_cast<SourceFillContext*>(opaque);
     return context.source != nullptr &&
            context.source->fillSample(context.sample_id, destination, pcm_bytes);
+}
+
+bool requirePrepareIdleWindow(const char* phase) {
+    if (verifiedQualificationIdleWindow(phase)) {
+        return true;
+    }
+    ESP_LOGE(kTag, "idle verification failed after case=%s", phase);
+    return false;
 }
 
 bool setContains(const DependencySet& set, sample::SampleId id) {
@@ -248,6 +257,9 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
             static_cast<unsigned>(source.sampleCount()));
         return false;
     }
+    if (!requirePrepareIdleWindow("prepare_parse")) {
+        return false;
+    }
 
     static PublishedSampleDirectory directory;
     static ProgramSnapshotExchange exchange;
@@ -290,6 +302,9 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
         ESP_LOGE(kTag, "cold_initial did not exercise source-backed loading");
         return false;
     }
+    if (!requirePrepareIdleWindow("cold_initial")) {
+        return false;
+    }
 
     before_stats = controller.stats();
     const std::int64_t warm_start = esp_timer_get_time();
@@ -301,6 +316,9 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
     logPrepareCase("warm_same_program", warm_ok, warm_elapsed, program_a, delta);
     if (!warm_ok || delta.samples_loaded != 0 || delta.samples_reused_resident != program_a.count) {
         ESP_LOGE(kTag, "warm_same_program did not stay fully resident");
+        return false;
+    }
+    if (!requirePrepareIdleWindow("warm_same_program")) {
         return false;
     }
 
@@ -318,6 +336,9 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
         static_cast<long long>(warm_commit_us),
         static_cast<long long>(warm_retire_us));
     if (!warm_commit_ok || !warm_ack.valid()) {
+        return false;
+    }
+    if (!requirePrepareIdleWindow("warm_commit_retire")) {
         return false;
     }
 
@@ -345,6 +366,9 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
         static_cast<unsigned>(primed_residency.used_bytes),
         static_cast<unsigned>(primed_residency.largest_free_span_bytes),
         static_cast<unsigned>(primed_residency.free_span_count));
+    if (!requirePrepareIdleWindow("prime_cache")) {
+        return false;
+    }
 
     before_stats = controller.stats();
     const std::int64_t eviction_start = esp_timer_get_time();
@@ -360,6 +384,9 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
             "eviction_program_change did not exercise source load + safe LRU eviction (loaded=%llu evictions=%llu)",
             static_cast<unsigned long long>(delta.samples_loaded),
             static_cast<unsigned long long>(delta.cache_evictions));
+        return false;
+    }
+    if (!requirePrepareIdleWindow("eviction_program_change")) {
         return false;
     }
 
@@ -391,6 +418,9 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
     if (!change_commit_ok || !change_ack.valid() || !tail_survived || !tail_release_ok) {
         return false;
     }
+    if (!requirePrepareIdleWindow("eviction_commit_retire")) {
+        return false;
+    }
 
     const auto final_residency = residency.stats();
     const auto final_prepare = controller.stats();
@@ -405,7 +435,7 @@ bool runEnabledBenchmark(sample::SampleResidencyManager& residency) {
         static_cast<unsigned long long>(final_prepare.sample_bytes_loaded),
         static_cast<unsigned long long>(final_prepare.cache_evictions),
         static_cast<unsigned long long>(final_prepare.cache_evicted_bytes));
-    return true;
+    return qualificationIdleMonitorHealthy();
 }
 
 }  // namespace

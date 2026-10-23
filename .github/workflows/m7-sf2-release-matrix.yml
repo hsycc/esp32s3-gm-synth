@@ -1,0 +1,151 @@
+name: m7-sf2-release-matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_sf2_id_space.cpp"
+      - "tests/gm/test_sf2_release_matrix.cpp"
+      - "tests/sample/test_large_sample_id.cpp"
+      - "tests/test_sf2_release_report.py"
+      - "tools/sf2_release/**"
+      - "scripts/run_m7_sf2_release_matrix.sh"
+      - "scripts/run_m7_sf2_robustness.sh"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "assets/sf2/full/GeneralUser-GS.sf2"
+      - "assets/sf2/full/FluidR3_GM.sf2"
+      - "assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2"
+      - "assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2"
+      - ".github/workflows/m7-sf2-release-matrix.yml"
+  pull_request:
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_sf2_id_space.cpp"
+      - "tests/gm/test_sf2_release_matrix.cpp"
+      - "tests/sample/test_large_sample_id.cpp"
+      - "tests/test_sf2_release_report.py"
+      - "tools/sf2_release/**"
+      - "scripts/run_m7_sf2_release_matrix.sh"
+      - "scripts/run_m7_sf2_robustness.sh"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "assets/sf2/full/GeneralUser-GS.sf2"
+      - "assets/sf2/full/FluidR3_GM.sf2"
+      - "assets/sf2/subsets/GeneralUser_GS_subset_6MiB.sf2"
+      - "assets/sf2/subsets/FluidR3_GM_subset_6MiB.sf2"
+      - ".github/workflows/m7-sf2-release-matrix.yml"
+
+jobs:
+  classify-representative-native-sf2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Materialize representative full-bank LFS assets where available
+        shell: bash
+        run: |
+          set -u
+          assets=(
+            "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+            "assets/sf2/full/GeneralUser-GS.sf2"
+            "assets/sf2/full/FluidR3_GM.sf2"
+          )
+          if ! git lfs version >/dev/null 2>&1; then
+            echo "Git LFS unavailable; deterministic subset fallbacks remain available for optional user banks."
+            exit 0
+          fi
+          git lfs install --local
+          for full in "${assets[@]}"; do
+            set +e
+            git lfs pull --include="${full}" --exclude=""
+            status=$?
+            set -e
+            if [[ "${status}" -ne 0 ]]; then
+              echo "LFS object unavailable for ${full}; optional banks may use deterministic subset fallback."
+              continue
+            fi
+            if [[ -s "${full}" ]] && [[ "$(dd if="${full}" bs=1 count=4 2>/dev/null || true)" == "RIFF" ]]; then
+              echo "Materialized ${full}: $(wc -c < "${full}") bytes"
+            else
+              echo "${full} remains unavailable as a real SF2 after LFS pull."
+            fi
+          done
+
+      - name: Run report parser unit tests
+        run: python -m unittest tests.test_sf2_release_report -v
+
+      - name: Run large bank-local SampleId regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/m7-sf2-release
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/SampleResidencyManager.cpp \
+            firmware/sample/SampleResidencySourceLoad.cpp \
+            firmware/sample/SampleResidencyView.cpp \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/sample/ProgramSnapshot.cpp \
+            firmware/sample/ProgramPrepareController.cpp \
+            tests/sample/test_large_sample_id.cpp \
+            -o build/m7-sf2-release/test_large_sample_id
+          build/m7-sf2-release/test_large_sample_id
+
+      - name: Run representative native-SF2 release classification
+        shell: bash
+        run: |
+          mkdir -p build/m7-sf2-release
+          bash scripts/run_m7_sf2_release_matrix.sh 2>&1 | tee build/m7-sf2-release/qualification.log
+
+      - name: Run malformed-SF2 rejection contract
+        shell: bash
+        run: |
+          bash scripts/run_m7_sf2_robustness.sh 2>&1 | tee build/m7-sf2-release/robustness-report.txt
+
+      - name: Publish M7 portfolio summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f build/m7-sf2-release/sf2-release-portfolio.md ]]; then
+            cat build/m7-sf2-release/sf2-release-portfolio.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f build/m7-sf2-release/qualification.log ]]; then
+            {
+              echo
+              echo '## Bank-local SampleId space'
+              echo '```text'
+              grep '^M7_SF2_ID_SPACE' build/m7-sf2-release/qualification.log || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f build/m7-sf2-release/robustness-report.txt ]]; then
+            {
+              echo
+              echo '## Malformed SF2 rejection contract'
+              echo '```text'
+              grep '^M7_SF2_ROBUSTNESS' build/m7-sf2-release/robustness-report.txt || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload M7 native-SF2 qualification artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m7-sf2-release-portfolio
+          path: build/m7-sf2-release/
+          if-no-files-found: error

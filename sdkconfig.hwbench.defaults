@@ -1,24 +1,70 @@
-# Dedicated real-hardware ESP32-S3 N16R8 internal-flash storage + Program Prepare benchmark.
-# Layer this file after sdkconfig.defaults. It deliberately reuses the same
-# raw-FATFS fixture path exercised by QEMU so emulator and hardware runs parse
-# the exact same SF2 bytes and execute the exact same VFS -> PSRAM code path.
+# Dedicated physical ESP32-S3 N16R8 M6 qualification image.
+# Layer this file after sdkconfig.defaults. It reuses the same raw-FATFS fixture
+# as QEMU for storage/Program Prepare comparability, but physical timing is
+# explicitly marked as hardware qualification evidence.
 
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_qemu.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_qemu.csv"
 
+# Host GM128 qualification found 4.50 MiB to be the first tested arena that can
+# admit the representative 16-channel Active + worst READY transaction. This
+# dedicated hardware image measures whether that candidate leaves safe total
+# N16R8 memory headroom. The normal firmware default remains 4 MiB.
+CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592
+
+# Keep boot-only benchmark scratch out of scarce internal DRAM. Only explicitly
+# EXT_RAM_BSS_ATTR data moves; realtime render state remains in internal SRAM.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"
-# Real hardware uses the production-sized sweep: every 4/8/16/32/64 KiB pass
-# reads 4 MiB from the real SF2 smpl payload directly into the PSRAM arena.
+# Keep the established physical storage sweep at 4 MiB for direct comparison
+# with the 2026-10-15 baseline even though the qualification arena is 4.5 MiB.
 CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304
 
-# After residency initialization, exercise cold/warm Program Prepare, cache
-# pressure + safe LRU eviction, block-boundary commit/retire and release-tail
-# lifetime using the same mounted SF2.
+# Exercise cold/warm Program Prepare, cache pressure + safe LRU eviction,
+# block-boundary commit/retire and release-tail lifetime using the mounted SF2.
 CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y
 
-# Despite the historical QEMU name, this option only enables the generated
-# raw-flash FATFS fixture and its read-only mount. It is hardware-agnostic and
-# intentionally reused here until the configuration name is generalized.
+# Measure the actual Voice DSP render path at fixed Voice counts on hardware.
+CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y
+
+# The real-SF2 clean-audio gate nests Sf2PlaybackProgramPreparer::prepare()
+# and Sf2ResolvedZoneResolver::resolveProgram(). The 4aec425 ELF shows those
+# two frames alone exceed the ESP-IDF default 3584-byte main-task stack, before
+# accounting for the outer gate and Flash/FATFS/IPC frames. Give the physical
+# diagnostic image explicit headroom and arm the end-of-stack watchpoint so a
+# future regression fails at the overwrite instead of corrupting another task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
+# This diagnostic image must stop at the first CPU starvation event. Repeated
+# non-panic TWDT ISR output obscures the original failure site and can interrupt
+# SPI-flash/cache critical sections repeatedly. Keep the production/default
+# watchdog policy independent from this physical qualification policy.
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# Physical I2S/DMA qualification on KS_S3_KORVO_V4 / ESP32-S3-Korvo-2 audio
+# routing. Keep the Espressif Korvo-2 style standard 16-bit Philips wire frame,
+# with a mono application buffer feeding the single ES8311 DAC/speaker path.
+CONFIG_GM_SYNTH_I2S_QUAL_ENABLE=y
+CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO=16
+CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO=9
+CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO=45
+CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO=8
+CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM=8
+CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM=64
+CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE=1
+CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY=20
+# 16384 * 64 / 44100 = 23.78 s of measured continuous physical streaming.
+CONFIG_GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS=16384
+
+# Historical name retained for compatibility: this mounts the generated raw
+# flash FATFS fixture and is intentionally shared by QEMU and physical builds.
 CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y

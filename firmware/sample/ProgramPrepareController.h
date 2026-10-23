@@ -136,6 +136,8 @@ private:
     ResidentSampleView ensureResident(SampleId sample_id);
     bool evictOneSafeCacheSample();
     ProgramSnapshot* selectFreeSnapshot(std::uint8_t channel);
+    ResidentRecord* findRecord(SampleId sample_id);
+    ResidentRecord* selectReusableRecord();
     bool ensurePublished(const ResidentSampleView& view, bool* newly_published);
     bool recordMatchesView(const ResidentRecord& record, const ResidentSampleView& view) const;
     void initializeRecord(ResidentRecord& record, const ResidentSampleView& view);
@@ -152,6 +154,10 @@ private:
     ProgramSnapshotExchange& exchange_;
     SampleSource* source_ = nullptr;
 
+    // Publication records are a bounded pool sized by simultaneous residency,
+    // not by bank-local SampleId. Control maps arbitrary SampleIds onto these
+    // records and reuses a slot only after PublishedSampleDirectory confirms it
+    // is unpublished and has no live Voice ownership.
     std::array<ResidentRecord, SampleResidencyManager::kMaxResidentSamples> records_{};
     std::array<ChannelSnapshots, ProgramSnapshotExchange::kMidiChannels> snapshots_{};
 

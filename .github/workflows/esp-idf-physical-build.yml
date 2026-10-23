@@ -1,0 +1,90 @@
+name: esp-idf-physical-build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "sdkconfig.defaults"
+      - "sdkconfig.hwbench.defaults"
+      - "partitions_qemu.csv"
+      - "main/**"
+      - "firmware/**"
+      - "scripts/build_hwbench_idf.sh"
+      - "assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
+      - ".github/workflows/esp-idf-physical-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-physical-n16r8:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pinned ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: "v6.1"
+
+      - name: Build physical N16R8 M6 qualification image
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p reports
+          set +e
+          bash scripts/build_hwbench_idf.sh 2>&1 | tee reports/physical-build.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "${status}" -ne 0 ]]; then
+            diagnostics="$(grep -E -C 3 'fatal error:|error:|undefined reference|CMake Error|FAILED:|ninja: build stopped' reports/physical-build.log | tail -n 240 || true)"
+            {
+              echo "### Physical N16R8 build diagnostics"
+              echo '```text'
+              if [[ -n "${diagnostics}" ]]; then
+                printf '%s\n' "${diagnostics}"
+              else
+                tail -n 120 reports/physical-build.log
+              fi
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+
+            while IFS= read -r line; do
+              [[ -n "${line}" ]] && echo "::error title=Physical ESP-IDF build::${line}"
+            done < <(grep -E 'fatal error:|error:|undefined reference|CMake Error|ninja: build stopped' reports/physical-build.log | tail -n 20 || true)
+          fi
+
+          exit "${status}"
+
+      - name: Upload physical build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-n16r8-physical-build-diagnostics
+          path: |
+            reports/physical-build.log
+            sdkconfig.hwbench
+            build-hwbench/esp32s3_gm_synth.map
+          if-no-files-found: warn
+
+      - name: Upload physical N16R8 M6 qualification image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-n16r8-m6-qualification
+          path: |
+            build-hwbench/bootloader/bootloader.bin
+            build-hwbench/partition_table/partition-table.bin
+            build-hwbench/esp32s3_gm_synth.bin
+            build-hwbench/esp32s3_gm_synth.elf
+            build-hwbench/esp32s3_gm_synth.map
+            build-hwbench/qemu_sf2.bin
+            build-hwbench/flash_args
+            build-hwbench/flasher_args.json
+            sdkconfig.hwbench
+            sdkconfig.hwbench.defaults
+          if-no-files-found: error

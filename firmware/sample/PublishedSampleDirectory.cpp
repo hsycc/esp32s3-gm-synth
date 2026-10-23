@@ -37,23 +37,44 @@ bool PublishedSampleDirectory::setBankGeneration(std::uint32_t bank_generation) 
 }
 
 bool PublishedSampleDirectory::publish(SampleId sample_id, const ResidentRecord* record) {
-    if (!validSampleId(sample_id) || record == nullptr || record->pcm == nullptr ||
+    if (record == nullptr || record->pcm == nullptr ||
         record->descriptor.id != sample_id || record->descriptor.pcm_bytes == 0 ||
         record->bank_generation != bank_generation_.load(std::memory_order_acquire) ||
         record->sample_generation == 0) {
         return false;
     }
 
-    Slot& slot = slots_[static_cast<std::size_t>(sample_id)];
+    std::size_t first_empty = slots_.size();
+    std::size_t index = hashIndex(sample_id);
+    for (std::size_t probe = 0; probe < slots_.size(); ++probe) {
+        const ResidentRecord* current =
+            slots_[index].published.load(std::memory_order_seq_cst);
+        if (current == record) {
+            return true;
+        }
+        if (current != nullptr && current->descriptor.id == sample_id) {
+            publish_conflicts_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        if (current == nullptr && first_empty == slots_.size()) {
+            first_empty = index;
+        }
+        index = (index + 1u) & (slots_.size() - 1u);
+    }
+
+    if (first_empty == slots_.size()) {
+        publish_conflicts_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
     const ResidentRecord* expected = nullptr;
-    if (slot.published.compare_exchange_strong(
+    if (slots_[first_empty].published.compare_exchange_strong(
             expected,
             record,
             std::memory_order_seq_cst,
             std::memory_order_seq_cst)) {
         return true;
     }
-
     if (expected == record) {
         return true;
     }
@@ -63,57 +84,71 @@ bool PublishedSampleDirectory::publish(SampleId sample_id, const ResidentRecord*
 }
 
 const ResidentRecord* PublishedSampleDirectory::unpublish(SampleId sample_id) {
-    if (!validSampleId(sample_id)) {
-        return nullptr;
+    std::size_t index = hashIndex(sample_id);
+    for (std::size_t probe = 0; probe < slots_.size(); ++probe) {
+        Slot& slot = slots_[index];
+        const ResidentRecord* current = slot.published.load(std::memory_order_seq_cst);
+        if (current != nullptr && current->descriptor.id == sample_id) {
+            return slot.published.exchange(nullptr, std::memory_order_seq_cst);
+        }
+        index = (index + 1u) & (slots_.size() - 1u);
     }
-    return slots_[static_cast<std::size_t>(sample_id)].published.exchange(
-        nullptr,
-        std::memory_order_seq_cst);
+    return nullptr;
 }
 
 PublishedVoiceRef PublishedSampleDirectory::acquire(SampleId sample_id) {
     PublishedVoiceRef result{};
-    if (!validSampleId(sample_id)) {
-        acquire_misses_.fetch_add(1, std::memory_order_relaxed);
-        return result;
-    }
 
     // The entry counter and published pointer operations are seq_cst on
     // purpose. Together with unpublish()+canReclaim(), this gives a simple
     // proof: either this reader enters before the writer's reclaim check and
     // is observed, or the writer's unpublish occurs first and this reader can
-    // only observe nullptr/new publication, never the retired allocation.
+    // only observe nullptr/new publication, never a reclaimed record.
     active_acquirers_.fetch_add(1, std::memory_order_seq_cst);
-    Slot& slot = slots_[static_cast<std::size_t>(sample_id)];
 
     for (std::size_t attempt = 0; attempt < kAcquireAttempts; ++attempt) {
-        const ResidentRecord* record = slot.published.load(std::memory_order_seq_cst);
-        if (record == nullptr) {
+        std::size_t index = hashIndex(sample_id);
+        bool restart = false;
+
+        for (std::size_t probe = 0; probe < slots_.size(); ++probe) {
+            Slot& slot = slots_[index];
+            const ResidentRecord* record = slot.published.load(std::memory_order_seq_cst);
+            if (record != nullptr && record->descriptor.id == sample_id) {
+                const std::uint32_t bank_generation =
+                    bank_generation_.load(std::memory_order_acquire);
+                if (record->bank_generation != bank_generation) {
+                    break;
+                }
+
+                record->voice_refs.fetch_add(1, std::memory_order_acq_rel);
+
+                const ResidentRecord* confirm =
+                    slot.published.load(std::memory_order_seq_cst);
+                const std::uint32_t confirm_bank =
+                    bank_generation_.load(std::memory_order_acquire);
+                if (confirm == record && record->bank_generation == confirm_bank &&
+                    record->descriptor.id == sample_id) {
+                    live_voice_refs_.fetch_add(1, std::memory_order_acq_rel);
+                    result.record = record;
+                    result.sample_id = sample_id;
+                    result.bank_generation = record->bank_generation;
+                    result.sample_generation = record->sample_generation;
+                    acquire_successes_.fetch_add(1, std::memory_order_relaxed);
+                    active_acquirers_.fetch_sub(1, std::memory_order_seq_cst);
+                    return result;
+                }
+
+                record->voice_refs.fetch_sub(1, std::memory_order_acq_rel);
+                acquire_retries_.fetch_add(1, std::memory_order_relaxed);
+                restart = true;
+                break;
+            }
+            index = (index + 1u) & (slots_.size() - 1u);
+        }
+
+        if (!restart) {
             break;
         }
-
-        const std::uint32_t bank_generation = bank_generation_.load(std::memory_order_acquire);
-        if (record->descriptor.id != sample_id || record->bank_generation != bank_generation) {
-            break;
-        }
-
-        record->voice_refs.fetch_add(1, std::memory_order_acq_rel);
-
-        const ResidentRecord* confirm = slot.published.load(std::memory_order_seq_cst);
-        const std::uint32_t confirm_bank = bank_generation_.load(std::memory_order_acquire);
-        if (confirm == record && record->bank_generation == confirm_bank) {
-            live_voice_refs_.fetch_add(1, std::memory_order_acq_rel);
-            result.record = record;
-            result.sample_id = sample_id;
-            result.bank_generation = record->bank_generation;
-            result.sample_generation = record->sample_generation;
-            acquire_successes_.fetch_add(1, std::memory_order_relaxed);
-            active_acquirers_.fetch_sub(1, std::memory_order_seq_cst);
-            return result;
-        }
-
-        record->voice_refs.fetch_sub(1, std::memory_order_acq_rel);
-        acquire_retries_.fetch_add(1, std::memory_order_relaxed);
     }
 
     acquire_misses_.fetch_add(1, std::memory_order_relaxed);
@@ -163,10 +198,16 @@ bool PublishedSampleDirectory::canReclaim(const ResidentRecord* record) const {
 }
 
 const ResidentRecord* PublishedSampleDirectory::published(SampleId sample_id) const {
-    if (!validSampleId(sample_id)) {
-        return nullptr;
+    std::size_t index = hashIndex(sample_id);
+    for (std::size_t probe = 0; probe < slots_.size(); ++probe) {
+        const ResidentRecord* record =
+            slots_[index].published.load(std::memory_order_acquire);
+        if (record != nullptr && record->descriptor.id == sample_id) {
+            return record;
+        }
+        index = (index + 1u) & (slots_.size() - 1u);
     }
-    return slots_[static_cast<std::size_t>(sample_id)].published.load(std::memory_order_acquire);
+    return nullptr;
 }
 
 PublicationStats PublishedSampleDirectory::stats() const {

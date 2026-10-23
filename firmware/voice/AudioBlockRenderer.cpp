@@ -28,7 +28,18 @@ void AudioBlockRenderer::render(std::int16_t* interleaved_stereo) {
     }
 
     mix_.fill(0);
-    voices_.renderAdd(mix_.data(), kFramesPerBlock);
+    reverb_send_.fill(0);
+    chorus_send_.fill(0);
+    voices_.renderAddWithEffects(
+        mix_.data(),
+        reverb_send_.data(),
+        chorus_send_.data(),
+        kFramesPerBlock);
+    effects_.processAdd(
+        chorus_send_.data(),
+        reverb_send_.data(),
+        mix_.data(),
+        kFramesPerBlock);
 
     for (std::size_t index = 0; index < mix_.size(); ++index) {
         const std::int32_t value = mix_[index];

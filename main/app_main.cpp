@@ -1,8 +1,15 @@
 #include "sdkconfig.h"
 
+#include "DspStageTimingBenchmark.h"
+#include "EffectsTimingBenchmark.h"
 #include "ProgramPrepareBenchmark.h"
+#include "QualificationIdleMonitor.h"
 #include "RenderTimingBenchmark.h"
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+#include "PhysicalCleanSf2AudibleGate.h"
+#endif
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_psram.h"
 #include "esp_system.h"
@@ -38,6 +45,24 @@ void logPsram(const char* phase, const gm_synth::platform::PsramHeapStats& stats
         static_cast<unsigned>(stats.minimum_free_bytes));
 }
 
+void logInternalHeap(const char* phase) {
+    constexpr std::uint32_t kCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    ESP_LOGI(
+        kTag,
+        "INTERNAL_HEAP %s: total=%u free=%u largest=%u minimum_free=%u bytes",
+        phase,
+        static_cast<unsigned>(heap_caps_get_total_size(kCaps)),
+        static_cast<unsigned>(heap_caps_get_free_size(kCaps)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(kCaps)),
+        static_cast<unsigned>(heap_caps_get_minimum_free_size(kCaps)));
+}
+
+bool storageBetweenCaseIdle(std::size_t chunk_size, void*) {
+    ESP_LOGI(kTag, "Storage benchmark case complete: chunk=%u; verifying CPU0 idle progress",
+             static_cast<unsigned>(chunk_size));
+    return gm_synth::bringup::verifiedQualificationIdleWindow("storage_case");
+}
+
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
 bool mountQemuSf2Fixture() {
     esp_vfs_fat_mount_config_t mount_config{};
@@ -52,16 +77,16 @@ bool mountQemuSf2Fixture() {
         "qemu_sf2",
         &mount_config);
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "QEMU FATFS mount failed: %s", esp_err_to_name(err));
+        ESP_LOGE(kTag, "Benchmark FATFS mount failed: %s", esp_err_to_name(err));
         return false;
     }
 
-    ESP_LOGI(kTag, "QEMU FATFS mounted: base=/sf2 partition=qemu_sf2");
+    ESP_LOGI(kTag, "Benchmark FATFS mounted: base=/sf2 partition=qemu_sf2");
     return true;
 }
 #endif
 
-void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
+bool runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
 #ifdef CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE
     using gm_synth::platform::EspStorageBenchmarkSweepResult;
     using gm_synth::platform::runEspStorageBenchmarkSweep;
@@ -77,7 +102,7 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             kTag,
             "Storage benchmark enabled but VFS path cannot be opened: %s (filesystem must already be mounted)",
             path);
-        return;
+        return false;
     }
 
     ESP_LOGI(
@@ -86,10 +111,6 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
         path,
         static_cast<unsigned long long>(reader.size()));
 
-    // Sf2SampleSource owns metadata for up to 512 samples and is ~16 KiB. The
-    // ESP-IDF main task stack defaults to only 3584 bytes, so this object must
-    // not be an automatic local. begin() fully resets its parser state before
-    // each use, which makes static storage safe for this one-shot bring-up path.
     static Sf2SampleSource source;
     ESP_LOGI(
         kTag,
@@ -102,7 +123,7 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             "Storage benchmark SF2 parse failed: path=%s error=%u",
             path,
             static_cast<unsigned>(source.lastError()));
-        return;
+        return false;
     }
 
     ESP_LOGI(
@@ -111,14 +132,12 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
         static_cast<unsigned>(source.sampleCount()));
 
 #ifdef CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST
-    // The fixture is the pinned FM/GM ~6 MiB subset. This makes both emulator
-    // and physical-board runs validate real SoundFont structure.
     if (source.sampleCount() != 67u) {
         ESP_LOGE(
             kTag,
-            "QEMU SF2 fixture sample-count mismatch: expected=67 actual=%u",
+            "Benchmark SF2 fixture sample-count mismatch: expected=67 actual=%u",
             static_cast<unsigned>(source.sampleCount()));
-        return;
+        return false;
     }
 #endif
 
@@ -129,7 +148,7 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
 
     if (benchmark_bytes == 0u) {
         ESP_LOGE(kTag, "Storage benchmark has no readable smpl payload bytes");
-        return;
+        return false;
     }
 
     ESP_LOGI(
@@ -140,9 +159,6 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
         static_cast<unsigned>(source.smplPayloadBytes()),
         static_cast<unsigned>(benchmark_bytes));
 
-    // Keep benchmark result storage static too. It is small compared with the
-    // parser metadata, but this path deliberately keeps the main-task stack
-    // bounded and independent of benchmark telemetry growth.
     static EspStorageBenchmarkSweepResult sweep{};
     if (!runEspStorageBenchmarkSweep(
             reader,
@@ -150,12 +166,25 @@ void runOptionalStorageBenchmark(gm_synth::platform::EspPsramArena& arena) {
             arena.capacity(),
             source.smplPayloadOffset(),
             benchmark_bytes,
-            &sweep)) {
-        ESP_LOGW(kTag, "One or more storage benchmark chunk-size passes failed");
+            &sweep,
+            &storageBetweenCaseIdle,
+            nullptr)) {
+        ESP_LOGE(kTag, "Storage benchmark sweep or between-case idle verification failed");
+        return false;
     }
+    return true;
 #else
     (void)arena;
+    return true;
 #endif
+}
+
+bool requireIdleWindow(const char* phase) {
+    if (gm_synth::bringup::verifiedQualificationIdleWindow(phase)) {
+        return true;
+    }
+    ESP_LOGE(kTag, "Physical qualification idle verification FAILED: phase=%s", phase);
+    return false;
 }
 
 }  // namespace
@@ -169,6 +198,12 @@ extern "C" void app_main(void) {
     ESP_LOGI(
         kTag,
         "Reference module: ESP32-S3-WROOM-1-N16R8 (16 MiB flash / 8 MiB octal PSRAM)");
+
+    if (!gm_synth::bringup::initializeQualificationIdleMonitor() ||
+        !requireIdleWindow("startup")) {
+        ESP_LOGE(kTag, "Qualification idle monitor failed before benchmarks");
+        return;
+    }
 
     const std::size_t detected_psram_bytes = esp_psram_get_size();
     ESP_LOGI(
@@ -185,6 +220,7 @@ extern "C" void app_main(void) {
 
     const auto before = EspPsramArena::heapStats();
     logPsram("before arena", before);
+    logInternalHeap("before arena");
 
     constexpr std::size_t kRequestedArenaBytes = CONFIG_GM_SYNTH_PCM_ARENA_BYTES;
     ESP_LOGI(
@@ -208,6 +244,7 @@ extern "C" void app_main(void) {
     if (!arena.allocate(kRequestedArenaBytes)) {
         const auto failed = EspPsramArena::heapStats();
         logPsram("after failed arena allocation", failed);
+        logInternalHeap("after failed arena allocation");
         ESP_LOGE(
             kTag,
             "PCM arena allocation failed: requested=%u largest_free=%u",
@@ -230,10 +267,10 @@ extern "C" void app_main(void) {
     }
 #endif
 
-    // Bring-up storage sweep intentionally runs before residency metadata starts
-    // using the arena. It overwrites PCM bytes only; later sample loads replace
-    // those bytes under residency ownership.
-    runOptionalStorageBenchmark(arena);
+    if (!runOptionalStorageBenchmark(arena) || !requireIdleWindow("after_storage")) {
+        ESP_LOGE(kTag, "Storage qualification FAILED");
+        return;
+    }
 
     if (!residency.begin(arena.data(), arena.capacity())) {
         ESP_LOGE(kTag, "SampleResidencyManager failed to initialize over PSRAM arena");
@@ -243,6 +280,7 @@ extern "C" void app_main(void) {
 
     const auto after = EspPsramArena::heapStats();
     logPsram("after arena", after);
+    logInternalHeap("after arena");
 
     const auto residency_stats = residency.stats();
     ESP_LOGI(
@@ -258,12 +296,75 @@ extern "C" void app_main(void) {
         return;
     }
 
+    logPsram("after Program Prepare", EspPsramArena::heapStats());
+    logInternalHeap("after Program Prepare");
+    if (!requireIdleWindow("after_program_prepare")) {
+        return;
+    }
+
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    if (!gm_synth::bringup::runPhysicalCleanSf2AudibleGate(residency)) {
+        ESP_LOGE(kTag, "Clean real-SF2 audible qualification FAILED");
+        return;
+    }
+    logPsram("after clean SF2 audio", EspPsramArena::heapStats());
+    logInternalHeap("after clean SF2 audio");
+    if (!requireIdleWindow("after_clean_sf2")) {
+        return;
+    }
+#endif
+
     if (!gm_synth::bringup::runOptionalRenderTimingBenchmark()) {
         ESP_LOGE(kTag, "Render timing benchmark FAILED");
         return;
     }
+    if (!requireIdleWindow("after_render_benchmark")) {
+        return;
+    }
 
+    if (!gm_synth::bringup::runOptionalDspStageTimingBenchmark()) {
+        ESP_LOGE(kTag, "DSP stage timing benchmark FAILED");
+        return;
+    }
+    if (!requireIdleWindow("after_dsp_stage_benchmark")) {
+        return;
+    }
+
+    if (!gm_synth::bringup::runOptionalEffectsTimingBenchmark()) {
+        ESP_LOGE(kTag, "Effects timing benchmark FAILED");
+        return;
+    }
+    if (!requireIdleWindow("after_effects_benchmark")) {
+        return;
+    }
+
+    logPsram("after render benchmark", EspPsramArena::heapStats());
+    logInternalHeap("after render benchmark");
+
+    if (!gm_synth::bringup::qualificationIdleMonitorHealthy()) {
+        ESP_LOGE(kTag, "Qualification idle monitor sticky health is FAILED");
+        return;
+    }
+
+    const auto final_residency = residency.stats();
     ESP_LOGI(
         kTag,
-        "M6 bring-up core linked successfully; physical I2S output is intentionally not started in this target");
+        "M6_QUAL_MEMORY arena_capacity=%u arena_used=%u arena_high_water=%u arena_largest_free_span=%u resident_samples=%u allocation_failures=%u stale_reference_faults=%u",
+        static_cast<unsigned>(final_residency.capacity_bytes),
+        static_cast<unsigned>(final_residency.used_bytes),
+        static_cast<unsigned>(final_residency.high_water_bytes),
+        static_cast<unsigned>(final_residency.largest_free_span_bytes),
+        static_cast<unsigned>(final_residency.resident_sample_count),
+        static_cast<unsigned>(final_residency.allocation_failures),
+        static_cast<unsigned>(final_residency.stale_reference_faults));
+
+#ifdef CONFIG_GM_SYNTH_I2S_QUAL_ENABLE
+    ESP_LOGI(
+        kTag,
+        "M6 bring-up qualification passed including clean real-SF2 audio, physical I2S/DMA, ES8311/PA, realtime music stress and full-FX polyphony characterization");
+#else
+    ESP_LOGI(
+        kTag,
+        "M6 bring-up core linked successfully; physical I2S qualification is disabled in this target");
+#endif
 }

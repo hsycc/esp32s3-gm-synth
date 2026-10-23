@@ -3,7 +3,6 @@
 #include "../sample/SampleSource.h"
 #include "../storage/RandomAccessReader.h"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -11,7 +10,10 @@ namespace gm_synth::sf2 {
 
 class Sf2SampleSource final : public sample::SampleSource {
 public:
-    static constexpr std::size_t kMaxSamples = sample::SampleResidencyManager::kMaxResidentSamples;
+    // SF2 sampleID generators and shdr sample links are 16-bit indices. Keep
+    // the source/addressable bank limit independent from the number of samples
+    // that may be resident in PSRAM at the same time.
+    static constexpr std::size_t kMaxSamples = 65536u;
     static constexpr std::size_t kReadChunkBytes = 32u * 1024u;
 
     enum class Error : std::uint8_t {
@@ -38,12 +40,11 @@ public:
     std::size_t sampleCount() const { return sample_count_; }
     std::uint64_t smplPayloadOffset() const { return smpl_payload_offset_; }
     std::uint32_t smplPayloadBytes() const { return smpl_payload_bytes_; }
-    std::uint64_t sourceByteOffset(sample::SampleId sample_id) const;
+    std::uint64_t sourceByteOffset(sample::SampleId sample_id);
     Error lastError() const { return last_error_; }
 
 private:
     struct SampleRecord {
-        bool valid = false;
         bool rom = false;
         std::uint32_t start = 0;
         std::uint32_t end = 0;
@@ -62,6 +63,7 @@ private:
         std::uint32_t list_payload_size,
         const char expected_type[4]);
     bool parseSampleHeaders();
+    bool readSampleRecord(sample::SampleId sample_id, SampleRecord* record);
     bool readExact(std::uint64_t offset, void* destination, std::size_t bytes);
     void setError(Error error) { last_error_ = error; }
 
@@ -71,7 +73,6 @@ private:
     std::uint32_t smpl_payload_bytes_ = 0;
     std::uint64_t shdr_payload_offset_ = 0;
     std::uint32_t shdr_payload_bytes_ = 0;
-    std::array<SampleRecord, kMaxSamples> samples_{};
     std::size_t sample_count_ = 0;
     Error last_error_ = Error::None;
 };

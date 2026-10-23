@@ -16,6 +16,14 @@ enum class EventType : std::uint8_t {
     NoteOff,
     ControlChange,
     ProgramChange,
+    PitchBend,
+    // Channel Pressure carries its 7-bit pressure value in data1. This is a
+    // channel-wide SoundFont modulator source, distinct from poly key pressure.
+    ChannelPressure,
+    // A MIDI decoder may translate the GM System On SysEx message into this
+    // compact system-level event before it enters the realtime queue. The audio
+    // side performs only bounded state reset + Program Change handoff work.
+    GmReset,
 };
 
 struct RealtimeEvent {
@@ -24,6 +32,7 @@ struct RealtimeEvent {
     std::uint8_t channel = 0;
     std::uint8_t data1 = 0;
     std::uint8_t data2 = 0;
+    // PitchBend uses the full 14-bit value here (0..16383, center 8192).
     std::uint16_t value = 0;
 
     bool valid() const { return channel < 16; }

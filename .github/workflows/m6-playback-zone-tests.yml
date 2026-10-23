@@ -4,10 +4,17 @@ on:
   push:
     branches: [main]
     paths:
+      - "firmware/gm/MidiChannelState.*"
       - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/PlaybackProgramKeyIndex.*"
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/sf2/Sf2ModulationMath.*"
+      - "firmware/sf2/Sf2FilterMath.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceRuntimeControl.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
@@ -16,10 +23,17 @@ on:
       - ".github/workflows/m6-playback-zone-tests.yml"
   pull_request:
     paths:
+      - "firmware/gm/MidiChannelState.*"
       - "firmware/gm/PlaybackProgramSnapshot.*"
+      - "firmware/gm/PlaybackProgramKeyIndex.*"
       - "firmware/gm/ZoneResolver.*"
       - "firmware/sample/ProgramSnapshot.*"
+      - "firmware/sf2/Sf2ModulationMath.*"
+      - "firmware/sf2/Sf2FilterMath.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceRuntimeControl.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "firmware/realtime/RealtimeEventQueue.*"
       - "firmware/realtime/BlockEventScheduler.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
@@ -118,6 +132,12 @@ jobs:
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/sample/ProgramSnapshot.cpp \
             firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceRuntimeControl.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            firmware/voice/GlobalEffectsProcessor.cpp \
+            firmware/sf2/Sf2ModulationMath.cpp \
+            firmware/sf2/Sf2FilterMath.cpp \
+            firmware/gm/MidiChannelState.cpp \
             firmware/gm/PlaybackProgramSnapshot.cpp \
             firmware/gm/ZoneResolver.cpp \
             firmware/realtime/RealtimeEventQueue.cpp \

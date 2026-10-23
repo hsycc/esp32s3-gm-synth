@@ -73,6 +73,12 @@ jobs:
         run: |
           set -euo pipefail
           grep -q '^CONFIG_IDF_TARGET="esp32s3"$' sdkconfig
+          grep -q '^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y$' sdkconfig
+          grep -q '^CONFIG_COMPILER_OPTIMIZATION_PERF=y$' sdkconfig
+          if grep -q '^CONFIG_COMPILER_OPTIMIZATION_DEBUG=y$' sdkconfig; then
+            echo "Production/default firmware must not use DEBUG/-Og optimization" >&2
+            exit 1
+          fi
           grep -q '^CONFIG_ESPTOOLPY_FLASHMODE_DIO=y$' sdkconfig
           grep -q '^CONFIG_ESPTOOLPY_FLASHFREQ_80M=y$' sdkconfig
           grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' sdkconfig
@@ -124,16 +130,40 @@ jobs:
           set -euo pipefail
           python -m tools.render_benchmark.report \
             reports/qemu-sf2-flash.log \
-            --expected-voices 4 8 12 16 20 24 \
+            --expected-voices 1 4 8 12 16 18 20 24 \
             --title "ESP32-S3 QEMU Voice DSP Render Timing Telemetry" \
             --output reports/qemu-render-timing.md
           cat reports/qemu-render-timing.md
 
-      - name: Build physical N16R8 storage benchmark image
+      - name: Build physical N16R8 M6 qualification image
         shell: bash
         run: |
-          set -euo pipefail
-          bash scripts/build_hwbench_idf.sh
+          set -uo pipefail
+          mkdir -p reports
+          set +e
+          bash scripts/build_hwbench_idf.sh 2>&1 | tee reports/physical-build.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "${status}" -ne 0 ]]; then
+            diagnostics="$(grep -E -C 3 'fatal error:|error:|undefined reference|CMake Error|FAILED:|ninja: build stopped' reports/physical-build.log | tail -n 240 || true)"
+            {
+              echo "### Physical N16R8 build diagnostics"
+              echo '```text'
+              if [[ -n "${diagnostics}" ]]; then
+                printf '%s\n' "${diagnostics}"
+              else
+                tail -n 120 reports/physical-build.log
+              fi
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+
+            while IFS= read -r line; do
+              [[ -n "${line}" ]] && echo "::error title=Physical ESP-IDF build::${line}"
+            done < <(grep -E 'fatal error:|error:|undefined reference|CMake Error|ninja: build stopped' reports/physical-build.log | tail -n 20 || true)
+          fi
+
+          exit "${status}"
 
       - name: Upload QEMU diagnostics
         if: always()
@@ -146,15 +176,16 @@ jobs:
             reports/qemu-sf2-flash-preflight.log
             reports/qemu-program-prepare.md
             reports/qemu-render-timing.md
+            reports/physical-build.log
             build-qemu-sf2/esp32s3_gm_synth.elf
             build-qemu-sf2/esp32s3_gm_synth.map
             sdkconfig.qemu
           if-no-files-found: warn
 
-      - name: Upload physical N16R8 storage benchmark image
+      - name: Upload physical N16R8 M6 qualification image
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-n16r8-storage-benchmark
+          name: esp32s3-n16r8-m6-qualification
           path: |
             build-hwbench/bootloader/bootloader.bin
             build-hwbench/partition_table/partition-table.bin

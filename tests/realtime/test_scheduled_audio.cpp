@@ -234,6 +234,36 @@ void testLateEventClampsToFrameZero() {
     voices.allSoundOff();
 }
 
+void testIndependentPostFxMasterGain() {
+    for (const std::int32_t gain : {
+             kQ15Unity, std::int32_t{16384}, std::int32_t{0}}) {
+        PublishedFixture fixture;
+        VoicePool voices(fixture.directory);
+        RealtimeEventQueue queue;
+        BlockEventScheduler scheduler(queue);
+        DispatchContext dispatch;
+        ScheduledAudioBlockRenderer renderer(voices, scheduler, applyEvent, &dispatch);
+
+        assert(renderer.masterGainQ15() == kQ15Unity);
+        assert(!renderer.setMasterGainQ15(-1));
+        assert(!renderer.setMasterGainQ15(kQ15Unity + 1));
+        assert(renderer.masterGainQ15() == kQ15Unity);
+        assert(renderer.setMasterGainQ15(gain));
+        assert(renderer.masterGainQ15() == gain);
+        assert(queue.tryPush(note(1000, 60)));
+
+        std::array<std::int16_t, 128> output{};
+        renderer.render(1000, output.data());
+        const auto expected = static_cast<std::int16_t>(
+            (std::int64_t{1000} * gain) / kQ15Unity);
+        for (std::size_t frame = 0; frame < 64; ++frame) {
+            assertStereoFrame(output, frame, expected);
+        }
+        assert(renderer.stats().clipped_samples == 0);
+        assert(renderer.stats().events_applied == 1);
+    }
+}
+
 void testQueueOrderingAndCapacityAreExplicit() {
     RealtimeEventQueue queue;
     assert(queue.tryPush(note(100, 60)));
@@ -257,6 +287,7 @@ int main() {
     testBlockEndEventMovesToNextBlockOffsetZero();
     testEqualTimestampPreservesFifo();
     testLateEventClampsToFrameZero();
+    testIndependentPostFxMasterGain();
     testQueueOrderingAndCapacityAreExplicit();
     std::cout << "scheduled audio tests passed\n";
     return 0;

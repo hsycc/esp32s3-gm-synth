@@ -3,11 +3,255 @@
 #include "util/SaturatingCounter.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <utility>
 
 namespace gm_synth::voice {
 namespace {
+
+constexpr std::uint8_t kModulationControlFrames = 16;
+constexpr std::array<std::uint32_t, 12> kSemitoneRatioQ20{
+    1048576u, 1110928u, 1176987u, 1246974u,
+    1321123u, 1399681u, 1482910u, 1571089u,
+    1664511u, 1763488u, 1868350u, 1979448u,
+};
+constexpr std::array<std::uint32_t, 100> kCentRatioQ20{
+    1048576u, 1049182u, 1049788u, 1050395u, 1051002u, 1051609u, 1052216u, 1052824u, 1053433u, 1054041u,
+    1054650u, 1055260u, 1055869u, 1056479u, 1057090u, 1057701u, 1058312u, 1058923u, 1059535u, 1060147u,
+    1060760u, 1061373u, 1061986u, 1062600u, 1063214u, 1063828u, 1064443u, 1065058u, 1065673u, 1066289u,
+    1066905u, 1067521u, 1068138u, 1068755u, 1069373u, 1069991u, 1070609u, 1071227u, 1071846u, 1072466u,
+    1073085u, 1073705u, 1074326u, 1074946u, 1075568u, 1076189u, 1076811u, 1077433u, 1078055u, 1078678u,
+    1079302u, 1079925u, 1080549u, 1081174u, 1081798u, 1082423u, 1083049u, 1083674u, 1084301u, 1084927u,
+    1085554u, 1086181u, 1086809u, 1087437u, 1088065u, 1088694u, 1089323u, 1089952u, 1090582u, 1091212u,
+    1091843u, 1092473u, 1093105u, 1093736u, 1094368u, 1095000u, 1095633u, 1096266u, 1096900u, 1097533u,
+    1098167u, 1098802u, 1099437u, 1100072u, 1100708u, 1101344u, 1101980u, 1102617u, 1103254u, 1103891u,
+    1104529u, 1105167u, 1105806u, 1106445u, 1107084u, 1107724u, 1108364u, 1109004u, 1109645u, 1110286u,
+};
+
+// Q15 SoundFont convex curve used by the modulation-envelope attack. This is
+// the inverse/reverse of the same 128-point SF2 concave controller curve used
+// by Sf2ModulationMath, keeping log/pow out of the realtime path.
+constexpr std::array<std::uint16_t, 128> kModEnvelopeAttackConvexQ15{{
+    0, 4044, 8154, 10558, 12264, 13587, 14668, 15582, 16374, 17072, 17697, 18262, 18778, 19253, 19692, 20101,
+    20484, 20843, 21182, 21503, 21807, 22096, 22372, 22635, 22888, 23130, 23362, 23586, 23802, 24010, 24211, 24405,
+    24594, 24776, 24953, 25125, 25292, 25454, 25613, 25767, 25917, 26063, 26206, 26346, 26482, 26615, 26745, 26873,
+    26998, 27120, 27240, 27357, 27472, 27585, 27696, 27805, 27912, 28017, 28120, 28221, 28321, 28419, 28515, 28610,
+    28704, 28795, 28886, 28975, 29063, 29150, 29235, 29319, 29402, 29484, 29564, 29644, 29723, 29800, 29877, 29952,
+    30027, 30100, 30173, 30245, 30316, 30386, 30455, 30524, 30592, 30659, 30725, 30791, 30855, 30919, 30983, 31046,
+    31108, 31169, 31230, 31290, 31350, 31409, 31467, 31525, 31582, 31639, 31695, 31751, 31806, 31861, 31915, 31969,
+    32022, 32074, 32127, 32178, 32230, 32281, 32331, 32381, 32431, 32480, 32529, 32577, 32625, 32673, 32720, 32767,
+}};
+
+constexpr std::uint32_t kRatioFractionBits = 20;
+constexpr std::uint64_t kRatioRounding = std::uint64_t{1} << (kRatioFractionBits - 1u);
+
+std::uint64_t multiplyRatioQ20(std::uint64_t value, std::uint32_t ratio_q20) {
+    if (value == 0 || ratio_q20 == 0) {
+        return 0;
+    }
+    const std::uint64_t max_product =
+        std::numeric_limits<std::uint64_t>::max() - kRatioRounding;
+    if (value > max_product / ratio_q20) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    return (value * ratio_q20 + kRatioRounding) >> kRatioFractionBits;
+}
+
+std::uint64_t transposeSemitonesFixed(
+    std::uint64_t root_phase_increment_q32,
+    int semitone_delta) {
+    if (root_phase_increment_q32 == 0) {
+        return 0;
+    }
+
+    int octaves = semitone_delta / 12;
+    int remainder = semitone_delta % 12;
+    if (remainder < 0) {
+        remainder += 12;
+        --octaves;
+    }
+
+    std::uint64_t value = multiplyRatioQ20(
+        root_phase_increment_q32,
+        kSemitoneRatioQ20[static_cast<std::size_t>(remainder)]);
+    if (octaves > 0) {
+        if (octaves >= 64 ||
+            value > (std::numeric_limits<std::uint64_t>::max() >> octaves)) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        value <<= octaves;
+    } else if (octaves < 0) {
+        const int shift = -octaves;
+        if (shift >= 64) {
+            return 1;
+        }
+        value >>= shift;
+    }
+    return std::max<std::uint64_t>(value, 1u);
+}
+
+std::uint64_t transposeCentsFixed(
+    std::uint64_t root_phase_increment_q32,
+    int cents_delta) {
+    if (root_phase_increment_q32 == 0) {
+        return 0;
+    }
+    int semitones = cents_delta / 100;
+    int cents = cents_delta % 100;
+    if (cents < 0) {
+        cents += 100;
+        --semitones;
+    }
+    const std::uint64_t semitone_value = transposeSemitonesFixed(
+        root_phase_increment_q32,
+        semitones);
+    return std::max<std::uint64_t>(
+        multiplyRatioQ20(
+            semitone_value,
+            kCentRatioQ20[static_cast<std::size_t>(cents)]),
+        1u);
+}
+
+std::int32_t triangleLevelQ15(std::uint32_t phase_q32) {
+    constexpr std::uint32_t kQuarterMask = (std::uint32_t{1} << 30u) - 1u;
+    const std::uint32_t quadrant = phase_q32 >> 30u;
+    const std::uint32_t fraction = phase_q32 & kQuarterMask;
+    const std::int32_t ramp = static_cast<std::int32_t>(
+        (static_cast<std::uint64_t>(fraction) * kQ15Unity +
+         (std::uint64_t{1} << 29u)) >> 30u);
+    switch (quadrant) {
+        case 0:
+            return ramp;
+        case 1:
+            return kQ15Unity - ramp;
+        case 2:
+            return -ramp;
+        default:
+            return -kQ15Unity + ramp;
+    }
+}
+
+std::int32_t scaleSignedQ15(std::int32_t value, std::int32_t q15) {
+    const std::int64_t scaled = static_cast<std::int64_t>(value) * q15;
+    if (scaled >= 0) {
+        return static_cast<std::int32_t>((scaled + 16383) / 32767);
+    }
+    return -static_cast<std::int32_t>((-scaled + 16383) / 32767);
+}
+
+struct LfoTablePosition {
+    std::size_t lower = 0;
+    std::uint32_t fraction_q16 = 0;
+};
+
+LfoTablePosition lfoTablePosition(std::int32_t level_q15) {
+    const std::int32_t clamped = std::clamp(level_q15, -kQ15Unity, kQ15Unity);
+    const std::uint64_t normalized = static_cast<std::uint64_t>(clamped + kQ15Unity);
+    constexpr std::uint64_t kSpan = static_cast<std::uint64_t>(kQ15Unity) * 2u;
+    constexpr std::uint64_t kSegments = kLfoControlPointCount - 1u;
+    const std::uint64_t position_q16 =
+        (normalized * kSegments * 65536u + kSpan / 2u) / kSpan;
+    if (position_q16 >= kSegments * 65536u) {
+        return LfoTablePosition{kLfoControlPointCount - 1u, 0};
+    }
+    return LfoTablePosition{
+        static_cast<std::size_t>(position_q16 >> 16u),
+        static_cast<std::uint32_t>(position_q16 & 0xffffu),
+    };
+}
+
+std::int32_t interpolateI32(
+    std::int32_t a,
+    std::int32_t b,
+    std::uint32_t fraction_q16) {
+    const std::int64_t delta = static_cast<std::int64_t>(b) - a;
+    const std::int64_t scaled = delta * fraction_q16;
+    const std::int64_t rounded = scaled >= 0
+        ? (scaled + 32768) >> 16u
+        : -(((-scaled) + 32768) >> 16u);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(a) + rounded,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+}
+
+StereoGainQ15 interpolateGainTable(
+    const LfoGainTable& table,
+    std::int32_t level_q15) {
+    if (!table.enabled) {
+        return StereoGainQ15{};
+    }
+    const LfoTablePosition position = lfoTablePosition(level_q15);
+    if (position.lower + 1u >= table.points.size()) {
+        return table.points.back();
+    }
+    const StereoGainQ15& a = table.points[position.lower];
+    const StereoGainQ15& b = table.points[position.lower + 1u];
+    return StereoGainQ15{
+        interpolateI32(a.left, b.left, position.fraction_q16),
+        interpolateI32(a.right, b.right, position.fraction_q16),
+    };
+}
+
+BiquadLowpassConfig interpolateDynamicLowpassTable(
+    const DynamicLowpassTable& table,
+    std::int32_t offset_cents) {
+    if (!table.enabled) {
+        return BiquadLowpassConfig{};
+    }
+    if (table.min_offset_cents == table.max_offset_cents) {
+        return table.points.front();
+    }
+
+    const std::int32_t clamped = std::clamp(
+        offset_cents,
+        table.min_offset_cents,
+        table.max_offset_cents);
+    const std::uint64_t normalized = static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(clamped) - table.min_offset_cents);
+    const std::uint64_t span = static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(table.max_offset_cents) - table.min_offset_cents);
+    constexpr std::uint64_t kSegments = kLfoControlPointCount - 1u;
+    const std::uint64_t position_q16 =
+        (normalized * kSegments * 65536u + span / 2u) / span;
+    const std::size_t lower = std::min<std::size_t>(
+        static_cast<std::size_t>(position_q16 >> 16u),
+        table.points.size() - 1u);
+    if (lower + 1u >= table.points.size()) {
+        return table.points.back();
+    }
+    const std::uint32_t fraction_q16 = static_cast<std::uint32_t>(position_q16 & 0xffffu);
+    const BiquadLowpassConfig& a = table.points[lower];
+    const BiquadLowpassConfig& b = table.points[lower + 1u];
+    BiquadLowpassConfig result{};
+    result.enabled = true;
+    result.a0_q24 = interpolateI32(a.a0_q24, b.a0_q24, fraction_q16);
+    result.a1_q24 = interpolateI32(a.a1_q24, b.a1_q24, fraction_q16);
+    result.b1_q24 = interpolateI32(a.b1_q24, b.b1_q24, fraction_q16);
+    result.b2_q24 = interpolateI32(a.b2_q24, b.b2_q24, fraction_q16);
+    return result;
+}
+
+std::int32_t convexAttackLevelQ15(std::int32_t linear_level_q15) {
+    const std::int32_t clamped = std::clamp(linear_level_q15, std::int32_t{0}, kQ15Unity);
+    if (clamped == 0 || clamped == kQ15Unity) {
+        return clamped;
+    }
+    const std::uint64_t position_q16 =
+        (static_cast<std::uint64_t>(clamped) * 127u * 65536u + kQ15Unity / 2u) /
+        static_cast<std::uint64_t>(kQ15Unity);
+    const std::size_t lower = std::min<std::size_t>(
+        static_cast<std::size_t>(position_q16 >> 16u),
+        kModEnvelopeAttackConvexQ15.size() - 1u);
+    if (lower + 1u >= kModEnvelopeAttackConvexQ15.size()) {
+        return kModEnvelopeAttackConvexQ15.back();
+    }
+    return interpolateI32(
+        kModEnvelopeAttackConvexQ15[lower],
+        kModEnvelopeAttackConvexQ15[lower + 1u],
+        static_cast<std::uint32_t>(position_q16 & 0xffffu));
+}
 
 std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
     if (gain_q15 >= kQ15Unity) {
@@ -22,6 +266,20 @@ std::int32_t scaleSampleQ15(std::int32_t sample, std::int32_t gain_q15) {
         return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
     }
     return -static_cast<std::int32_t>(((-product) + (std::int64_t{1} << 14)) >> 15);
+}
+
+std::int32_t roundQ24ToInt(std::int64_t value) {
+    constexpr std::int64_t kRound = std::int64_t{1} << (kFilterCoefficientFractionBits - 1u);
+    std::int64_t rounded = 0;
+    if (value >= 0) {
+        rounded = (value + kRound) >> kFilterCoefficientFractionBits;
+    } else {
+        rounded = -(((-value) + kRound) >> kFilterCoefficientFractionBits);
+    }
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        rounded,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
 }
 
 }  // namespace
@@ -43,18 +301,54 @@ std::int32_t Voice::multiplyQ15(std::int32_t a, std::int32_t b) {
         return a;
     }
 
-    const std::int64_t product = static_cast<std::int64_t>(a) * b;
-    return static_cast<std::int32_t>((product + (std::int64_t{1} << 14)) >> 15);
+    // Both operands are clamped to 0..32767, so the largest product plus the
+    // Q15 rounding bias is 1,073,692,673: safely inside signed int32. Keeping
+    // this hot-path multiply 32-bit is bit-identical and avoids unnecessary
+    // wide arithmetic on Xtensa.
+    const std::int32_t product = a * b;
+    return (product + (std::int32_t{1} << 14)) >> 15;
+}
+
+std::uint32_t Voice::playbackStartFrame() const {
+    return params_.sample_region.enabled ? params_.sample_region.start_frame : 0u;
+}
+
+std::uint32_t Voice::playbackEndFrame() const {
+    if (ref_.record == nullptr) {
+        return 0;
+    }
+    return params_.sample_region.enabled
+        ? params_.sample_region.end_frame
+        : ref_.record->descriptor.frames;
+}
+
+std::uint32_t Voice::playbackLoopStartFrame() const {
+    if (ref_.record == nullptr) {
+        return 0;
+    }
+    return params_.sample_region.enabled
+        ? params_.sample_region.loop_start_frame
+        : ref_.record->descriptor.loop_start;
+}
+
+std::uint32_t Voice::playbackLoopEndFrame() const {
+    if (ref_.record == nullptr) {
+        return 0;
+    }
+    return params_.sample_region.enabled
+        ? params_.sample_region.loop_end_frame
+        : ref_.record->descriptor.loop_end;
 }
 
 bool Voice::validLoop() const {
     if (!ref_.valid() || ref_.record == nullptr) {
         return false;
     }
-    const auto& descriptor = ref_.record->descriptor;
-    return descriptor.loop_start < descriptor.loop_end &&
-           descriptor.loop_end <= descriptor.frames &&
-           descriptor.loop_start < descriptor.frames;
+    const std::uint32_t start = playbackStartFrame();
+    const std::uint32_t end = playbackEndFrame();
+    const std::uint32_t loop_start = playbackLoopStartFrame();
+    const std::uint32_t loop_end = playbackLoopEndFrame();
+    return start <= loop_start && loop_start < loop_end && loop_end <= end;
 }
 
 bool Voice::loopActive() const {
@@ -97,11 +391,29 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     const bool descriptor_valid = descriptor.frames != 0 &&
         descriptor.pcm_bytes >= static_cast<std::size_t>(descriptor.frames) * sizeof(std::int16_t) &&
         acquired.record->pcm != nullptr;
+
+    const std::uint32_t region_start = params.sample_region.enabled
+        ? params.sample_region.start_frame
+        : 0u;
+    const std::uint32_t region_end = params.sample_region.enabled
+        ? params.sample_region.end_frame
+        : descriptor.frames;
+    const std::uint32_t region_loop_start = params.sample_region.enabled
+        ? params.sample_region.loop_start_frame
+        : descriptor.loop_start;
+    const std::uint32_t region_loop_end = params.sample_region.enabled
+        ? params.sample_region.loop_end_frame
+        : descriptor.loop_end;
+
+    const bool region_valid = region_start < region_end && region_end <= descriptor.frames;
     const bool loop_valid = params.loop_mode == LoopMode::None ||
-        (descriptor.loop_start < descriptor.loop_end &&
-         descriptor.loop_end <= descriptor.frames &&
-         descriptor.loop_start < descriptor.frames);
-    if (!descriptor_valid || !loop_valid || params.phase_increment_q32 == 0) {
+        (region_start <= region_loop_start &&
+         region_loop_start < region_loop_end &&
+         region_loop_end <= region_end);
+    if (!descriptor_valid || !region_valid || !loop_valid ||
+        params.phase_increment_q32 == 0 || !params.lowpass.valid() ||
+        !params.dynamic_lowpass_table.valid() || !params.vibrato_lfo.valid() ||
+        !params.mod_lfo.valid() || !params.mod_envelope.valid()) {
         directory.release(acquired);
         return false;
     }
@@ -112,19 +424,43 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
     params_.gain_left_q15 = clampQ15(params.gain_left_q15);
     params_.gain_right_q15 = clampQ15(params.gain_right_q15);
     params_.envelope.sustain_q15 = clampQ15(params.envelope.sustain_q15);
+    params_.mod_envelope.envelope.sustain_q15 = clampQ15(
+        params.mod_envelope.envelope.sustain_q15);
 
     channel_ = params.channel;
     key_ = params.key;
-    phase_q32_ = 0;
+    phase_q32_ = static_cast<std::uint64_t>(region_start) << 32;
+    current_phase_increment_q32_ = params_.phase_increment_q32;
+    current_gain_left_q15_ = params_.gain_left_q15;
+    current_gain_right_q15_ = params_.gain_right_q15;
+    current_lowpass_ = params_.lowpass;
+    vibrato_phase_q32_ = 0;
+    vibrato_delay_remaining_ = params_.vibrato_lfo.delay_frames;
+    vibrato_control_frames_remaining_ = 0;
+    mod_lfo_phase_q32_ = 0;
+    mod_lfo_delay_remaining_ = params_.mod_lfo.delay_frames;
+    mod_lfo_control_frames_remaining_ = 0;
+    mod_envelope_control_frames_remaining_ = 0;
+    lowpass_z1_q24_ = 0;
+    lowpass_z2_q24_ = 0;
     key_released_ = false;
     fast_release_kind_ = FastReleaseKind::None;
     envelope_stage_frame_ = 0;
     active_release_frames_ = 0;
     release_start_level_q15_ = 0;
+    mod_envelope_stage_frame_ = 0;
+    mod_envelope_release_frames_ = 0;
+    mod_envelope_release_start_level_q15_ = 0;
 
-    if (params_.envelope.attack_frames != 0) {
+    if (params_.envelope.delay_frames != 0) {
+        envelope_stage_ = EnvelopeStage::Delay;
+        envelope_level_q15_ = 0;
+    } else if (params_.envelope.attack_frames != 0) {
         envelope_stage_ = EnvelopeStage::Attack;
         envelope_level_q15_ = 0;
+    } else if (params_.envelope.hold_frames != 0) {
+        envelope_stage_ = EnvelopeStage::Hold;
+        envelope_level_q15_ = kQ15Unity;
     } else if (params_.envelope.decay_frames != 0) {
         envelope_stage_ = EnvelopeStage::Decay;
         envelope_level_q15_ = kQ15Unity;
@@ -133,8 +469,59 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
         envelope_level_q15_ = params_.envelope.sustain_q15;
     }
 
+    if (!params_.mod_envelope.enabled) {
+        mod_envelope_stage_ = EnvelopeStage::Done;
+        mod_envelope_level_q15_ = 0;
+    } else if (params_.mod_envelope.envelope.delay_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Delay;
+        mod_envelope_level_q15_ = 0;
+    } else if (params_.mod_envelope.envelope.attack_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Attack;
+        mod_envelope_level_q15_ = 0;
+    } else if (params_.mod_envelope.envelope.hold_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Hold;
+        mod_envelope_level_q15_ = kQ15Unity;
+    } else if (params_.mod_envelope.envelope.decay_frames != 0) {
+        mod_envelope_stage_ = EnvelopeStage::Decay;
+        mod_envelope_level_q15_ = kQ15Unity;
+    } else {
+        mod_envelope_stage_ = EnvelopeStage::Sustain;
+        mod_envelope_level_q15_ = params_.mod_envelope.envelope.sustain_q15;
+    }
+
     active_ = true;
+    if (params_.realtime_control.cc21_filter_offset_cents != 0) {
+        refreshModulationState();
+    }
     return true;
+}
+
+void Voice::beginModEnvelopeRelease() {
+    if (!params_.mod_envelope.enabled ||
+        mod_envelope_stage_ == EnvelopeStage::Done ||
+        mod_envelope_stage_ == EnvelopeStage::Release) {
+        return;
+    }
+
+    const std::int32_t start_level = modEnvelopeDspLevelQ15();
+    const std::uint32_t release_frames = params_.mod_envelope.envelope.release_frames;
+    mod_envelope_control_frames_remaining_ = 0;
+    if (release_frames == 0 || start_level <= 0) {
+        mod_envelope_stage_ = EnvelopeStage::Done;
+        mod_envelope_level_q15_ = 0;
+        mod_envelope_stage_frame_ = 0;
+        mod_envelope_release_frames_ = 0;
+        mod_envelope_release_start_level_q15_ = 0;
+        return;
+    }
+
+    // During attack the SoundFont modulation envelope is convex. Once NoteOff
+    // arrives, release is linear from the audible (already-shaped) level.
+    mod_envelope_level_q15_ = start_level;
+    mod_envelope_release_start_level_q15_ = start_level;
+    mod_envelope_release_frames_ = release_frames;
+    mod_envelope_stage_ = EnvelopeStage::Release;
+    mod_envelope_stage_frame_ = 0;
 }
 
 void Voice::beginRelease(
@@ -144,6 +531,7 @@ void Voice::beginRelease(
         return;
     }
 
+    beginModEnvelopeRelease();
     key_released_ = true;
     fast_release_kind_ = fast_release_kind;
     if (release_frames == 0 || envelope_level_q15_ <= 0) {
@@ -186,12 +574,32 @@ bool Voice::beginExclusiveRelease(std::uint32_t fade_frames) {
 
 std::int32_t Voice::nextEnvelopeLevel() {
     switch (envelope_stage_) {
+        case EnvelopeStage::Delay: {
+            const std::uint32_t total = params_.envelope.delay_frames;
+            envelope_level_q15_ = 0;
+            if (total == 0 || ++envelope_stage_frame_ >= total) {
+                envelope_stage_frame_ = 0;
+                if (params_.envelope.attack_frames != 0) {
+                    envelope_stage_ = EnvelopeStage::Attack;
+                } else if (params_.envelope.hold_frames != 0) {
+                    envelope_stage_ = EnvelopeStage::Hold;
+                } else if (params_.envelope.decay_frames != 0) {
+                    envelope_stage_ = EnvelopeStage::Decay;
+                } else {
+                    envelope_stage_ = EnvelopeStage::Sustain;
+                }
+            }
+            return 0;
+        }
+
         case EnvelopeStage::Attack: {
             const std::uint32_t total = params_.envelope.attack_frames;
             if (total == 0) {
-                envelope_stage_ = params_.envelope.decay_frames != 0
-                    ? EnvelopeStage::Decay
-                    : EnvelopeStage::Sustain;
+                envelope_stage_ = params_.envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (params_.envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
                 envelope_stage_frame_ = 0;
                 return nextEnvelopeLevel();
             }
@@ -201,10 +609,24 @@ std::int32_t Voice::nextEnvelopeLevel() {
             ++envelope_stage_frame_;
             if (envelope_stage_frame_ >= total) {
                 envelope_level_q15_ = kQ15Unity;
+                envelope_stage_ = params_.envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (params_.envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
+                envelope_stage_frame_ = 0;
+            }
+            return envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Hold: {
+            const std::uint32_t total = params_.envelope.hold_frames;
+            envelope_level_q15_ = kQ15Unity;
+            if (total == 0 || ++envelope_stage_frame_ >= total) {
+                envelope_stage_frame_ = 0;
                 envelope_stage_ = params_.envelope.decay_frames != 0
                     ? EnvelopeStage::Decay
                     : EnvelopeStage::Sustain;
-                envelope_stage_frame_ = 0;
             }
             return envelope_level_q15_;
         }
@@ -259,22 +681,159 @@ std::int32_t Voice::nextEnvelopeLevel() {
     }
 }
 
+std::int32_t Voice::nextModEnvelopeLevel() {
+    if (!params_.mod_envelope.enabled) {
+        mod_envelope_stage_ = EnvelopeStage::Done;
+        mod_envelope_level_q15_ = 0;
+        return 0;
+    }
+
+    const EnvelopeConfig& envelope = params_.mod_envelope.envelope;
+    switch (mod_envelope_stage_) {
+        case EnvelopeStage::Delay: {
+            const std::uint32_t total = envelope.delay_frames;
+            mod_envelope_level_q15_ = 0;
+            if (total == 0 || ++mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                if (envelope.attack_frames != 0) {
+                    mod_envelope_stage_ = EnvelopeStage::Attack;
+                } else if (envelope.hold_frames != 0) {
+                    mod_envelope_stage_ = EnvelopeStage::Hold;
+                } else if (envelope.decay_frames != 0) {
+                    mod_envelope_stage_ = EnvelopeStage::Decay;
+                } else {
+                    mod_envelope_stage_ = EnvelopeStage::Sustain;
+                }
+            }
+            return 0;
+        }
+
+        case EnvelopeStage::Attack: {
+            const std::uint32_t total = envelope.attack_frames;
+            if (total == 0) {
+                mod_envelope_stage_ = envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                return nextModEnvelopeLevel();
+            }
+            const std::uint64_t numerator =
+                static_cast<std::uint64_t>(kQ15Unity) * (mod_envelope_stage_frame_ + 1u);
+            mod_envelope_level_q15_ = static_cast<std::int32_t>(numerator / total);
+            ++mod_envelope_stage_frame_;
+            if (mod_envelope_stage_frame_ >= total) {
+                mod_envelope_level_q15_ = kQ15Unity;
+                mod_envelope_stage_ = envelope.hold_frames != 0
+                    ? EnvelopeStage::Hold
+                    : (envelope.decay_frames != 0
+                        ? EnvelopeStage::Decay
+                        : EnvelopeStage::Sustain);
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Hold: {
+            const std::uint32_t total = envelope.hold_frames;
+            mod_envelope_level_q15_ = kQ15Unity;
+            if (total == 0 || ++mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                mod_envelope_stage_ = envelope.decay_frames != 0
+                    ? EnvelopeStage::Decay
+                    : EnvelopeStage::Sustain;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Decay: {
+            const std::uint32_t total = envelope.decay_frames;
+            if (total == 0) {
+                mod_envelope_stage_ = EnvelopeStage::Sustain;
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                mod_envelope_level_q15_ = envelope.sustain_q15;
+                return mod_envelope_level_q15_;
+            }
+            const std::int64_t delta =
+                static_cast<std::int64_t>(envelope.sustain_q15) - kQ15Unity;
+            const std::int64_t position =
+                static_cast<std::int64_t>(mod_envelope_stage_frame_ + 1u);
+            mod_envelope_level_q15_ = clampQ15(
+                static_cast<std::int32_t>(kQ15Unity + (delta * position) / total));
+            ++mod_envelope_stage_frame_;
+            if (mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_ = EnvelopeStage::Sustain;
+                mod_envelope_stage_frame_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                mod_envelope_level_q15_ = envelope.sustain_q15;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Sustain:
+            mod_envelope_level_q15_ = envelope.sustain_q15;
+            return mod_envelope_level_q15_;
+
+        case EnvelopeStage::Release: {
+            const std::uint32_t total = mod_envelope_release_frames_;
+            if (total == 0 || mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_ = EnvelopeStage::Done;
+                mod_envelope_level_q15_ = 0;
+                mod_envelope_control_frames_remaining_ = 0;
+                return 0;
+            }
+            const std::uint32_t remaining = total - mod_envelope_stage_frame_;
+            mod_envelope_level_q15_ = static_cast<std::int32_t>(
+                (static_cast<std::int64_t>(mod_envelope_release_start_level_q15_) * remaining) /
+                total);
+            ++mod_envelope_stage_frame_;
+            if (mod_envelope_stage_frame_ >= total) {
+                mod_envelope_stage_ = EnvelopeStage::Done;
+                mod_envelope_control_frames_remaining_ = 0;
+            }
+            return mod_envelope_level_q15_;
+        }
+
+        case EnvelopeStage::Done:
+        default:
+            mod_envelope_level_q15_ = 0;
+            return 0;
+    }
+}
+
+std::int32_t Voice::modEnvelopeDspLevelQ15() const {
+    if (!params_.mod_envelope.enabled) {
+        return 0;
+    }
+    return mod_envelope_stage_ == EnvelopeStage::Attack
+        ? convexAttackLevelQ15(mod_envelope_level_q15_)
+        : clampQ15(mod_envelope_level_q15_);
+}
+
 std::int32_t Voice::interpolatedSample() const {
     if (!ref_.valid() || ref_.record == nullptr || ref_.record->pcm == nullptr) {
         return 0;
     }
 
-    const auto& descriptor = ref_.record->descriptor;
+    const std::uint32_t end_frame = playbackEndFrame();
     const std::uint32_t index = static_cast<std::uint32_t>(phase_q32_ >> 32);
-    if (index >= descriptor.frames) {
+    if (index >= end_frame) {
         return 0;
     }
 
     std::uint32_t next_index = index + 1u;
-    if (loopActive() && index >= descriptor.loop_start && next_index >= descriptor.loop_end) {
-        next_index = descriptor.loop_start;
-    } else if (next_index >= descriptor.frames) {
-        next_index = descriptor.frames - 1u;
+    const std::uint32_t loop_start = playbackLoopStartFrame();
+    const std::uint32_t loop_end = playbackLoopEndFrame();
+    if (loopActive() && index >= loop_start && next_index >= loop_end) {
+        next_index = loop_start;
+    } else if (next_index >= end_frame) {
+        next_index = end_frame - 1u;
     }
 
     const std::int32_t a = ref_.record->pcm[index];
@@ -286,17 +845,144 @@ std::int32_t Voice::interpolatedSample() const {
         ((delta * static_cast<std::int64_t>(fraction)) >> 32));
 }
 
+std::int32_t Voice::applyLowpass(std::int32_t sample) {
+    if (!current_lowpass_.enabled) {
+        return sample;
+    }
+
+    const BiquadLowpassConfig& filter = current_lowpass_;
+    const std::int64_t output_q24 =
+        static_cast<std::int64_t>(sample) * filter.a0_q24 + lowpass_z1_q24_;
+    const std::int32_t output = roundQ24ToInt(output_q24);
+    lowpass_z1_q24_ =
+        static_cast<std::int64_t>(sample) * filter.a1_q24 +
+        lowpass_z2_q24_ -
+        static_cast<std::int64_t>(output) * filter.b1_q24;
+    lowpass_z2_q24_ =
+        static_cast<std::int64_t>(sample) * filter.a0_q24 -
+        static_cast<std::int64_t>(output) * filter.b2_q24;
+    return output;
+}
+
+void Voice::refreshModulationState() {
+    current_phase_increment_q32_ = params_.phase_increment_q32;
+    current_gain_left_q15_ = params_.gain_left_q15;
+    current_gain_right_q15_ = params_.gain_right_q15;
+    current_lowpass_ = params_.lowpass;
+
+    std::int64_t pitch_cents = 0;
+    std::int64_t filter_offset_cents =
+        params_.realtime_control.cc21_filter_offset_cents;
+    if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0 &&
+        params_.vibrato_lfo.pitch_depth_cents != 0) {
+        pitch_cents += scaleSignedQ15(
+            params_.vibrato_lfo.pitch_depth_cents,
+            triangleLevelQ15(vibrato_phase_q32_));
+    }
+
+    if (params_.mod_lfo.enabled && mod_lfo_delay_remaining_ == 0) {
+        const std::int32_t level_q15 = triangleLevelQ15(mod_lfo_phase_q32_);
+        if (params_.mod_lfo.pitch_depth_cents != 0) {
+            pitch_cents += scaleSignedQ15(params_.mod_lfo.pitch_depth_cents, level_q15);
+        }
+        if (params_.mod_lfo.filter_depth_cents != 0) {
+            filter_offset_cents += scaleSignedQ15(
+                params_.mod_lfo.filter_depth_cents,
+                level_q15);
+        }
+        if (params_.mod_lfo.gain_table.enabled) {
+            const StereoGainQ15 gains = interpolateGainTable(
+                params_.mod_lfo.gain_table,
+                level_q15);
+            current_gain_left_q15_ = gains.left;
+            current_gain_right_q15_ = gains.right;
+        }
+    }
+
+    if (params_.mod_envelope.enabled) {
+        const std::int32_t level_q15 = modEnvelopeDspLevelQ15();
+        if (params_.mod_envelope.pitch_depth_cents != 0) {
+            pitch_cents += scaleSignedQ15(
+                params_.mod_envelope.pitch_depth_cents,
+                level_q15);
+        }
+        if (params_.mod_envelope.filter_depth_cents != 0) {
+            filter_offset_cents += scaleSignedQ15(
+                params_.mod_envelope.filter_depth_cents,
+                level_q15);
+        }
+    }
+
+    const std::int32_t clamped_pitch = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+        pitch_cents,
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max()));
+    if (clamped_pitch != 0) {
+        current_phase_increment_q32_ = transposeCentsFixed(
+            params_.phase_increment_q32,
+            clamped_pitch);
+    }
+
+    const std::int32_t clamped_filter_offset = static_cast<std::int32_t>(
+        std::clamp<std::int64_t>(
+            filter_offset_cents,
+            std::numeric_limits<std::int32_t>::min(),
+            std::numeric_limits<std::int32_t>::max()));
+    if (params_.dynamic_lowpass_table.enabled && clamped_filter_offset != 0) {
+        current_lowpass_ = interpolateDynamicLowpassTable(
+            params_.dynamic_lowpass_table,
+            clamped_filter_offset);
+    }
+}
+
+void Voice::advanceLfos() {
+    if (!active_) {
+        return;
+    }
+
+    if (params_.vibrato_lfo.enabled) {
+        if (vibrato_delay_remaining_ != 0) {
+            --vibrato_delay_remaining_;
+            if (vibrato_delay_remaining_ == 0) {
+                vibrato_control_frames_remaining_ = 0;
+            }
+        } else {
+            vibrato_phase_q32_ += params_.vibrato_lfo.phase_step_q32;
+            if (vibrato_control_frames_remaining_ != 0) {
+                --vibrato_control_frames_remaining_;
+            }
+        }
+    }
+
+    if (params_.mod_lfo.enabled) {
+        if (mod_lfo_delay_remaining_ != 0) {
+            --mod_lfo_delay_remaining_;
+            if (mod_lfo_delay_remaining_ == 0) {
+                mod_lfo_control_frames_remaining_ = 0;
+            }
+        } else {
+            mod_lfo_phase_q32_ += params_.mod_lfo.phase_step_q32;
+            if (mod_lfo_control_frames_remaining_ != 0) {
+                --mod_lfo_control_frames_remaining_;
+            }
+        }
+    }
+
+    if (params_.mod_envelope.enabled && mod_envelope_control_frames_remaining_ != 0) {
+        --mod_envelope_control_frames_remaining_;
+    }
+}
+
 void Voice::advancePhase() {
     if (!active_ || !ref_.valid() || ref_.record == nullptr) {
         return;
     }
 
-    phase_q32_ += params_.phase_increment_q32;
-    const auto& descriptor = ref_.record->descriptor;
+    phase_q32_ += current_phase_increment_q32_;
 
     if (loopActive()) {
-        const std::uint64_t start = static_cast<std::uint64_t>(descriptor.loop_start) << 32;
-        const std::uint64_t end = static_cast<std::uint64_t>(descriptor.loop_end) << 32;
+        const std::uint64_t start = static_cast<std::uint64_t>(playbackLoopStartFrame()) << 32;
+        const std::uint64_t end = static_cast<std::uint64_t>(playbackLoopEndFrame()) << 32;
         const std::uint64_t length = end - start;
         if (phase_q32_ >= end && length != 0) {
             phase_q32_ = start + ((phase_q32_ - start) % length);
@@ -304,7 +990,7 @@ void Voice::advancePhase() {
         return;
     }
 
-    if ((phase_q32_ >> 32) >= descriptor.frames) {
+    if ((phase_q32_ >> 32) >= playbackEndFrame()) {
         finish();
     }
 }
@@ -317,11 +1003,29 @@ void Voice::finish() {
     key_released_ = false;
     fast_release_kind_ = FastReleaseKind::None;
     phase_q32_ = 0;
+    current_phase_increment_q32_ = kPhaseOneQ32;
+    current_gain_left_q15_ = kQ15Unity;
+    current_gain_right_q15_ = kQ15Unity;
+    current_lowpass_ = BiquadLowpassConfig{};
+    vibrato_phase_q32_ = 0;
+    vibrato_delay_remaining_ = 0;
+    vibrato_control_frames_remaining_ = 0;
+    mod_lfo_phase_q32_ = 0;
+    mod_lfo_delay_remaining_ = 0;
+    mod_lfo_control_frames_remaining_ = 0;
+    mod_envelope_control_frames_remaining_ = 0;
+    lowpass_z1_q24_ = 0;
+    lowpass_z2_q24_ = 0;
     envelope_stage_ = EnvelopeStage::Done;
     envelope_stage_frame_ = 0;
     active_release_frames_ = 0;
     envelope_level_q15_ = 0;
     release_start_level_q15_ = 0;
+    mod_envelope_stage_ = EnvelopeStage::Done;
+    mod_envelope_stage_frame_ = 0;
+    mod_envelope_release_frames_ = 0;
+    mod_envelope_level_q15_ = 0;
+    mod_envelope_release_start_level_q15_ = 0;
     directory_ = nullptr;
 }
 
@@ -336,9 +1040,30 @@ VoiceRenderResult Voice::renderAdd(
 
     for (std::size_t frame = 0; frame < frame_count && active_; ++frame) {
         if (!ref_.valid() || ref_.record == nullptr ||
-            (phase_q32_ >> 32) >= ref_.record->descriptor.frames) {
+            (phase_q32_ >> 32) >= playbackEndFrame()) {
             finish();
             break;
+        }
+
+        const bool vibrato_due = params_.vibrato_lfo.enabled &&
+            vibrato_delay_remaining_ == 0 && vibrato_control_frames_remaining_ == 0;
+        const bool mod_lfo_due = params_.mod_lfo.enabled &&
+            mod_lfo_delay_remaining_ == 0 && mod_lfo_control_frames_remaining_ == 0;
+        const bool mod_envelope_due = params_.mod_envelope.enabled &&
+            mod_envelope_control_frames_remaining_ == 0;
+
+        (void)nextModEnvelopeLevel();
+        if (vibrato_due || mod_lfo_due || mod_envelope_due) {
+            refreshModulationState();
+            if (params_.vibrato_lfo.enabled && vibrato_delay_remaining_ == 0) {
+                vibrato_control_frames_remaining_ = kModulationControlFrames;
+            }
+            if (params_.mod_lfo.enabled && mod_lfo_delay_remaining_ == 0) {
+                mod_lfo_control_frames_remaining_ = kModulationControlFrames;
+            }
+            if (params_.mod_envelope.enabled) {
+                mod_envelope_control_frames_remaining_ = kModulationControlFrames;
+            }
         }
 
         const std::int32_t envelope = nextEnvelopeLevel();
@@ -347,15 +1072,16 @@ VoiceRenderResult Voice::renderAdd(
             break;
         }
 
-        const std::int32_t mono = interpolatedSample();
-        const std::int32_t left_gain = multiplyQ15(params_.gain_left_q15, envelope);
-        const std::int32_t right_gain = multiplyQ15(params_.gain_right_q15, envelope);
+        const std::int32_t mono = applyLowpass(interpolatedSample());
+        const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
+        const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
         interleaved_stereo[frame * 2u] += scaleSampleQ15(mono, left_gain);
         interleaved_stereo[frame * 2u + 1u] += scaleSampleQ15(mono, right_gain);
         ++result.frames_rendered;
 
         const bool release_finishes_after_frame = envelope_stage_ == EnvelopeStage::Done;
         advancePhase();
+        advanceLfos();
         if (release_finishes_after_frame && active_) {
             finish();
         }
@@ -482,14 +1208,39 @@ void VoicePool::recordStartedVoice(std::size_t slot, std::size_t active_before) 
 }
 
 void VoicePool::refreshTailStats() {
-    stats_.active_steal_tails = activeStealTailCount();
-    stats_.active_exclusive_tails = activeExclusiveTailCount();
-    stats_.active_fast_release_tails = activeFastReleaseTailCount();
+    // Tail categories are mutually tracked over the same fixed 32-Voice pool.
+    // Keep one pass instead of re-reading the pool three times at every block
+    // boundary and MIDI release operation.
+    std::size_t steal_tails = 0;
+    std::size_t exclusive_tails = 0;
+    std::size_t fast_release_tails = 0;
+    for (const Voice& voice : voices_) {
+        if (!voice.active()) {
+            continue;
+        }
+        if (voice.stealTail()) {
+            ++steal_tails;
+        }
+        if (voice.exclusiveTail()) {
+            ++exclusive_tails;
+        }
+        if (voice.fastReleaseTail()) {
+            ++fast_release_tails;
+        }
+    }
+    stats_.active_steal_tails = steal_tails;
+    stats_.active_exclusive_tails = exclusive_tails;
+    stats_.active_fast_release_tails = fast_release_tails;
 }
 
 bool VoicePool::start(const VoiceStartParams& params) {
     util::saturatingIncrement(stats_.start_attempts);
-    const std::size_t active = activeVoiceCount();
+
+    // active_voices is maintained on every start/finish/reset/render boundary.
+    // Reusing it here avoids rescanning all 32 Voice objects for every NoteOn;
+    // this matters for sample-accurate chord bursts with 16-24 events in one
+    // 64-frame block.
+    const std::size_t active = stats_.active_voices;
 
     // Preserve the hard-cap meaning: a 33rd active Voice is never created,
     // including for semantic exclusive-class replacement.
@@ -543,20 +1294,17 @@ bool VoicePool::start(const VoiceStartParams& params) {
 
         if (exclusive_victims != 0) {
             const std::size_t released = releaseExclusiveVictims(params, target);
-            if (released != exclusive_victims) {
-                // Voice mutation is single-threaded in the audio domain, so a
-                // mismatch is not expected. Keep the new Voice rather than
-                // attempting a partial rollback of already-fading victims.
-                util::saturatingAdd(stats_.exclusive_voices_released, released);
-            } else {
-                util::saturatingAdd(stats_.exclusive_voices_released, released);
-            }
+            util::saturatingAdd(stats_.exclusive_voices_released, released);
             util::saturatingIncrement(stats_.exclusive_choke_successes);
             stats_.last_exclusive_class = params.exclusive_class;
         }
 
         recordStartedVoice(target, active);
-        refreshTailStats();
+        // A normal start adds no steal/exclusive tail, so the cached tail
+        // counters remain exact. Only semantic replacement needs a rescan.
+        if (exclusive_victims != 0) {
+            refreshTailStats();
+        }
         return true;
     }
 

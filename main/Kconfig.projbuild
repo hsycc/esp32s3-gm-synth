@@ -6,8 +6,8 @@ config GM_SYNTH_PCM_ARENA_BYTES
     range 1048576 6291456
     help
         PSRAM bytes reserved as the contiguous PCM residency arena during
-        ESP32-S3 N16R8 bring-up. The default is 4 MiB until real hardware
-        telemetry proves that a larger arena leaves sufficient system reserve.
+        ESP32-S3 N16R8 bring-up. The production/default value remains 4 MiB;
+        dedicated qualification configs may request a larger measured arena.
 
 menu "SF2 storage benchmark"
 
@@ -48,14 +48,13 @@ config GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE
         control/storage benchmark only; it must never run in the audio task.
 
 config GM_SYNTH_QEMU_FLASH_SF2_TEST
-    bool "Mount QEMU-only raw FATFS SF2 flash fixture"
+    bool "Mount benchmark raw FATFS SF2 flash fixture"
     default n
     help
-        QEMU/CI integration test only. Mounts the read-only raw SPI-flash FATFS
-        partition labelled qemu_sf2 at /sf2 before the storage benchmark. The
-        dedicated QEMU build generates that partition from a pinned public SF2.
-        The same raw-fixture mechanism is also reused by the dedicated physical
-        hardware benchmark build; do not enable it in production firmware.
+        Integration/qualification build option. Mounts the read-only raw
+        SPI-flash FATFS partition labelled qemu_sf2 at /sf2 before the storage
+        benchmark. The historical name is retained for compatibility; the same
+        raw fixture is intentionally used by QEMU and physical N16R8 builds.
 
 endif
 
@@ -67,11 +66,154 @@ config GM_SYNTH_RENDER_BENCHMARK_ENABLE
     bool "Run deterministic Voice DSP render benchmark at boot"
     default n
     help
-        Bring-up/CI benchmark only. Renders fixed 4/8/12/16/20/24-Voice
-        workloads using an in-memory deterministic looping PCM fixture and
-        reports min/avg/p50/p95/p99/max block times plus deadline and checksum
-        telemetry. QEMU values are regression baselines only; N16R8 hardware
-        remains authoritative for CPU headroom and stable polyphony.
+        Bring-up/CI benchmark only. Renders fixed Voice-count workloads using
+        an in-memory deterministic looping PCM fixture and reports min/avg/
+        p50/p95/p99/max block times plus deadline and checksum telemetry.
+
+if GM_SYNTH_RENDER_BENCHMARK_ENABLE
+
+config GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD
+    bool "Mark render telemetry as physical qualification evidence"
+    default n
+    help
+        Enable only in the dedicated physical N16R8 qualification image. QEMU
+        must leave this disabled so its timing remains explicitly labelled as
+        regression telemetry rather than hardware performance evidence.
+
+endif
+
+endmenu
+
+menu "I2S DMA qualification"
+
+config GM_SYNTH_I2S_QUAL_ENABLE
+    bool "Run KS_S3_KORVO_V4 ES8311 + I2S/DMA qualification"
+    default n
+    depends on GM_SYNTH_RENDER_BENCHMARK_ENABLE
+    help
+        Dedicated physical-audio qualification path for KS_S3_KORVO_V4 /
+        ESP32-S3-Korvo-2 routing. A Core-pinned realtime task drives 44.1 kHz
+        standard 16-bit Philips I2S using the same mono application-buffer
+        layout as Espressif's Korvo-2 BSP; renderer L/R is averaged to mono for
+        the single ES8311 DAC / mono speaker path. The codec is held muted with
+        PA off while DMA silence is preloaded, then its DAC start sequence runs
+        only after MCLK/BCLK/LRCK are live. Muted live-DMA priming is followed
+        by an audible 441 Hz hardware-isolation tone before the synth workload.
+        Keep this disabled in normal and QEMU images; sdkconfig.hwbench.defaults
+        enables it with the verified board pin map as the physical compile/
+        runtime gate.
+
+config GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15
+    int "Post-FX synth master volume (Q15, 0..32767)"
+    default 32767
+    range 0 32767
+    help
+        Applies to synthesized audio only, after chorus/reverb and before
+        I2S downmix. The 441-Hz codec-isolation reference tone deliberately
+        bypasses this parameter. 32767 is exact unity; 16384 is about -6 dB
+        amplitude and 0 mutes the synth. This is independent of ES8311 DAC
+        attenuation and MIDI channel CC7/CC11. Default preserves M7 PCM
+        checksum and CPU qualification baseline.
+
+config GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB
+    int "ES8311 DAC output attenuation in dB (0..12)"
+    default 12
+    range 0 12
+    help
+        Qualification-only ES8311 volume (-12 dB by default, matching all
+        previously validated physical baselines). Set to 6 for a +6 dB
+        audible evaluation, but retain 12 during M7/M8 performance A/B
+        measurements. Each integer dB corresponds to two 0.5 dB ES8311
+        register steps. No change to per-channel MIDI CC7/CC11 or digital
+        post-FX master level. Rebuild/flash the image after changing this.
+
+config GM_SYNTH_I2S_QUAL_BCLK_GPIO
+    int "I2S BCLK GPIO (-1 = unconfigured)"
+    default -1
+    range -1 48
+    help
+        Physical BCLK GPIO. Qualification refuses to start while this is -1.
+        KS_S3_KORVO_V4 uses GPIO9.
+
+config GM_SYNTH_I2S_QUAL_WS_GPIO
+    int "I2S WS/LRCK GPIO (-1 = unconfigured)"
+    default -1
+    range -1 48
+    help
+        Physical WS/LRCK GPIO. Qualification refuses to start while this is -1.
+        KS_S3_KORVO_V4 uses GPIO45.
+
+config GM_SYNTH_I2S_QUAL_DOUT_GPIO
+    int "I2S DOUT GPIO (-1 = unconfigured)"
+    default -1
+    range -1 48
+    help
+        Physical serial audio data output GPIO. Qualification refuses to start
+        while this is -1. KS_S3_KORVO_V4 uses GPIO8 for ESP32-S3 -> ES8311.
+
+config GM_SYNTH_I2S_QUAL_MCLK_GPIO
+    int "I2S MCLK GPIO (-1 = unconfigured)"
+    default -1
+    range -1 48
+    help
+        Physical MCLK output GPIO. The Korvo V4 ES8311 qualification requires
+        this to be configured and uses GPIO16 with 256 * Fs = 11.2896 MHz.
+
+config GM_SYNTH_I2S_QUAL_DMA_DESC_NUM
+    int "I2S DMA descriptor count"
+    default 8
+    range 2 16
+    help
+        Number of TX DMA descriptors. At the default 64 frames per descriptor,
+        eight descriptors provide roughly 11.6 ms of queued audio at 44.1 kHz.
+
+config GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM
+    int "I2S DMA frames per descriptor"
+    default 64
+    range 16 511
+    help
+        Audio frames per DMA descriptor. The qualification default is
+        intentionally one synth render block (64 frames).
+
+config GM_SYNTH_I2S_QUAL_WARMUP_BLOCKS
+    int "I2S warm-up blocks"
+    default 64
+    range 8 2048
+
+config GM_SYNTH_I2S_QUAL_MEASURE_BLOCKS
+    int "I2S measured blocks"
+    default 4096
+    range 128 262144
+    help
+        4096 blocks is about 5.94 seconds at 44.1 kHz / 64 frames per block.
+        The normal physical M6 image uses 16384 blocks (~23.78 s). Dedicated
+        M7 release long-run images may use 131072 blocks (~190.22 s) while
+        retaining the same fixed-size aggregate timing/backlog telemetry.
+
+config GM_SYNTH_I2S_QUAL_WRITE_TIMEOUT_MS
+    int "I2S blocking write timeout (ms)"
+    default 20
+    range 2 1000
+
+config GM_SYNTH_I2S_QUAL_TASK_STACK_BYTES
+    int "I2S qualification task stack bytes"
+    default 8192
+    range 4096 32768
+
+config GM_SYNTH_I2S_QUAL_MIN_STACK_HEADROOM_BYTES
+    int "Minimum accepted stack high-water headroom bytes"
+    default 2048
+    range 512 16384
+
+config GM_SYNTH_I2S_QUAL_TASK_PRIORITY
+    int "I2S qualification task priority"
+    default 20
+    range 5 24
+
+config GM_SYNTH_I2S_QUAL_TASK_CORE
+    int "I2S qualification task core"
+    default 1
+    range 0 1
 
 endmenu
 

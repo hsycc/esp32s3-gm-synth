@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GlobalEffectsProcessor.h"
 #include "VoiceRenderer.h"
 
 #include <array>
@@ -17,10 +18,9 @@ struct AudioBlockStats {
 
 // Final software boundary immediately before the hardware I2S sink.
 //
-// The block renderer owns its fixed int32 mix scratch and therefore performs no
-// allocation and consumes no multi-kilobyte task-stack scratch. M5 will inject
-// timestamped events at sub-block offsets; M4 first establishes a deterministic
-// fixed 64-frame render/output contract.
+// The block renderer owns its fixed int32 dry/send scratch and global FX state,
+// so the realtime path performs no allocation and consumes no multi-kilobyte
+// task-stack scratch.
 class AudioBlockRenderer {
 public:
     static constexpr std::uint32_t kOutputSampleRate = 44100;
@@ -42,6 +42,9 @@ private:
 
     VoicePool& voices_;
     std::array<std::int32_t, kSamplesPerBlock> mix_{};
+    std::array<std::int32_t, kSamplesPerBlock> reverb_send_{};
+    std::array<std::int32_t, kSamplesPerBlock> chorus_send_{};
+    GlobalEffectsProcessor effects_{};
     AudioBlockStats stats_{};
 };
 

@@ -1,0 +1,95 @@
+name: gm128-full-bank
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_full_gm128_qualification.cpp"
+      - "tests/gm/test_full_gm128_stress.cpp"
+      - "tests/gm/test_full_gm128_capacity.cpp"
+      - "tests/gm/test_full_gm128_soak.cpp"
+      - "tests/gm/test_gm128_release_matrix.cpp"
+      - "tests/gm/test_m7_gm128_live_program_change.cpp"
+      - "tests/gm/test_program_change_control_service.cpp"
+      - "tests/test_gm128_release_report.py"
+      - "tools/gm128_release/**"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "scripts/run_gm128_full_bank_tests.sh"
+      - ".github/workflows/gm128-full-bank.yml"
+  pull_request:
+    paths:
+      - "firmware/sf2/**"
+      - "firmware/sample/**"
+      - "firmware/gm/**"
+      - "firmware/voice/**"
+      - "tests/gm/test_full_gm128_qualification.cpp"
+      - "tests/gm/test_full_gm128_stress.cpp"
+      - "tests/gm/test_full_gm128_capacity.cpp"
+      - "tests/gm/test_full_gm128_soak.cpp"
+      - "tests/gm/test_gm128_release_matrix.cpp"
+      - "tests/gm/test_m7_gm128_live_program_change.cpp"
+      - "tests/gm/test_program_change_control_service.cpp"
+      - "tests/test_gm128_release_report.py"
+      - "tools/gm128_release/**"
+      - "assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2"
+      - "scripts/run_gm128_full_bank_tests.sh"
+      - ".github/workflows/gm128-full-bank.yml"
+
+jobs:
+  qualify-full-fm-gm128:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tracked full bank is present
+        shell: bash
+        run: |
+          test -s assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2
+          test "$(wc -c < assets/sf2/full/FM_GM_SoundFont_v0_2_1_mini.sf2)" -gt 14000000
+      - name: Run GM128 full-bank qualification
+        shell: bash
+        run: |
+          mkdir -p build/gm128-full-bank
+          bash scripts/run_gm128_full_bank_tests.sh 2>&1 | tee build/gm128-full-bank/qualification-report.txt
+      - name: Render M7 release program matrix
+        if: always()
+        shell: bash
+        run: |
+          if test -f build/gm128-full-bank/qualification-report.txt; then
+            python3 -m tools.gm128_release.report \
+              --log build/gm128-full-bank/qualification-report.txt \
+              --json build/gm128-full-bank/m7-release-program-matrix.json \
+              --markdown build/gm128-full-bank/m7-release-program-matrix.md
+          fi
+      - name: Publish qualification summary
+        if: always()
+        shell: bash
+        run: |
+          if test -f build/gm128-full-bank/m7-release-program-matrix.md; then
+            cat build/gm128-full-bank/m7-release-program-matrix.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if test -f build/gm128-full-bank/qualification-report.txt; then
+            {
+              echo
+              echo '## Existing GM128 host gates'
+              echo '```text'
+              grep -E '^(GM128_(QUALIFICATION|COVERAGE_SUMMARY|FAILURE_SUMMARY|STRESS_|CAPACITY_|SOAK_)|M7_LIVE_PROGRAM_CHANGE|M7 live 16-channel|Full FM GM128)' \
+                build/gm128-full-bank/qualification-report.txt || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload qualification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gm128-full-bank-qualification
+          path: |
+            build/gm128-full-bank/qualification-report.txt
+            build/gm128-full-bank/m7-release-program-matrix.json
+            build/gm128-full-bank/m7-release-program-matrix.md
+          if-no-files-found: error

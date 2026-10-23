@@ -1,164 +1,116 @@
 # Implementation Plan
 
-This file is the durable execution plan for Codex/local development. Keep it updated as milestones are completed or materially redesigned.
+This is the durable execution plan for the ESP32-S3 GM / native-SF2 synth. Keep semantic/host evidence, QEMU integration evidence, physical timing evidence and subjective audible evidence separate.
+
+## Current project position
+
+The **M0–M8 source integration batch** is assembled on `agent/m6-sf2-playback-prepare-v1`. M7 PR #17 and M8 PR #18 have merged into that branch. Core implementation and tracked CI/physical stress work are complete for the tested configurations; representative audible approval and V1 release remain open.
+
+M8 reference: `bb31908b` three physical runs PASS with PCM checksum `fe69915701738934`, 24 nominal normal/full-FX sample voices, eight stable pathological heavy-DSP voices, no WDT/hard-gate failures and final backlog zero. User confirmed the recorded `-dirty` suffix is not a blocker for this source integration; retain the actual banner without claiming clean CI binary identity. See `benchmarks/M8_PHYSICAL_THREE_RUN_2026-10-24.md`.
+
+Current focus: integrate into `main` with CI, then complete audible tests, release DAC-level/headroom trials and final supported-asset packaging. These remain independent gates; no V1 publication is implied.
+
+M6 physical product qualification is complete at:
+
+`c16ff278b265018be9d2af5cc4fe3e54fe01e947`
+
+Authoritative closeout:
+
+`benchmarks/M6_PHYSICAL_QUALIFICATION_BASELINE_2026-10-20.md`
+
+M6 established a conservative physical N16R8 normal/full-FX baseline of **24 Voices**. The first tested sustained unstable normal step is 28 Voices. The deliberately pathological all-features-on DSP class is stable through **8 Voices** and first unstable at 12 Voices.
+
+The 64-frame period at 44.1 kHz is approximately 1451 us. In production-shaped continuous music stress this is a **soft transient timing target**, not a hard failure by itself. Hard realtime qualification is DMA/backlog-aware and fails on unrecovered backlog, DMA-window exhaustion, active playback queue overflow, write failure, clipping or runtime safety failure. Sustained polyphony sweeps remain strict boundary measurements.
 
 ## Fixed product baseline
 
 - ESP32-S3 N16R8
-- 16 MB flash
-- 8 MB Octal PSRAM
+- 16 MiB Flash
+- 8 MiB Octal PSRAM
 - ESP-IDF v6.1
-- 44.1 kHz / 16-bit / stereo
-- 16 MIDI channels
-- GM1 128 melodic programs + drums
-- initial PCM residency arena: 4 MiB
-- local hardware keys may initially emit one fixed velocity (for example 96 or 100)
-- the synth engine still accepts full MIDI velocity 1..127 from external MIDI/files
+- 240 MHz CPU
+- 44.1 kHz / 16-bit audio
+- stereo synth/mix path
+- current Korvo V4 qualification output: mono downmix -> ES8311 -> PA -> speaker
+- 16 MIDI channels / 16-part multitimbral GM runtime
+- GM1 128 melodic programs + drums where present
+- normal firmware PCM residency arena default remains 4 MiB unless separately changed
+- physical qualification arena: 4.50 MiB
+- MIDI velocity compatibility: 1..127
+- software hard Voice cap: 32
+- normal/full-FX physical nominal polyphony baseline: 24 Voices
 
-R16 is excluded. SoundFont file size is not itself a synth-engine limit.
+R16 assumptions are prohibited. SoundFont file size itself is not the synth-engine limit.
 
 ## Product-format decision
 
-Native `.sf2` is a first-class user asset format.
+Native `.sf2` is a first-class user asset. Users should be able to create/share a SoundFont with existing tools and import that same `.sf2` into the product. Firmware may generate disposable indexes/caches, but a private compiled bank is not required as the user-facing format.
 
-Users should be able to create/share a SoundFont with existing tools and import the same `.sf2` into the product. A private compiled bank format is not the required user-facing path.
-
-Firmware may generate a disposable sidecar index/cache from an SF2, but the original `.sf2` remains the portable asset.
-
-## Public compatibility baselines
-
-Use multiple banks because no single SoundFont is the specification:
-
-- FM/GM Open SoundFont: simple/open GM128 baseline
-- GeneralUser GS: real-world generator/modulator compliance baseline
-- FluidR3_GM: large classic GM / partial-residency stress baseline
-- TimGM6mb: compact real-world N16R8/modulator-heavy baseline
-- GMBK5X128: known non-standard robustness/stress input only
-
-Public full banks and deterministic ~6 MiB derived fixtures live under `assets/sf2/` when Git LFS policy permits.
+SF3 is not a V1 priority.
 
 ## Validation layers
 
-Do not collapse different evidence classes into one claim:
+1. **Host tests** — deterministic SF2 semantics, MIDI/channel behavior, ownership/state machines, residency and DSP/runtime logic.
+2. **ESP32-S3 QEMU** — Xtensa + ESP-IDF + FreeRTOS + VFS/FATFS + PSRAM integration and panic-path evidence.
+3. **Physical N16R8** — actual memory reserve, storage timing, DSP cost, I2S/DMA behavior, codec/PA/speaker path and physical polyphony.
+4. **Clean audible validation** — representative musical content used to find pitch/sample/loop/envelope/output corruption.
+5. **Synthetic performance stress** — intentionally harsh workloads used to characterize limits, not to define all product behavior.
 
-1. Host tests validate deterministic semantics and ownership/state-machine behavior.
-2. ESP32-S3 QEMU validates Xtensa + ESP-IDF + FreeRTOS + VFS/FATFS + PSRAM integration and panic paths.
-3. Physical N16R8 validates actual memory reserve, Flash/SD timing, DSP cost, I2S deadlines and stable polyphony.
-
-QEMU throughput/latency numbers are functional telemetry only and never hardware performance evidence.
+QEMU timing is never physical-performance evidence. Synthetic stress is never subjective audible-quality evidence.
 
 ## M0 — N16R8 hardware baseline
 
-Status: **reproducible ESP-IDF v6.1 / ESP32-S3 build and 8 MiB Octal-PSRAM QEMU baseline complete; physical N16R8 measurements and audio baseline remain.**
+Status: **COMPLETE for the current qualification board.**
 
 Established:
-- ESP-IDF v6.1 pinned in CI
-- ESP32-S3 N16R8 build assertions
-- 16 MiB Flash / Octal PSRAM configuration
-- 4 MiB PSRAM arena bring-up path
-- ESP32-S3 QEMU smoke test with explicit 8 MiB Octal PSRAM
-- physical-board bring-up checklist and dedicated benchmark image build path
 
-Remaining physical tasks:
-- select/record exact N16R8 module/board SKU used for qualification
-- record clean-boot internal SRAM/PSRAM reserve
-- establish 44.1 kHz stereo I2S output in M4
-- add block render-time telemetry with the audio engine
-- create/run repeatable dense-MIDI stress sequences
+- ESP-IDF v6.1 / N16R8 build assertions;
+- 16 MiB Flash / 8 MiB Octal PSRAM;
+- physical boot with PSRAM at 80 MHz;
+- internal-Flash -> PSRAM benchmark;
+- 44.1 kHz I2S clocking and DMA startup;
+- ES8311 control/readback;
+- PA enable and speaker output.
 
-Exit criteria:
-- reproducible ESP32-S3 build: **met**
-- known N16R8 target/configuration: **configuration met; exact qualification board record pending**
-- measured physical memory reserve: pending
-- measured audio deadline baseline: pending M4+
+Storage throughput is approximately 5.8–6.3 MiB/s across 4/8/16/32/64 KiB reads. 32 KiB remains the practical source-read chunk baseline.
 
-## M1 — SF2 analyzer
+## M1 — SF2 analyzer / compatibility inventory
 
-Status: **useful real-bank implementation complete and used by later CI.**
+Status: **COMPLETE / CI-backed core.**
 
-Implemented analysis includes:
-- RIFF/SF2 structure
-- source identity/hash and file size
-- `smpl` payload
-- preset/instrument/sample counts
-- bank distribution
-- source sample-rate distribution
-- generator/modulator usage
-- linked/stereo samples
-- per-program dependencies/working sets
-- realistic 16-channel sample unions
-- N16R8 residency estimates
+Coverage includes RIFF/SF2 structure, source identity, sample metadata, bank/program distributions, generator/modulator usage, stereo links, dependencies, working-set estimates and compatibility reporting.
 
-Its checked-in manifests generate real dependency fixtures for M3 Host tests.
+Parseability remains distinct from runtime/audio qualification.
 
-## M1.5 — SF2 compatibility baseline
+## M2 — ResolvedZone / generator hierarchy
 
-Status: **core compatibility reporting established; qualification expands as DSP/runtime support expands.**
+Status: **COMPLETE / CI-backed core.**
 
-Coverage includes:
-- generator/modulator feature classification
-- unsupported/malformed feature reporting
-- stereo-link/sm24/ROM presence reporting
-- real-bank qualification roles
-
-Parseability remains explicitly separate from audio-runtime qualification.
-
-## M2 — Generator hierarchy and ResolvedZone
-
-Status: **Host hierarchy/ResolvedZone implementation established and used by conformance tooling.**
-
-Target flow:
+Flow:
 
 `Preset global/local -> Instrument global/local -> Sample -> ResolvedZone`
 
-Implemented/tested semantics include:
-- preset/instrument global/local range intersection
-- instrument local generator overrides
-- preset generator contribution rules
-- sample address/loop offsets
-- root key/tuning
-- envelopes/filter/pan/attenuation/FX sends in native SF2 units
+Coverage includes range intersection, generator hierarchy, address/loop offsets, root key/tuning, envelopes, filter, pan, attenuation, FX sends and exclusive class.
 
-Representative results are cross-checked through the M2.5 FluidSynth oracle.
+## M2.5 — Modulator resolver / runtime modulation
 
-## M2.5 — Modulator resolver
+Status: **CORE COMPLETE.**
 
-Status: **L0/L1 complete and strict in CI.**
+Runtime coverage includes attenuation/pan, filter/resonance, volume envelope, modulation envelope, vibrato LFO, modulation LFO, pitch bend/range, modulation wheel, channel pressure and CC91/CC93 sends.
 
-Pinned reference:
-- FluidSynth 2.6.1
-- commit `71e85b2ca6bf48641ba7e2261d8f2640ae473773`
-- internal `fluid_voice_gen_value()` effective-generator oracle
+Representative user-SF2 banks with non-zero modulators remain an M7 release-compatibility target because the compact tracked FM bank itself contains no non-zero pmod/imod records.
 
-Strict real-bank baseline:
-- FM/GM Open subset
-- GeneralUser GS subset
-- FluidR3_GM subset
-- programs 8/16/32/50/56/80/88/96
-- key 60 / velocity 96
+## M3 — Sample residency / storage / Program Prepare
 
-Current strict result:
-- structural failures: 0
-- generator failures: 0
-- core Generator mismatch count: 0
+Status: **COMPLETE for core architecture and current physical qualification.**
 
-Runtime compatibility behavior such as FluidSynth/EMU attenuation scaling and the default Velocity->FilterFc compatibility quirk is kept separate from native parsed SF2 data.
-
-L2 dynamic CC/pitch/pressure expansion may continue in parallel with later runtime milestones.
-
-## M3 — Sample residency / storage
-
-Status: **Host architecture + ESP-IDF/VFS backend + real-SF2 ESP32-S3 QEMU integration are complete and CI-backed. Physical N16R8 performance qualification remains.**
-
-Goal: make large user SF2 files practical on R8 without storage I/O from NoteOn/audio render.
-
-### Implemented path
+Implemented path:
 
 ```text
 native .sf2
   -> VFS RandomAccessReader
   -> Sf2SampleSource
-  -> Program dependency set
+  -> dependency set
   -> ProgramPrepareController
   -> direct-to-arena chunked loading
   -> Program Pins
@@ -168,191 +120,129 @@ native .sf2
   -> move-only Voice Ref
 ```
 
-Implemented/tested capabilities:
-- fixed-capacity contiguous arena allocator
-- aligned first-fit + free-span coalescing
-- duplicate SampleId reuse
-- independent Program Pin / Voice Ref lifetimes
-- generation/lease protection
-- high-water/fragmentation telemetry
-- direct-to-arena transactional source loading with rollback after partial read failure
-- no sample-sized staging buffer requirement
-- cross-core publication protocol with acquire grace period and deferred reclamation
-- block-boundary READY/Active snapshot exchange
-- old release tails survive Program Change
-- source-backed transactional Prepare with resident-cache reuse
-- generated real-bank 16-channel dependency stress
-- native SF2 `smpl`/`shdr` random-access source validated against real files
-- safe LRU eviction of unowned/unpublished/reclaimable cache entries
-- explicit residency-capacity failure that preserves the previous Active Program
-- compact 16-channel latest-wins Program Change mailbox for rapid UI/MIDI changes
-- ESP-IDF `VfsRandomAccessReader`
-- ESP32-S3 PSRAM arena allocation abstraction
-- storage benchmark core with 4/8/16/32/64 KiB sweep
-- throughput plus min/avg/p50/p95/p99/max latency telemetry
-- generated raw-FATFS real-SF2 fixture
-- ESP32-S3 QEMU integration using 16 MiB virtual Flash and exactly 8 MiB Octal PSRAM
-- real SF2 opens/parses from `/sf2/test.sf2` in QEMU as 67 playable samples
-- QEMU real-SF2 VFS -> PSRAM sweep passes all five chunk sizes
-- checked benchmark-log parser that emits a Markdown PASS/FAIL report
-- dedicated physical N16R8 internal-Flash benchmark build using 4 MiB per chunk-size pass
+Established behavior includes transactional rollback, safe LRU eviction, resident reuse, Active/READY exchange, release-tail survival, bounded capacity failure and a 16-channel latest-wins Program Change mailbox.
 
-### QEMU functional gate
+Realtime invariant: no filesystem/Flash/SD read in the audio hot path.
 
-First complete green real-SF2 run:
-- workflow: `esp-idf-build #21`
-- commit: `86e492b`
-- fixture: `FM_GM_Open_subset_6MiB.sf2`
-- fixture bytes: `5,898,214`
-- fixture playable samples: `67`
-- virtual PSRAM: `8,388,608` bytes
-- PCM arena: `4,194,304` bytes
-- QEMU benchmark bytes/pass: `262,144`
-- all five chunk sizes passed
+## M4 — Voice DSP + FX + physical audio
 
-See `benchmarks/QEMU_SF2_STORAGE_BASELINE_2026-10-15.md`.
+Status: **COMPLETE for current M6 baseline.**
 
-The observed QEMU ~2.3–2.4 MiB/s is not a physical performance result.
+Implemented paths include sample interpolation/phase stepping, pitch, looping, attenuation/pan, volume envelope, resonant/dynamic filtering, vibrato LFO, modulation LFO, modulation envelope, reverb/chorus sends, global FX, I2S DMA, ES8311 and PA output.
 
-### Measured residency pressure
+The clean real-SF2 automated physical path passes runtime/I2S invariants. Subjective listening remains a separate release-quality activity.
 
-Checked-in qualification manifests currently show:
-- FM/GM subset greedy 16-program union: `2,221,452` B
-- GeneralUser subset greedy 16-program union: `5,675,820` B
-- FluidR3 subset greedy 16-program union: `5,887,528` B
+## M5 — Timestamped realtime event scheduler / GM channel runtime
 
-Therefore "only keep current 16 Programs" is not by itself a guarantee that a user SF2 fits R8. Arbitrary active working sets can exceed the available PCM arena.
+Status: **COMPLETE / CI-backed core.**
 
-### Admission policy
+Path:
 
-V1 rule:
-- Prepare may evict only safe unowned cache;
-- Active/READY Pins and live Voice Refs are never sacrificed to force a new Program Change to fit;
-- if the requested working set cannot coexist during safe Prepare, return a capacity failure/defer the change while the old Active Program remains valid;
-- streaming/degraded playback is a separate future feature, not a hidden fallback.
+`input/event producer -> timestamp -> bounded queue -> block scheduler -> frame-offset execution`
 
-### M3 remaining
+Established behavior includes Note On/Off, sustain, volume/pan/expression, pitch bend/range, channel pressure, Program Change handoff, GM Reset, 16 independent MIDI channel states, GM Channel 10 percussion policy and latest-wins Program Change handling.
 
-Physical N16R8 gate:
-- boot the exact qualification board and record PSRAM total/free/largest/minimum-free values
-- run the pinned internal-Flash -> PSRAM benchmark at 4 MiB per 4/8/16/32/64 KiB pass
-- capture throughput and p95/p99/max latency with `tools.storage_benchmark.report`
-- use the first physical result to define evidence-based performance acceptance thresholds
-- decide whether the 4 MiB arena remains the production baseline or can safely move toward 5–6 MiB
+## M6 — Adaptive polyphony / physical product qualification
 
-Then, where product architecture requires it:
-- add/mount SD/MMC backend and repeat the same real-SF2 benchmark
-- compare Flash vs SD average throughput and tail latency
-- measure Program Prepare source bytes/reuse/eviction latency on target
-- measure atomic acquire/release and block-boundary commit cost on actual S3
-- integrate latest-desired Program mailbox with the final control/dependency loop
-- continue pathological fragmentation/capacity tests where useful
+Status: **COMPLETE.**
 
-Realtime invariant to verify once M4 audio task exists:
-- no filesystem/Flash/SD read occurs in the audio hot path.
+Checkpoint: `c16ff278`
 
-Exit criteria:
-- large native SF2 can select playable presets using only required resident unions when the requested working set fits
-- capacity failure is explicit and non-destructive
-- active/releasing voices retain valid PCM through Program Changes
-- no filesystem/Flash read occurs in the audio hot path
-- physical N16R8 memory/storage measurements validate the chosen reserve and control-domain load costs
+### Normal/full-FX sustained physical boundary
 
-## M4 — Voice DSP baseline
+- 16 Voices: avg 896 us / max 904 us — stable;
+- 20 Voices: avg 1081 us / max 1091 us — stable;
+- 24 Voices: avg 1268 us / max 1278 us — stable;
+- 28 Voices: avg 1455 us / max 1465 us — first tested unstable step;
+- 32 Voices: avg 1641 us / max 1650 us — unstable.
 
-Status: **not started as the active integration milestone; entry waits for the physical M3 storage/memory baseline.**
+Product baseline: **24 normal/full-FX Voices**.
 
-Goal: make ResolvedZone + ModPlan + SampleRef produce sound correctly before aggressive optimization.
+### Pathological heavy-DSP boundary
 
-Implement/validate:
-- sample interpolation
-- pitch/sample-rate conversion
-- volume ADSR
-- loops
-- attenuation/pan
-- per-voice filter where required
-- vibrato/mod LFO where required
-- modulation envelope where required
-- dry/reverb/chorus sends
-- 44.1 kHz / 16-bit stereo I2S output
-- bounded per-block render timing and underrun telemetry
+- 1 / 2 / 4 Voices: stable;
+- 8 Voices: avg 1301 us / max 1312 us — stable;
+- 12 Voices: avg 1878 us / max 1889 us — first unstable step.
 
-Entry condition:
-- M3 sample lifetime/publication contract remains stable enough that Voice can own a `PublishedVoiceRef` without storage knowledge;
-- physical N16R8 PSRAM/Flash baseline is captured so storage faults are separated from DSP timing faults.
+Characterization baseline: **8 heavy-DSP Voices stable**.
 
-Exit criteria:
-- representative reference notes render correctly enough for semantic A/B comparison
-- deterministic DSP tests exist where practical
-- first physical render/deadline baseline is recorded
+### Final production-shaped music stress
 
-## M5 — Timestamped realtime event scheduler
+`118` events / `16384` measured blocks:
 
-Goal: move MIDI/internal events into a bounded realtime-safe path.
+- peak active Voices: 24;
+- render avg/max: 754 / 1896 us;
+- render soft overruns: 5;
+- producer-work soft overruns: 6;
+- max consecutive producer-work overruns: 2;
+- max accumulated backlog: 448 us;
+- final backlog: 0 us;
+- DMA window: 11610 us;
+- minimum DMA margin: 11162 us;
+- active synth queue overflows: 0;
+- producer stalls over DMA window: 0;
+- write timeouts: 0;
+- partial writes: 0;
+- clipping: 0;
+- hard-gate flags: 0;
+- semantic stress: PASS.
 
-`input -> MIDI/internal decoder -> timestamp -> bounded queue -> block scheduler -> frame-offset execution`
+Worst transient pure-render block remains 24 simultaneous NoteOn events at about 1896 us. This is an M7 headroom/regression metric, not an M6 blocker.
 
-Exit criteria:
-- multiple Note/CC events can execute at distinct offsets within a 64-frame block
-- audio task never blocks on producers
+## M7 — GM128 / user-SF2 release qualification
 
-## M6 — Adaptive polyphony and safe voice stealing
+Status: **ACTIVE.**
 
-Goal: preserve audio deadlines across simple and DSP-heavy SF2 programs.
+Detailed task: `tasks/M7_GM128_USER_SF2_RELEASE.md`.
 
-Tasks:
-- render deadline monitor
-- rolling/peak/P99 timing
-- adaptive voice-admission limit
-- hysteresis/recovery
-- fast-release/fade stealing
-- optional per-voice DSP complexity weight as a predictive signal
+### M7.0 — Tracked GM128 release matrix
 
-Qualification target remains 16 active sample voices; 18–20 remains opportunistic until N16R8 measurements prove margin.
+Retain the existing five `gm128-full-bank` host gates and add a sixth per-Program release matrix using the production `Sf2PlaybackProgramPreparer`.
 
-## M7 — GM128 / user-SF2 qualification
+Required outputs:
 
-Functional coverage:
-- 128 GM melodic programs and drums where provided
-- 16 MIDI channels
-- Program/Bank change
-- Note On/Off, sustain, volume, pan, expression
-- pitch bend/range
-- reverb/chorus sends
-- default/custom modulators
-- stereo-linked samples
+- one machine-readable row per Bank 0 program 0–127;
+- one row per Bank 128 program 0–127;
+- zones / dependencies / aligned PCM working set;
+- modulator and Preview state;
+- representative melodic coverage;
+- standard drum coverage;
+- JSON release artifact;
+- Markdown release artifact.
 
-Stress coverage:
-- dense chords/sustain
-- drum bursts
-- rapid Program Change
-- mixed 16-channel working sets
-- maximum-zone/layer programs
-- long-running playback
+This is reporting/qualification consolidation, not a duplicate GM runtime implementation.
 
-Release metrics:
-- deadline misses / underruns / queue drops
-- invalid sample accesses
-- max/P95/P99 render time
-- internal SRAM/PSRAM high-water marks
-- sample residency pressure
-- source load/reuse/eviction bytes and latency
-- observed stable polyphony by DSP complexity class
+### M7.1 — Multi-bank native-SF2 release matrix
 
-## Current decision log
+Generalize the same schema across representative native `.sf2` banks. Include a mainstream complete GM/GS bank and a structurally richer user-style bank containing features absent from the compact FM bank, especially stereo links and non-zero modulators.
 
-- Hardware target is fixed: ESP32-S3 N16R8; R16 assumptions are prohibited.
-- ESP-IDF v6.1 is the pinned embedded baseline.
+### M7.2 — Real-bank 16-channel product workload
+
+Qualify mixed 16-channel GM playback, dense chords, sustain/release, drum bursts, CC/pitch/FX changes, Program/Bank Change, GM Reset and rapid Program Change while other channels remain active.
+
+### M7.3 — User-SF2 robustness
+
+Bound and classify extreme, unsupported and malformed assets. Explicit rejection is acceptable; panic, invalid sample access, stale ownership or destructive eviction of live audio is not.
+
+### M7.4 — Physical long-run / audible release sampling
+
+Use physical N16R8 for representative-bank storage/Prepare timing, long I2S/DMA health, real p95/p99/max/backlog, memory high-water and selected audible release checks.
+
+## Decision log
+
+- Hardware target is ESP32-S3 N16R8; R16 assumptions are prohibited.
+- ESP-IDF v6.1 is the embedded baseline.
 - Native SF2 is the user-facing/shareable asset format.
-- Local keys may use a fixed or small discrete set of velocities; engine compatibility remains 1..127.
-- Shared/per-program residency is mandatory architecture; full residency is only an optimization.
-- SF3 is not a V1 priority.
-- Private compiled-bank conversion is not required for user assets; disposable indexes/caches are allowed.
-- Modulators are resolved outside the per-sample interpretation path; continuous DSP cost, not arbitrary table scanning, is the main polyphony risk.
-- Native SF2 sample loading is random-access/chunked and control-domain only; no full-file or full-sample staging copy is required.
-- Residency admission never destroys Active/READY/live-Voice ownership merely to make a new Program Change fit.
-- Rapid Program Changes use latest-wins coalescing at the compact Program identity level; dependency sets are recomputed when the request is actually serviced.
-- QEMU is an integration gate, not a physical performance oracle.
-- Internal Flash is benchmarked on physical N16R8 before adding SD so storage variables remain separable.
-- No numeric Flash-throughput pass threshold is invented before the first physical measurement; the first board run establishes the evidence baseline.
-- 16 active sample voices remains the qualification goal; higher counts depend on measured N16R8 headroom.
+- V1 GM runtime is 16 MIDI channels, not 32.
+- MIDI channel count and simultaneous sample-Voice count are independent.
+- Shared/per-program residency is mandatory; full residency is only an optimization.
+- Asset I/O stays outside the audio hot path.
+- Residency admission never destroys Active/READY/live-Voice ownership merely to force Program Change to fit.
+- QEMU is an integration gate, not a physical timing oracle.
+- Synthetic performance stress is not an audible-quality oracle.
+- The software hard Voice cap is 32 and is not a guaranteed realtime specification.
+- M6 normal/full-FX physical nominal polyphony is 24 Voices; 28 is the first tested sustained unstable step.
+- M6 pathological heavy-DSP characterization is 8 Voices stable; 12 first unstable.
+- 1451 us is a soft transient timing target for production-shaped buffered playback; sustained workload boundaries remain strict.
+- Hard realtime qualification is based on recoverable backlog/DMA/write/queue/runtime health rather than a single isolated block overrun.
+- The ~1.9 ms 24-NoteOn burst is retained as a regression/headroom metric and should only become an optimization priority if real M7 banks create materially worse backlog or product latency.

@@ -6,6 +6,8 @@
 namespace gm_synth::sf2 {
 namespace {
 
+constexpr std::size_t kShdrBytes = 46;
+
 std::uint16_t readLe16(const std::uint8_t* bytes) {
     return static_cast<std::uint16_t>(bytes[0]) |
            static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[1]) << 8u);
@@ -47,7 +49,6 @@ bool Sf2SampleSource::begin(storage::RandomAccessReader& reader) {
     shdr_payload_offset_ = 0;
     shdr_payload_bytes_ = 0;
     sample_count_ = 0;
-    samples_.fill(SampleRecord{});
     setError(Error::None);
 
     if (reader.size() < 12) {
@@ -179,8 +180,45 @@ bool Sf2SampleSource::scanList(
     return true;
 }
 
+bool Sf2SampleSource::readSampleRecord(
+    sample::SampleId sample_id,
+    SampleRecord* record) {
+    if (record == nullptr || static_cast<std::size_t>(sample_id) >= sample_count_) {
+        return false;
+    }
+
+    std::uint8_t raw[kShdrBytes]{};
+    if (!readExact(
+            shdr_payload_offset_ + static_cast<std::uint64_t>(sample_id) * kShdrBytes,
+            raw,
+            sizeof(raw))) {
+        setError(Error::ReadFailed);
+        return false;
+    }
+
+    SampleRecord out{};
+    out.start = readLe32(raw + 20);
+    out.end = readLe32(raw + 24);
+    out.start_loop = readLe32(raw + 28);
+    out.end_loop = readLe32(raw + 32);
+    out.sample_rate = readLe32(raw + 36);
+    out.original_pitch = raw[40];
+    out.pitch_correction = static_cast<std::int8_t>(raw[41]);
+    out.sample_link = readLe16(raw + 42);
+    out.sample_type = readLe16(raw + 44);
+    out.rom = (out.sample_type & 0x8000u) != 0u;
+
+    const std::uint64_t smpl_points = smpl_payload_bytes_ / 2u;
+    if (out.end <= out.start || out.end > smpl_points || out.sample_rate == 0) {
+        setError(Error::InvalidSampleRange);
+        return false;
+    }
+
+    *record = out;
+    return true;
+}
+
 bool Sf2SampleSource::parseSampleHeaders() {
-    constexpr std::size_t kShdrBytes = 46;
     if (shdr_payload_bytes_ < kShdrBytes || (shdr_payload_bytes_ % kShdrBytes) != 0) {
         setError(Error::InvalidShdr);
         return false;
@@ -191,42 +229,24 @@ bool Sf2SampleSource::parseSampleHeaders() {
         setError(Error::InvalidShdr);
         return false;
     }
-    const std::size_t playable_count = record_count - 1;  // terminal EOS record
-    if (playable_count > samples_.size()) {
+    const std::size_t playable_count = record_count - 1u;  // terminal EOS record
+    if (playable_count > kMaxSamples) {
         setError(Error::TooManySamples);
         return false;
     }
 
-    const std::uint64_t smpl_points = smpl_payload_bytes_ / 2u;
-    for (std::size_t index = 0; index < playable_count; ++index) {
-        std::uint8_t raw[kShdrBytes]{};
-        if (!readExact(shdr_payload_offset_ + index * kShdrBytes, raw, sizeof(raw))) {
-            setError(Error::ReadFailed);
-            return false;
-        }
-
-        SampleRecord record{};
-        record.start = readLe32(raw + 20);
-        record.end = readLe32(raw + 24);
-        record.start_loop = readLe32(raw + 28);
-        record.end_loop = readLe32(raw + 32);
-        record.sample_rate = readLe32(raw + 36);
-        record.original_pitch = raw[40];
-        record.pitch_correction = static_cast<std::int8_t>(raw[41]);
-        record.sample_link = readLe16(raw + 42);
-        record.sample_type = readLe16(raw + 44);
-        record.rom = (record.sample_type & 0x8000u) != 0u;
-
-        if (record.end <= record.start || record.end > smpl_points || record.sample_rate == 0) {
-            setError(Error::InvalidSampleRange);
-            return false;
-        }
-
-        record.valid = true;
-        samples_[index] = record;
-    }
-
+    // Keep only the table location/count. Validate every playable shdr once at
+    // begin(), then read the requested record on demand. This lets large banks
+    // use their full 16-bit SampleId space without allocating one metadata
+    // record per source sample in SRAM/PSRAM.
     sample_count_ = playable_count;
+    for (std::size_t index = 0; index < playable_count; ++index) {
+        SampleRecord record{};
+        if (!readSampleRecord(static_cast<sample::SampleId>(index), &record)) {
+            sample_count_ = 0;
+            return false;
+        }
+    }
     return true;
 }
 
@@ -237,9 +257,8 @@ bool Sf2SampleSource::descriptorFor(
         return false;
     }
 
-    const SampleRecord& record = samples_[sample_id];
-    if (!record.valid) {
-        setError(Error::InvalidSampleRange);
+    SampleRecord record{};
+    if (!readSampleRecord(sample_id, &record)) {
         return false;
     }
     if (record.rom) {
@@ -267,11 +286,12 @@ bool Sf2SampleSource::descriptorFor(
     return true;
 }
 
-std::uint64_t Sf2SampleSource::sourceByteOffset(sample::SampleId sample_id) const {
-    if (static_cast<std::size_t>(sample_id) >= sample_count_ || !samples_[sample_id].valid) {
+std::uint64_t Sf2SampleSource::sourceByteOffset(sample::SampleId sample_id) {
+    SampleRecord record{};
+    if (!readSampleRecord(sample_id, &record)) {
         return 0;
     }
-    return smpl_payload_offset_ + static_cast<std::uint64_t>(samples_[sample_id].start) * 2u;
+    return smpl_payload_offset_ + static_cast<std::uint64_t>(record.start) * 2u;
 }
 
 bool Sf2SampleSource::fillSample(
@@ -282,12 +302,22 @@ bool Sf2SampleSource::fillSample(
         return false;
     }
 
-    sample::SampleDescriptor descriptor{};
-    if (!descriptorFor(sample_id, &descriptor) || descriptor.pcm_bytes != pcm_bytes) {
+    SampleRecord record{};
+    if (!readSampleRecord(sample_id, &record) || record.rom) {
+        if (record.rom) {
+            setError(Error::RomSampleUnsupported);
+        }
         return false;
     }
 
-    const std::uint64_t source_offset = sourceByteOffset(sample_id);
+    const std::size_t expected_bytes =
+        static_cast<std::size_t>(record.end - record.start) * 2u;
+    if (expected_bytes != pcm_bytes) {
+        return false;
+    }
+
+    const std::uint64_t source_offset =
+        smpl_payload_offset_ + static_cast<std::uint64_t>(record.start) * 2u;
     std::size_t copied = 0;
     while (copied < pcm_bytes) {
         const std::size_t chunk = std::min(kReadChunkBytes, pcm_bytes - copied);

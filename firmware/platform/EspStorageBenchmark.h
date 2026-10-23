@@ -24,7 +24,11 @@ struct EspStorageBenchmarkSweepResult {
         results{};
 };
 
+using EspStorageBenchmarkBetweenCaseHook = bool (*)(std::size_t chunk_size, void* context);
+
 // Runs the standard 4/8/16/32/64 KiB sweep into caller-owned PSRAM.
+// The optional between-case hook runs only after a measured case has finished,
+// so qualification scheduling work cannot contaminate the case timing itself.
 // This function is intended for bring-up/control tasks only, never the audio task.
 bool runEspStorageBenchmarkSweep(
     gm_synth::storage::RandomAccessReader& reader,
@@ -32,6 +36,8 @@ bool runEspStorageBenchmarkSweep(
     std::size_t psram_capacity,
     std::uint64_t source_offset,
     std::size_t bytes_to_read,
-    EspStorageBenchmarkSweepResult* sweep_result);
+    EspStorageBenchmarkSweepResult* sweep_result,
+    EspStorageBenchmarkBetweenCaseHook between_case_hook = nullptr,
+    void* between_case_context = nullptr);
 
 }  // namespace gm_synth::platform

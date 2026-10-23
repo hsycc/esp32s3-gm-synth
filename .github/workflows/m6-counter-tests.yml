@@ -7,6 +7,8 @@ on:
       - "firmware/util/SaturatingCounter.h"
       - "firmware/voice/AdaptivePolyphony.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
       - "tests/util/test_saturating_counter.cpp"
       - "tests/voice/test_adaptive_polyphony.cpp"
@@ -17,6 +19,8 @@ on:
       - "firmware/util/SaturatingCounter.h"
       - "firmware/voice/AdaptivePolyphony.*"
       - "firmware/voice/VoiceRenderer.*"
+      - "firmware/voice/VoiceEffectsBus.*"
+      - "firmware/voice/GlobalEffectsProcessor.*"
       - "firmware/realtime/ScheduledAudioBlockRenderer.*"
       - "tests/util/test_saturating_counter.cpp"
       - "tests/voice/test_adaptive_polyphony.cpp"
@@ -57,6 +61,8 @@ jobs:
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
             firmware/sample/PublishedSampleDirectory.cpp \
             firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            firmware/voice/GlobalEffectsProcessor.cpp \
             firmware/realtime/RealtimeEventQueue.cpp \
             firmware/realtime/BlockEventScheduler.cpp \
             firmware/realtime/ScheduledAudioBlockRenderer.cpp \

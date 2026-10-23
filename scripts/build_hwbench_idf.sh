@@ -18,10 +18,6 @@ if [[ ! -f "$IDF_PY" ]]; then
     exit 1
 fi
 
-# Some ESP-IDF environment managers (including Espressif's newer activation
-# flow) expose idf.py as a shell function instead of adding $IDF_PATH/tools to
-# PATH. Shell functions are not inherited by this bash script, so invoke the
-# real idf.py through the activated ESP-IDF Python environment explicitly.
 if [[ -n "${IDF_PYTHON_ENV_PATH:-}" && -x "$IDF_PYTHON_ENV_PATH/bin/python" ]]; then
     IDF_PYTHON="$IDF_PYTHON_ENV_PATH/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
@@ -84,7 +80,7 @@ if [[ "$fixture_bytes" -ne 5898214 ]]; then
     exit 1
 fi
 
-echo "== Configure ESP32-S3 N16R8 hardware benchmark =="
+echo "== Configure ESP32-S3 N16R8 M6 + Korvo audio qualification image =="
 run_idf -B "$BUILD_DIR" \
     -D "SDKCONFIG=$SDKCONFIG_PATH" \
     -D "SDKCONFIG_DEFAULTS=$ROOT_DIR/sdkconfig.defaults;$ROOT_DIR/sdkconfig.hwbench.defaults" \
@@ -93,18 +89,53 @@ run_idf -B "$BUILD_DIR" \
 echo "== Build firmware + raw FATFS fixture =="
 run_idf -B "$BUILD_DIR" build
 
-echo "== Verify hardware benchmark configuration =="
+echo "== Verify M6 qualification configuration =="
 grep -q '^CONFIG_IDF_TARGET="esp32s3"$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_COMPILER_OPTIMIZATION_PERF=y$' "$SDKCONFIG_PATH"
+if grep -q '^CONFIG_COMPILER_OPTIMIZATION_DEBUG=y$' "$SDKCONFIG_PATH"; then
+    echo "Physical timing qualification must not use DEBUG/-Og optimization" >&2
+    exit 1
+fi
 grep -q '^CONFIG_ESPTOOLPY_FLASHMODE_DIO=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHFREQ_80M=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_SPIRAM_SPEED_80M=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_TIMEOUT_S=5$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_ESP_TASK_WDT_PANIC=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_PATH="/sf2/test.sf2"$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_STORAGE_BENCHMARK_BYTES=4194304$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_PROGRAM_PREPARE_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_PHYSICAL_QUALIFICATION_BUILD=y$' "$SDKCONFIG_PATH"
 grep -q '^CONFIG_GM_SYNTH_QEMU_FLASH_SF2_TEST=y$' "$SDKCONFIG_PATH"
+
+# The dedicated hardware image is also our CI compile gate for the real Korvo
+# V4 playback path. Fail loudly if a defaults/config merge silently disables or
+# remaps it: a green hwbench build must compile ES8311 + I2S/DMA integration.
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_ENABLE=y$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_MCLK_GPIO=16$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_BCLK_GPIO=9$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_WS_GPIO=45$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DOUT_GPIO=8$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM=8$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM=64$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_TASK_CORE=1$' "$SDKCONFIG_PATH"
+grep -q '^CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY=20$' "$SDKCONFIG_PATH"
+
+echo "== Physical stack diagnostics =="
+grep -E '^CONFIG_(ESP_MAIN_TASK_STACK_SIZE|FREERTOS_WATCHPOINT_END_OF_STACK)=' "$SDKCONFIG_PATH"
+
+echo "== Physical watchdog configuration =="
+grep -E '^CONFIG_ESP_TASK_WDT_(TIMEOUT_S|CHECK_IDLE_TASK_CPU0|CHECK_IDLE_TASK_CPU1|PANIC)=' "$SDKCONFIG_PATH"
 
 if [[ ! -f "$BUILD_DIR/qemu_sf2.bin" ]]; then
     echo "Expected raw FATFS fixture was not generated: $BUILD_DIR/qemu_sf2.bin" >&2
@@ -119,21 +150,31 @@ if [[ -f "$BUILD_DIR/flash_args" ]]; then
 fi
 
 echo
-echo "Hardware benchmark image is ready."
+echo "N16R8 M6 + Korvo V4 audio qualification image is ready."
 echo "  build dir : $BUILD_DIR"
 echo "  sdkconfig : $SDKCONFIG_PATH"
+echo "  compiler  : PERF (-O2 base), O3 realtime hot files, assertions enabled"
 echo "  flash     : DIO / 80 MHz / 16 MiB"
 echo "  fixture   : $fixture_bytes bytes"
+echo "  PCM arena : 4.50 MiB (4718592 bytes)"
 echo "  storage   : 4 MiB per chunk size (4/8/16/32/64 KiB)"
 echo "  prepare   : cold/warm + cache pressure/LRU + commit/retire/release-tail"
+echo "  render    : 1/4/8/12/16/18/20/24 Voices, 64-frame blocks"
+echo "  memory    : PSRAM + internal-SRAM snapshots before/after Prepare/Render"
+echo "  main stack: 8192 bytes, lifetime high-water logged at qualification idle windows"
+echo "  stack trap: FreeRTOS end-of-stack hardware watchpoint enabled"
+echo "  watchdog  : TWDT 5 s, CPU0+CPU1 Idle watched, panic enabled"
+echo "  audio     : ES8311 + I2S/DMA qualification enabled"
+echo "  I2S pins  : MCLK16 / BCLK9 / WS45 / DOUT8, stereo16 frame with mono duplication"
 
 if [[ -n "$PORT" ]]; then
     echo
-    echo "== Flash hardware benchmark to $PORT =="
+    echo "== Flash M6 qualification image to $PORT =="
     run_idf -B "$BUILD_DIR" -p "$PORT" flash
     echo
     echo "Flash complete. Start the serial monitor with:"
-    echo "  \"$IDF_PYTHON\" \"$IDF_PY\" -B build-hwbench -p '$PORT' monitor"
+    echo "  mkdir -p reports/local"
+    echo "  \"$IDF_PYTHON\" \"$IDF_PY\" -B build-hwbench -p '$PORT' monitor | tee reports/local/n16r8-m6.log"
 else
     echo
     echo "To flash later:"

@@ -1,0 +1,39 @@
+name: m6-release-fast-path-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/voice/VoiceEffectsBus.cpp"
+      - "firmware/voice/VoiceRenderer.cpp"
+      - "firmware/voice/VoiceRenderer.h"
+      - "firmware/sample/PublishedSampleDirectory.*"
+      - "tests/voice/test_voice_release_realtime_fast_path.cpp"
+      - ".github/workflows/m6-release-fast-path-tests.yml"
+  pull_request:
+    paths:
+      - "firmware/voice/VoiceEffectsBus.cpp"
+      - "firmware/voice/VoiceRenderer.cpp"
+      - "firmware/voice/VoiceRenderer.h"
+      - "firmware/sample/PublishedSampleDirectory.*"
+      - "tests/voice/test_voice_release_realtime_fast_path.cpp"
+      - ".github/workflows/m6-release-fast-path-tests.yml"
+
+jobs:
+  release-fast-path-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build realtime release fast-path regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware \
+            firmware/sample/PublishedSampleDirectory.cpp \
+            firmware/voice/VoiceRenderer.cpp \
+            firmware/voice/VoiceEffectsBus.cpp \
+            tests/voice/test_voice_release_realtime_fast_path.cpp \
+            -o build/host-tests/test_voice_release_realtime_fast_path
+      - name: Run realtime release fast-path regression
+        run: ./build/host-tests/test_voice_release_realtime_fast_path

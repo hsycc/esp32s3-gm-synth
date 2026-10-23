@@ -9,11 +9,26 @@ idf_component_register(
         "storage/VfsRandomAccessReader.cpp"
         "storage/StorageReadBenchmark.cpp"
         "sf2/Sf2SampleSource.cpp"
+        "sf2/Sf2PdtaReader.cpp"
+        "sf2/Sf2ResolvedZone.cpp"
+        "sf2/Sf2ModulationMath.cpp"
+        "sf2/Sf2FilterMath.cpp"
+        "sf2/Sf2ZoneModulatorResolver.cpp"
+        "sf2/Sf2PlaybackMaterializer.cpp"
+        "sf2/Sf2PlaybackProgramPreparer.cpp"
         "gm/ProgramChangeMailbox.cpp"
+        "gm/RealtimeProgramChangeHandoff.cpp"
+        "gm/RealtimeProgramChangeRouter.cpp"
+        "gm/ProgramChangeControlService.cpp"
+        "gm/ProgramRuntimeAudioBlock.cpp"
+        "gm/MidiChannelState.cpp"
         "gm/PlaybackProgramSnapshot.cpp"
         "gm/ZoneResolver.cpp"
         "voice/PitchMath.cpp"
         "voice/VoiceRenderer.cpp"
+        "voice/VoiceRuntimeControl.cpp"
+        "voice/VoiceEffectsBus.cpp"
+        "voice/GlobalEffectsProcessor.cpp"
         "voice/AudioBlockRenderer.cpp"
         "voice/AdaptivePolyphony.cpp"
         "realtime/RealtimeEventQueue.cpp"
@@ -31,3 +46,14 @@ idf_component_register(
 )
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
+
+# ESP-IDF v6.1 PERF is -O2 and still forces -fno-lto at framework link time.
+# Push only the realtime DSP/render translation units to -O3 so loop and local
+# inlining heuristics can be more aggressive without bloating parser/storage.
+set_source_files_properties(
+    "voice/VoiceRenderer.cpp"
+    "voice/VoiceEffectsBus.cpp"
+    "voice/GlobalEffectsProcessor.cpp"
+    "realtime/ScheduledAudioBlockRenderer.cpp"
+    PROPERTIES COMPILE_OPTIONS "-O3"
+)
