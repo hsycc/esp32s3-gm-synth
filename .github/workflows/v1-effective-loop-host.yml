@@ -33,6 +33,19 @@ jobs:
             --output build/v1-loop-host/generaluser-effective.json
           python -m tools.v1_loop_crossfade_planner assets/sf2/full/GeneralUser-GS.sf2 \
             --output build/v1-loop-host/three-reference-loops.json
+      - name: Complete eligible geometries without changing the policy
+        run: |
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-host/generaluser-effective-full.json
+      - name: Audit sampled results and actual reference Zone coverage
+        run: |
+          python -m tools.v1_loop_review \
+            --sampled build/v1-loop-host/generaluser-effective.json \
+            --full build/v1-loop-host/generaluser-effective-full.json \
+            --sample 604 --sample 602 --sample 62 --require-complete \
+            --output build/v1-loop-host/prepared-loop-candidate-audit.json
+          cat build/v1-loop-host/prepared-loop-candidate-audit.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload review evidence (no PCM/audio redistribution)
         uses: actions/upload-artifact@v4
         with:
