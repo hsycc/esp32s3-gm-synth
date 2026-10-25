@@ -38,6 +38,15 @@ class PlannerTests(unittest.TestCase):
             result["candidates"][0]["seam_step"])
         self.assertTrue(result["limitations"])
 
+    def test_waveform_diagnostics_are_finite_and_reported(self):
+        result = evaluate([0] * 4032 + [20000] * 64)
+        self.assertEqual(len(result["candidates"]), 4)
+        for candidate in result["candidates"]:
+            self.assertGreaterEqual(candidate["overlap_change_rms"], 0)
+            self.assertGreaterEqual(candidate["overlap_derivative_rms"], 0)
+            self.assertIn("derivative_ratio", candidate)
+        self.assertEqual(result["candidates"][0]["overlap_change_rms"], 0)
+
     def test_period_budget_rejects_long_fades(self):
         # All fades exceed the conservative period-change budget.
         result = evaluate([0] * 224 + [20000] * 32, (0, 16, 32, 64))
