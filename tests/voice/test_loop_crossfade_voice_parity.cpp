@@ -60,7 +60,15 @@ int main() {
                     std::int32_t gain=voice::kQ15Unity;
                     if (i>=off) gain=static_cast<std::int32_t>(std::int64_t{voice::kQ15Unity}*(4096-(i-off))/4096);
                     const std::int64_t product=std::int64_t{raw}*gain;
-                    const auto expected=static_cast<std::int32_t>(product>=0 ? (product+16383)/32767 : -((-product+16383)/32767));
+                    // Production gain uses unity bypass, otherwise symmetric Q15 /32768.
+                    // The cursor itself has no gain or envelope stage.
+                    const auto expected=gain>=voice::kQ15Unity ? static_cast<std::int32_t>(raw) :
+                        static_cast<std::int32_t>(product>=0 ? (product+16384)/32768 : -((-product+16384)/32768));
+                    if (actual[0]!=expected || actual[1]!=expected)
+                        std::cerr << "parity mode=" << static_cast<unsigned>(mode)
+                                  << " step=" << step << " region=" << region << " frame=" << i
+                                  << " raw=" << raw << " gain=" << gain << " expected=" << expected
+                                  << " actual=" << actual[0] << ',' << actual[1] << '\n';
                     assert(actual[0]==expected && actual[1]==expected);
                 }
                 v.reset(); cursor.reset();
