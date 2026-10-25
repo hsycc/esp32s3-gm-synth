@@ -25,13 +25,16 @@ held-loop cursor supplies the other input of a short convex blend. The shadow ma
 wrap; the PRIMARY never wraps after NoteOff. Sustain and amplitude-envelope
 routing remain upstream. There is no extra full loop or delayed NoteOff.
 
-For requested duration R (16, 32 or 64 OUTPUT frames), j=0..R-1:
+For requested maximum R (16, 32 or 64 OUTPUT frames), compute available raw
+output frames at NoteOff with overflow-safe ceil((end-phase)/step). Choose
+D=min(R, available). For D>=2 and j=0..D-1:
 
-    output[j] = nearest((held[j] * (R-1-j) + raw[j] * j) / (R-1))
+    output[j] = nearest((held[j] * (D-1-j) + raw[j] * j) / (D-1))
 
 The first sample equals the held continuation at the SAME phase, not the previous
 output sample; the last equals raw. This removes a branch-switch mismatch, not the
-natural slope of the waveform. Integer nearest rounding is symmetric; R-1 is odd.
+natural slope of the waveform. Integer nearest rounding is symmetric; exact
+half-way ties (possible after tail-length adjustment) round away from zero.
 The convex output stays within its two PCM16 inputs, without saturation or a
 corrective DC offset. The raw tail keeps its phase and original end time.
 
@@ -40,11 +43,13 @@ crossfade. No global duration is approved from this experiment.
 
 ### Tail-end and pitch changes
 
-If the primary reaches its original end early, that last sample is raw and the
-bridge reports `transitionTruncated()`. Its output lifetime is never extended.
-With only one raw frame remaining, raw termination wins over first-sample
-continuity. A large pitch-step change can also cause this truncation. These cases
-are explicitly tested and are NOT claimed click-free.
+A predictable short tail uses a COMPLETE shorter ramp, marked by
+`transitionTailLimited()`, not a fixed ramp cut off at the last instant. The planned
+output count is reported separately. If a later pitch increase reaches the original
+end sooner than planned, the final sample is raw and `transitionTruncated()` is set.
+The lifetime is never extended. With only one raw frame remaining, raw termination
+wins over first-sample continuity and is explicitly flagged as truncated fallback.
+These cases are tested but NOT claimed click-free.
 
 Repeated NoteOff never restarts a bridge. Step updates apply to both active readers.
 Reset clears readers and flags. Null/zero-length renders do not advance. Invalid
@@ -59,9 +64,9 @@ cursor copies at the current phase. These software bounds are not MCU cycle data
 
 Run `bash scripts/test_v1_loop_release.sh` for GCC, then
 `CXX=clang++ SANITIZE=1 bash scripts/test_v1_loop_release.sh` for ASan/UBSan.
-The script requires the compiled native probe and runs all eight Python tests
+The script requires the compiled native probe and runs all nine Python tests
 without skips. The native suites cover 240 unchanged-behavior combinations,
-360 release/rate/tail combinations, irregular blocks, repeated NoteOff, fractional
+360 release/rate/tail combinations, a tail-limited 9-frame ramp, irregular blocks, repeated NoteOff, fractional
 entry into a blend, short tails, extremes, invalid input and reset.
 
 The Python oracle uses closed-form source phases and independently constructs

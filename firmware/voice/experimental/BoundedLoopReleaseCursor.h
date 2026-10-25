@@ -23,6 +23,8 @@ public:
         reset();
         primary_ = candidate;
         duration_ = release.enabled ? release.output_frames : 0;
+        end_phase_ = std::uint64_t{region.end} << 32;
+        step_ = step_q32;
         return true;
     }
 
@@ -32,10 +34,13 @@ public:
     bool transitionActive() const noexcept { return bridging_; }
     bool transitionStarted() const noexcept { return started_; }
     bool transitionTruncated() const noexcept { return truncated_; }
+    bool transitionTailLimited() const noexcept { return tail_limited_; }
+    std::uint16_t transitionPlannedFrames() const noexcept { return planned_; }
     std::uint16_t transitionFramesRendered() const noexcept { return rendered_; }
 
     bool setStep(std::uint64_t step_q32) noexcept {
         if (!primary_.setStep(step_q32)) return false;
+        step_ = step_q32;
         if (bridging_) (void)shadow_.setStep(step_q32);
         return true;
     }
@@ -54,6 +59,11 @@ public:
         auto raw_probe = primary_;
         std::int16_t old_value = 0, raw_value = 0;
         if (!old_probe.next(old_value) || !raw_probe.next(raw_value) || old_value == raw_value) return;
+        const auto distance = end_phase_ - primary_.phaseQ32();
+        // Overflow-safe ceil(distance/step), including the current raw sample.
+        const auto available = distance / step_ + (distance % step_ != 0);
+        planned_ = available < duration_ ? static_cast<std::uint16_t>(available) : duration_;
+        tail_limited_ = planned_ < duration_;
         shadow_ = before;
         bridging_ = started_ = true;
     }
@@ -72,19 +82,28 @@ public:
             shadow_.reset();
             return true;
         }
-        const std::uint16_t denominator = duration_ - 1u;
+        if (planned_ < 2) {
+            // A one-frame tail cannot have distinct held and raw endpoints.
+            // Preserve raw termination, flag the fallback, and never divide by 0.
+            ++rendered_;
+            truncated_ = true;
+            bridging_ = false;
+            shadow_.reset();
+            return true;
+        }
+        const std::uint16_t denominator = planned_ - 1u;
         const bool last_raw_frame = !primary_.active();
         const auto weight = last_raw_frame ? denominator : rendered_;
         const std::int64_t numerator = std::int64_t{held} * (denominator - weight) +
                                        std::int64_t{raw} * weight;
         // Convex blend of PCM16 values: no clipping or corrective DC offset.
-        // Denominator is odd, so exact half-way rounding ties cannot occur.
+        // Tail-limited durations may be odd: exact ties round away from zero.
         out = static_cast<std::int16_t>(numerator >= 0
             ? (numerator + denominator / 2u) / denominator
             : -((-numerator + denominator / 2u) / denominator));
         if (last_raw_frame && rendered_ < denominator) truncated_ = true;
         ++rendered_;
-        if (rendered_ == duration_ || last_raw_frame) {
+        if (rendered_ == planned_ || last_raw_frame) {
             bridging_ = false;
             shadow_.reset();
         }
@@ -103,8 +122,10 @@ private:
     // Both cursors borrow the SAME immutable PCM. Their caller must pin it
     // throughout primary lifetime; this class owns no SampleRef or allocation.
     LoopCrossfadeCursor primary_{}, shadow_{};
-    std::uint16_t duration_ = 0, rendered_ = 0;
+    std::uint64_t end_phase_ = 0, step_ = LoopCrossfadeCursor::kOne;
+    std::uint16_t duration_ = 0, planned_ = 0, rendered_ = 0;
     bool released_ = false, bridging_ = false, started_ = false, truncated_ = false;
+    bool tail_limited_ = false;
 };
 
 } // namespace gm_synth::voice::experimental

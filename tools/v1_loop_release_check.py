@@ -58,6 +58,7 @@ def reference(pcm, ls, le, fade, step, off, release, mode=3):
     held = point(pcm,ls,le,fade,phase,True)
     raw = point(pcm,ls,le,fade,phase,False)
     started = bool(mode == 3 and release and fade and held != raw)
+    planned = min(release,remaining) if started else 0
     begin, end = max(0,off-4), off+129
     stop = min(end,off+remaining) if mode == 3 else end
     output = []
@@ -69,16 +70,17 @@ def reference(pcm, ls, le, fade, step, off, release, mode=3):
             continue
         rp = phase+(t-off)*step
         raw = point(pcm,ls,le,fade,rp,False)
-        if started and t-off < release:
-            weight = release-1 if t-off == remaining-1 else t-off
-            output.append(nearest(h*(release-1-weight)+raw*weight,release-1))
+        if started and planned >= 2 and t-off < planned:
+            weight = t-off
+            output.append(nearest(h*(planned-1-weight)+raw*weight,planned-1))
         else:
             output.append(raw)
     active = mode == 1 or stop < off+remaining
     final_phase = (held_phase(stop,step,ls,le,fade) if mode == 1 else
                    phase+(stop-off)*step if active else len(pcm)*Q)
-    meta = dict(started=started,truncated=bool(started and remaining < release),
-                bridge_frames=min(release,remaining) if started else 0,
+    meta = dict(started=started,truncated=bool(started and planned < 2),
+                tail_limited=bool(started and planned < release),planned_frames=planned,
+                bridge_frames=planned,
                 phase_q32=final_phase,active=active,emitted=len(output))
     return output, meta
 
@@ -188,7 +190,8 @@ def check_bank(sf2, report_path, binary):
     tests = [c for r in rows for c in r['cases']]
     triggered = [c for c in tests if c['started']]
     return dict(schema=1,scope='isolated opt-in release bridge; no Voice integration or audible PASS',
-                runtime_approved=False,policy_version=report['policy_version'],asset_sha256=bank_hash,
+                runtime_approved=False,release_contract='tail-bounded-convex-v2',
+                policy_version=report['policy_version'],asset_sha256=bank_hash,
                 report_sha256=hashlib.sha256(payload).hexdigest(),
                 probe_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                 candidate_source_modes=dict(Counter(r['geometry']['loop_mode'] for r in rows
@@ -196,7 +199,8 @@ def check_bank(sf2, report_path, binary):
                 host_candidates_checked=expected,geometries_checked=len(rows),
                 oracle_cases=len(tests),native_runs=2*len(tests),
                 compared_frames=2*sum(c['emitted'] for c in tests),
-                bridges_started=len(triggered),truncated_bridges=sum(c['truncated'] for c in triggered),
+                bridges_started=len(triggered),tail_limited_bridges=sum(c['tail_limited'] for c in triggered),
+                truncated_bridges=sum(c['truncated'] for c in triggered),
                 onset_continuation_equal=sum(c['switch_mismatch_after']==0 for c in triggered),
                 single_frame_tail_fallbacks=sum(c['truncated'] and c['bridge_frames']==1 for c in triggered),
                 all_equal=True,limitations=[

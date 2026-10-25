@@ -58,6 +58,8 @@ int main(int argc,char** argv) {
         if(!std::cout) throw std::runtime_error("PCM output failed");
         std::cerr << "{\"started\":" << (cursor.transitionStarted()?"true":"false")
             << ",\"truncated\":" << (cursor.transitionTruncated()?"true":"false")
+            << ",\"tail_limited\":" << (cursor.transitionTailLimited()?"true":"false")
+            << ",\"planned_frames\":" << cursor.transitionPlannedFrames()
             << ",\"bridge_frames\":" << cursor.transitionFramesRendered()
             << ",\"phase_q32\":" << cursor.phaseQ32()
             << ",\"active\":" << (cursor.active()?"true":"false")

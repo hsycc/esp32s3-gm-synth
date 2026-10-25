@@ -45,6 +45,22 @@ class ReleaseOracleTests(unittest.TestCase):
         self.assertTrue(m['truncated'])
         self.assertFalse(m['active'])
 
+    def test_short_tail_has_a_complete_shorter_ramp(self):
+        pcm=fixture()[:539]
+        y,m=reference(pcm,19,531,32,Q,530,32)
+        raw,_=reference(pcm,19,531,32,Q,530,0)
+        held,_=reference(pcm,19,531,32,Q,530,32,1)
+        self.assertEqual(m['planned_frames'],9)
+        self.assertEqual(m['bridge_frames'],9)
+        self.assertTrue(m['tail_limited'])
+        self.assertFalse(m['truncated'])
+        self.assertEqual(y[4],held[4])
+        self.assertEqual(y[-1],raw[-1])
+        for j in range(9):
+            n=held[4+j]*(8-j)+raw[4+j]*j
+            expected=(abs(n)+4)//8*(1 if n>=0 else -1)
+            self.assertEqual(y[4+j],expected)
+
     def test_direct_and_continuous_not_changed(self):
         pcm=fixture()
         for fade,mode in ((0,3),(0,1),(32,1)):

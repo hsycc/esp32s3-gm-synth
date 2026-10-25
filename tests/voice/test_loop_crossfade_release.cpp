@@ -70,12 +70,16 @@ void oracleMatrix() {
         assert(held.start(pcm.data(),pcm.size(),r,mode,step,f));
         assert(raw.start(pcm.data(),pcm.size(),r,mode,step,f));
         assert(b.start(pcm.data(),pcm.size(),r,mode,step,f,{true,static_cast<std::uint16_t>(duration)}));
-        bool started=false; unsigned rendered=0;
+        bool started=false; unsigned rendered=0, planned=0;
         for(unsigned t=0;t<3000 && raw.active();++t) {
             if(t==off) {
                 const auto phase=b.phaseQ32(); raw.noteOff(); b.noteOff();
                 assert(b.phaseQ32()==phase && !b.looping());
                 started=b.transitionStarted();
+                const auto distance=(std::uint64_t{r.end}<<32)-phase;
+                const auto available=distance/step+(distance%step!=0);
+                planned=static_cast<unsigned>(std::min<std::uint64_t>(duration,available));
+                if(started) assert(b.transitionPlannedFrames()==planned);
             }
             // Exercise pitch-rate updates during the bridge and raw tail.
             if(t==off+5) {
@@ -84,12 +88,12 @@ void oracleMatrix() {
             std::int16_t h=0,x=0,y=0;
             assert(held.next(h)); assert(raw.next(x)); assert(b.next(y));
             std::int16_t expected=x;
-            if(started && rendered<duration) {
-                const unsigned j=raw.active()?rendered:duration-1;
-                expected=mix(h,x,j,duration); ++rendered;
+            if(started && rendered<planned) {
+                const unsigned j=raw.active()?rendered:planned-1;
+                expected=planned<2?x:mix(h,x,j,planned); ++rendered;
                 assert(y>=std::min(h,x) && y<=std::max(h,x));
-                if(rendered==1 && raw.active()) assert(y==h);
-                if(!raw.active() || rendered==duration) assert(y==x);
+                if(rendered==1 && raw.active() && planned>=2) assert(y==h);
+                if(!raw.active() || rendered==planned) assert(y==x);
             }
             assert(expected==y && b.phaseQ32()==raw.phaseQ32());
             assert(b.active()==raw.active());
@@ -141,6 +145,24 @@ void endAndFraction() {
     assert(b.render(half_prefix.data(),half_prefix.size())==997);
     b.noteOff(); assert(b.transitionStarted());
 }
+void shortenedTailConverges() {
+    const auto pcm=signal(600); Bridge b; Base held,raw;
+    const CursorRegion r{0,539,19,531};
+    const auto mode=CursorLoopMode::UntilRelease;
+    assert(b.start(pcm.data(),pcm.size(),r,mode,Q,{true,32},{true,32}));
+    assert(held.start(pcm.data(),pcm.size(),r,mode,Q,{true,32}));
+    assert(raw.start(pcm.data(),pcm.size(),r,mode,Q,{true,32}));
+    std::int16_t h=0,x=0,y=0;
+    for(unsigned i=0;i<530;++i) { assert(b.next(y)); assert(held.next(h)); assert(raw.next(x)); }
+    raw.noteOff(); b.noteOff();
+    assert(b.transitionTailLimited() && b.transitionPlannedFrames()==9);
+    for(unsigned i=0;i<9;++i) {
+        assert(b.next(y)); assert(held.next(h)); assert(raw.next(x));
+        assert(y==mix(h,x,i,9));
+    }
+    assert(!b.active() && !b.transitionActive() && !b.transitionTruncated());
+    assert(b.transitionFramesRendered()==9);
+}
 void badInputsAndReset() {
     auto pcm=signal(600); Bridge b;
     for(unsigned n:{0u,1u,15u,65u,65535u})
@@ -174,6 +196,6 @@ void extremeStepAndBounds() {
     }
 }
 int main() {
-    unchanged(); oracleMatrix(); blockSplits(); endAndFraction(); badInputsAndReset(); extremeStepAndBounds();
-    std::cout << "Bounded release: 6 suites PASS; default remains disabled\n";
+    unchanged(); oracleMatrix(); blockSplits(); endAndFraction(); shortenedTailConverges(); badInputsAndReset(); extremeStepAndBounds();
+    std::cout << "Bounded release: 7 suites PASS; default remains disabled\n";
 }
