@@ -45,6 +45,59 @@ def distortion_metrics(pcm, fade):
                 derivative_ratio=round(rms(delta) / base, 4) if base else None)
 
 
+def spectral_period_risk(pcm, fade):
+    """Bounded seam-local DFT and autocorrelation diagnostics (host only).
+
+    Compare the rendered overlap region with the original loop tail. This is
+    local content change, NOT a measured change in fundamental frequency of
+    sustained playback. A flat/silent region has undefined spectral metrics.
+    """
+    if fade == 0:
+        return dict(spectral_distance=None, lag_shift=None,
+                    spectral_status="DIRECT_REFERENCE")
+    size = min(128, len(pcm), max(32, fade * 2))
+    original = [float(x) for x in pcm[-size:]]
+    # Build the modified end window using the exact A/B overlap transform.
+    modified = original[:]
+    for i in range(fade):
+        modified[-fade+i] = round(
+            (pcm[-fade+i] * (fade-i) + pcm[i] * (i+1)) / (fade+1))
+    def spectrum(values):
+        mean = sum(values) / len(values)
+        window = [(v-mean)*(0.5-0.5*math.cos(2*math.pi*i/(len(values)-1)))
+                  for i,v in enumerate(values)]
+        return [math.hypot(
+            sum(window[n]*math.cos(2*math.pi*k*n/len(values))
+                for n in range(len(values))),
+            sum(window[n]*math.sin(2*math.pi*k*n/len(values))
+                for n in range(len(values))))
+                for k in range(1,len(values)//2+1)]
+    a,b = spectrum(original),spectrum(modified)
+    norm_a = math.sqrt(sum(x*x for x in a))
+    norm_b = math.sqrt(sum(x*x for x in b))
+    if norm_a < 1e-7 or norm_b < 1e-7:
+        return dict(spectral_distance=None, lag_shift=None,
+                    spectral_status="INSUFFICIENT_SIGNAL")
+    distance = math.sqrt(sum((x/norm_a-y/norm_b)**2 for x,y in zip(a,b)))
+    def peak_lag(values):
+        centered = [x-sum(values)/len(values) for x in values]
+        hi = min(len(values)//2, 48)
+        if hi <= 2:
+            return None
+        correlations=[]
+        for lag in range(2,hi+1):
+            lhs=centered[:-lag]
+            rhs=centered[lag:]
+            denom=math.sqrt(sum(v*v for v in lhs)*sum(v*v for v in rhs))
+            if denom > 1e-10:
+                correlations.append((sum(x*y for x,y in zip(lhs,rhs))/denom,lag))
+        return max(correlations)[1] if correlations else None
+    lag_a,lag_b=peak_lag(original),peak_lag(modified)
+    return dict(spectral_distance=round(distance,5),
+                lag_shift=(lag_b-lag_a if lag_a is not None and lag_b is not None else None),
+                spectral_status="LOCAL_DIAGNOSTIC_ONLY")
+
+
 def evaluate(pcm, fades=FADES):
     """Return decision and per-candidate objective diagnostics.
 
@@ -73,7 +126,8 @@ def evaluate(pcm, fades=FADES):
                                near_max=metrics["max_near_wrap_step_pcm16"],
                                near_rms=metrics["rms_near_wrap_step_pcm16"],
                                period_change_fraction=round(period_change, 8),
-                               **distortion_metrics(pcm, fade)))
+                               **distortion_metrics(pcm, fade),
+                               **spectral_period_risk(pcm, fade)))
     direct = next(c for c in candidates if c["fade_frames"] == 0)
     eligible = []
     for c in candidates:
@@ -93,7 +147,7 @@ def evaluate(pcm, fades=FADES):
                   "no candidate meets conservative seam and period gates",
         "candidates": candidates,
         "limitations": [
-            "waveform and first-difference proxies are not pitch, FFT spectra, or perceptual quality",
+            "local DFT and lag estimate are diagnostics, not verified playback pitch or perceptual quality",
             "overlap shortens loop period by fade_frames",
             "no firmware/VoiceRenderer change and no audible PASS implied",
         ],
