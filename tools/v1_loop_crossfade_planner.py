@@ -8,6 +8,7 @@ tools.m7_loop_seam_audio.render_loop.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 
 if __package__:
@@ -21,6 +22,27 @@ MIN_AUDIBLE_SIZED_JUMP = 2500
 MIN_ABSOLUTE_IMPROVEMENT = 1800
 MIN_RELATIVE_IMPROVEMENT = 0.65
 MAX_PERIOD_CHANGE = 0.02
+
+
+def distortion_metrics(pcm, fade):
+    """Local waveform and high-frequency proxies, not a perceptual FFT score."""
+    if not fade:
+        return dict(overlap_change_rms=0.0, overlap_derivative_rms=0.0,
+                    derivative_ratio=1.0)
+    tail = pcm[-fade:]
+    head = pcm[:fade]
+    mixed = [
+        round((tail[i] * (fade - i) + head[i] * (i + 1)) / (fade + 1))
+        for i in range(fade)
+    ]
+    difference = [mixed[i] - tail[i] for i in range(fade)]
+    delta = [mixed[i] - mixed[i-1] for i in range(1, fade)]
+    original_delta = [tail[i] - tail[i-1] for i in range(1, fade)]
+    rms = lambda xs: math.sqrt(sum(x*x for x in xs) / len(xs)) if xs else 0.0
+    base = rms(original_delta)
+    return dict(overlap_change_rms=round(rms(difference), 2),
+                overlap_derivative_rms=round(rms(delta), 2),
+                derivative_ratio=round(rms(delta) / base, 4) if base else None)
 
 
 def evaluate(pcm, fades=FADES):
@@ -50,7 +72,8 @@ def evaluate(pcm, fades=FADES):
                                seam_step=metrics["wrap_step_pcm16"],
                                near_max=metrics["max_near_wrap_step_pcm16"],
                                near_rms=metrics["rms_near_wrap_step_pcm16"],
-                               period_change_fraction=round(period_change, 8)))
+                               period_change_fraction=round(period_change, 8),
+                               **distortion_metrics(pcm, fade)))
     direct = next(c for c in candidates if c["fade_frames"] == 0)
     eligible = []
     for c in candidates:
@@ -70,7 +93,7 @@ def evaluate(pcm, fades=FADES):
                   "no candidate meets conservative seam and period gates",
         "candidates": candidates,
         "limitations": [
-            "heuristic does not measure pitch, spectrum, or perceptual quality",
+            "waveform and first-difference proxies are not pitch, FFT spectra, or perceptual quality",
             "overlap shortens loop period by fade_frames",
             "no firmware/VoiceRenderer change and no audible PASS implied",
         ],
