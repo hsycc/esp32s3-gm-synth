@@ -46,6 +46,12 @@ jobs:
             --sample 604 --sample 602 --sample 62 --require-complete \
             --output build/v1-loop-host/prepared-loop-candidate-audit.json
           cat build/v1-loop-host/prepared-loop-candidate-audit.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Locate near-peak origins without changing candidate decisions
+        run: |
+          python -m tools.v1_loop_peak_origin assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-host/generaluser-effective-full.json \
+            --sample 604 --sample 497 --sample 806 --sample 114 \
+            --output build/v1-loop-host/peak-origin-diagnostics.json
       - name: Upload review evidence (no PCM/audio redistribution)
         uses: actions/upload-artifact@v4
         with:
