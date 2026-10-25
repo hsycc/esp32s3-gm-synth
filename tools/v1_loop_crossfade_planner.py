@@ -10,7 +10,11 @@ import argparse
 import json
 from pathlib import Path
 
-from tools.m7_loop_seam_audio import TARGETS, FADES, render_loop, measures, sample
+if __package__:
+    from .m7_loop_seam_audio import TARGETS, FADES, render_loop, measures, sample
+else:
+    # Support direct CLI invocation: python3 tools/v1_loop_crossfade_planner.py
+    from m7_loop_seam_audio import TARGETS, FADES, render_loop, measures, sample
 
 # A small seam can be left untouched even if a longer fade wins numerically.
 MIN_AUDIBLE_SIZED_JUMP = 2500
