@@ -33,7 +33,7 @@ jobs:
             --output build/v1-loop-host/generaluser-effective.json
           python -m tools.v1_loop_crossfade_planner assets/sf2/full/GeneralUser-GS.sf2 \
             --output build/v1-loop-host/three-reference-loops.json
-      - name: Complete eligible geometries without changing the policy
+      - name: Complete eligible geometries with source-matched peaks
         run: |
           python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
             --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
@@ -52,6 +52,27 @@ jobs:
             --report build/v1-loop-host/generaluser-effective-full.json \
             --sample 604 --sample 497 --sample 806 --sample 114 \
             --output build/v1-loop-host/peak-origin-diagnostics.json
+      - name: Read immutable v2 source for controlled comparison
+        uses: actions/checkout@v4
+        with:
+          ref: d52bbe5e31c7c29d5c8aa00518cc5701fcf2c18b
+          path: build/v1-loop-baseline
+          sparse-checkout: tools
+          lfs: false
+          persist-credentials: false
+      - name: Recompute v2 on the identical bank and exporter
+        run: |
+          python build/v1-loop-baseline/tools/v1_effective_loop_survey.py \
+            assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-host/generaluser-effective-v2.json
+      - name: Require identical raw metrics and only peak-attribution changes
+        run: |
+          python -m tools.v1_loop_peak_compare \
+            --before build/v1-loop-host/generaluser-effective-v2.json \
+            --after build/v1-loop-host/generaluser-effective-full.json \
+            --output build/v1-loop-host/source-matched-peak-comparison.json
+          cat build/v1-loop-host/source-matched-peak-comparison.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload review evidence (no PCM/audio redistribution)
         uses: actions/upload-artifact@v4
         with:

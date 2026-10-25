@@ -1,8 +1,9 @@
 """Experimental Host policy for *prepared* loop geometries, never a DSP plan.
 
-The original planner remains available for comparison. Rejection reasons are
-kept per candidate, including the seam-only winner rejected by risk checks.
-Thresholds are engineering review settings, not calibrated audibility limits.
+V3 corrects only peak attribution: unchanged source edges are matched to the
+same source pair; mixed/join edges keep the original Direct peak limit. Other
+thresholds and PCM rendering remain unchanged. V2 selection remains available
+for evidence comparison, not as an embedded fallback or audible approval.
 """
 from dataclasses import asdict, dataclass
 import math
@@ -10,11 +11,14 @@ import math
 if __package__:
     from .v1_loop_crossfade_planner import evaluate
     from .m7_loop_seam_audio import render_loop
+    from .v1_loop_matched_peak import matched_peak_metrics, valid_peak_evidence
 else:
     from v1_loop_crossfade_planner import evaluate
     from m7_loop_seam_audio import render_loop
+    from v1_loop_matched_peak import matched_peak_metrics, valid_peak_evidence
 
-POLICY_VERSION = "prepared-loop-review-v2"
+POLICY_VERSION = "prepared-loop-review-v3-source-matched-peak"
+LEGACY_POLICY_VERSION = "prepared-loop-review-v2"
 
 
 @dataclass(frozen=True)
@@ -22,8 +26,8 @@ class Policy:
     min_seam: int = 2500
     min_absolute_improvement: int = 1800
     min_relative_improvement: float = 0.65
-    max_period_fraction: float = 0.01   # >=1% requires review, not automatic use
-    max_spectral_distance: float = 0.3 # provisional, NOT an audibility threshold
+    max_period_fraction: float = 0.01
+    max_spectral_distance: float = 0.3
     max_near_peak_ratio: float = 1.0
     max_near_rms_ratio: float = 1.05
 
@@ -47,12 +51,15 @@ def context_rejections(context):
     return reasons
 
 
-def choose(candidates, loop_frames, context, policy=Policy()):
-    """Choose only among benefit-qualified candidates with no review failures.
+def choose(candidates, loop_frames, context, policy=Policy(), *, peak_mode="legacy_window"):
+    """Low-level selector; legacy default preserves old diagnostic callers.
 
-    A nonzero result is still a Host candidate. runtime_fade_frames is always 0
-    until separate rendering/audible/device qualification has been completed.
+    analyze() explicitly uses source_matched and requires complete attribution.
+    Missing/invalid evidence then fails closed, never falls back to old metrics.
+    The legacy mode is used solely to reconstruct the v2 comparison result.
     """
+    if peak_mode not in ("legacy_window", "source_matched"):
+        raise ValueError("unknown peak comparison mode")
     if type(loop_frames) is not int or loop_frames < 4:
         raise ValueError("invalid loop frame count")
     if not candidates or sum(c.get("fade_frames") == 0 for c in candidates) != 1:
@@ -87,7 +94,6 @@ def choose(candidates, loop_frames, context, policy=Policy()):
                 benefit.append("ABSOLUTE_IMPROVEMENT_TOO_SMALL")
             if delta / max(1, direct["seam_step"]) < policy.min_relative_improvement:
                 benefit.append("RELATIVE_IMPROVEMENT_TOO_SMALL")
-        # Compare unrounded geometry; report rounding must not change a gate.
         if fade / loop_frames >= policy.max_period_fraction:
             risk.append("PERIOD_CHANGE_GE_REVIEW_LIMIT")
         distance = c.get("spectral_distance")
@@ -100,15 +106,23 @@ def choose(candidates, loop_frames, context, policy=Policy()):
             risk.append("LAG_UNDEFINED")
         elif lag:
             risk.append("LOCAL_LAG_SHIFT_REQUIRES_REVIEW")
-        for field, ratio, reason in (
-            ("near_max", policy.max_near_peak_ratio, "NEAR_SEAM_PEAK_WORSE"),
-            ("near_rms", policy.max_near_rms_ratio, "NEAR_SEAM_RMS_WORSE"),
-        ):
-            a, b = direct.get(field), c.get(field)
-            if not finite_number(a) or not finite_number(b) or min(a, b) < 0:
-                risk.append("NEIGHBORHOOD_METRIC_UNDEFINED")
-            elif b > a * ratio:
-                risk.append(reason)
+        a, b = direct.get("near_max"), c.get("near_max")
+        if not finite_number(a) or not finite_number(b) or min(a, b) < 0:
+            risk.append("NEIGHBORHOOD_METRIC_UNDEFINED")
+        elif peak_mode == "legacy_window":
+            if b > a * policy.max_near_peak_ratio:
+                risk.append("NEAR_SEAM_PEAK_WORSE")
+        else:
+            evidence = c.get("source_matched_peak")
+            if not valid_peak_evidence(evidence, b, a, loop_frames):
+                risk.append("PEAK_ORIGIN_UNVERIFIED")
+            elif evidence["changed_edge_peak"] > a * policy.max_near_peak_ratio:
+                risk.append("NEAR_SEAM_PEAK_WORSE")
+        a, b = direct.get("near_rms"), c.get("near_rms")
+        if not finite_number(a) or not finite_number(b) or min(a, b) < 0:
+            risk.append("NEIGHBORHOOD_METRIC_UNDEFINED")
+        elif b > a * policy.max_near_rms_ratio:
+            risk.append("NEAR_SEAM_RMS_WORSE")
         reasons = list(dict.fromkeys(scope_reasons + benefit + risk))
         c.update(benefit_rejections=benefit, risk_rejections=risk,
                  context_rejections=scope_reasons[:], rejection_reasons=reasons,
@@ -124,7 +138,8 @@ def choose(candidates, loop_frames, context, policy=Policy()):
     decision = ("HOST_CANDIDATE" if selected["fade_frames"] else
                 "DIRECT_CONTEXT_BLOCKED" if scope_reasons else
                 "DIRECT_REVIEW" if benefit_ok else "DIRECT_NO_BENEFIT")
-    return dict(policy_version=POLICY_VERSION, policy=asdict(policy),
+    version = POLICY_VERSION if peak_mode == "source_matched" else LEGACY_POLICY_VERSION
+    return dict(policy_version=version, policy=asdict(policy),
                 seam_best_fade_frames=best_seam["fade_frames"],
                 selected_fade_frames=selected["fade_frames"],
                 runtime_fade_frames=0, runtime_approved=False,
@@ -133,7 +148,7 @@ def choose(candidates, loop_frames, context, policy=Policy()):
 
 
 def analyze(pcm, context, policy=Policy()):
-    """Retain old metrics and add a symmetric, complete wrap neighborhood."""
+    """Keep v2 raw metrics and add verified source-pair peak attribution."""
     if len(pcm) < 4:
         raise ValueError("loop too short")
     if any(type(x) is not int or not -32768 <= x <= 32767 for x in pcm):
@@ -151,13 +166,19 @@ def analyze(pcm, context, policy=Policy()):
         c["near_max"] = max(steps)
         c["near_rms"] = math.sqrt(sum(x*x for x in steps) / len(steps))
         c["neighborhood_radius_frames"] = radius
-    result = choose(metrics, len(pcm), context, policy)
+        c["source_matched_peak"] = matched_peak_metrics(pcm, c["fade_frames"], out, center)
+    result = choose(metrics, len(pcm), context, policy, peak_mode="source_matched")
+    old = choose(metrics, len(pcm), context, policy, peak_mode="legacy_window")
+    result["legacy_window_v2"] = {k: old[k] for k in (
+        "policy_version", "policy", "decision", "selected_fade_frames", "seam_best_fade_frames")}
     result["excluded_candidates"] = [dict(fade_frames=f, rejection_reasons=["FADE_TOO_LONG_FOR_LOOP"])
                                      for f in (16, 32, 64) if f not in fades]
-    result["metric_scope"] = "complete_symmetric_wrap_neighborhood_v2"
+    result["metric_scope"] = "complete_symmetric_wrap_neighborhood_v2_source_matched_peak_v1"
     result["limitations"] = [
         "Thresholds are provisional review settings, not audible PASS criteria.",
         "Local DFT/lag are not a verified pitch estimate; lag=0 proves no pitch guarantee.",
+        "Unchanged source pairs are not new peaks; all mixed/join edges retain the Direct limit.",
+        "RMS still compares fixed output windows; this change corrects only peak attribution.",
         "Overlap still changes the steady loop period by fade_frames.",
         "Analysis-only; no firmware/DSP plan is approved by this report."]
     return result
