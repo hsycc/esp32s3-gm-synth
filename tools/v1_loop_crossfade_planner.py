@@ -112,6 +112,21 @@ def main():
         results.append({"sample_id": target[0], "rate": rate, "loop_frames": len(pcm), **result})
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    report = ["# Dynamic Crossfade Host Analysis", "",
+              "Advisory only; not a listening PASS, not embedded DSP.", "",
+              "| Sample | Selected | Direct seam | Selected seam | Period change | Overlap change RMS | Derivative ratio |",
+              "|---:|---:|---:|---:|---:|---:|---:|"]
+    for row in results:
+        direct = next(c for c in row["candidates"] if c["fade_frames"] == 0)
+        chosen = next(c for c in row["candidates"] if c["fade_frames"] == row["selected_fade_frames"])
+        report.append(
+            f'| {row["sample_id"]} | {chosen["fade_frames"]}f | '
+            f'{direct["seam_step"]} | {chosen["seam_step"]} | '
+            f'{chosen["period_change_fraction"]:.4%} | '
+            f'{chosen["overlap_change_rms"]:.2f} | {chosen["derivative_ratio"]} |')
+    report.extend(["", "First-difference ratio is a local high-frequency proxy, not FFT, pitch or a listening score.",
+                   "Selected candidates require separate audible validation."])
+    args.output.with_suffix(".md").write_text("\n".join(report) + "\n", encoding="utf-8")
     print(json.dumps([{"sample_id": r["sample_id"],
                        "selected_fade_frames": r["selected_fade_frames"],
                        "decision": r["decision"]} for r in results], indent=2))
