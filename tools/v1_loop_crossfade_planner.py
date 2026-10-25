@@ -168,7 +168,7 @@ def main():
     args.output.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     report = ["# Dynamic Crossfade Host Analysis", "",
               "Advisory only; not a listening PASS, not embedded DSP.", "",
-              "| Sample | Selected | Direct seam | Selected seam | Period change | Overlap change RMS | Derivative ratio |",
+              "| Sample | Selected | Direct seam | Selected seam | Period change | Overlap change RMS | Derivative ratio | Spectral distance | Lag shift |",
               "|---:|---:|---:|---:|---:|---:|---:|"]
     for row in results:
         direct = next(c for c in row["candidates"] if c["fade_frames"] == 0)
@@ -177,8 +177,9 @@ def main():
             f'| {row["sample_id"]} | {chosen["fade_frames"]}f | '
             f'{direct["seam_step"]} | {chosen["seam_step"]} | '
             f'{chosen["period_change_fraction"]:.4%} | '
-            f'{chosen["overlap_change_rms"]:.2f} | {chosen["derivative_ratio"]} |')
-    report.extend(["", "First-difference ratio is a local high-frequency proxy, not FFT, pitch or a listening score.",
+            f'{chosen["overlap_change_rms"]:.2f} | {chosen["derivative_ratio"]} | '
+            f'{chosen["spectral_distance"]} | {chosen["lag_shift"]} |')
+    report.extend(["", "Local DFT compares the overlapping end window to its original tail; lag shift is a short-window autocorrelation estimate, not a pitch measurement.",
                    "Selected candidates require separate audible validation."])
     args.output.with_suffix(".md").write_text("\n".join(report) + "\n", encoding="utf-8")
     print(json.dumps([{"sample_id": r["sample_id"],
