@@ -1,0 +1,43 @@
+name: v1-effective-loop-host
+on:
+  pull_request:
+    paths:
+      - 'tools/*loop*'
+      - 'tests/test_v1*loop*'
+      - 'scripts/build_v1_loop_exporter.sh'
+      - 'firmware/sf2/**'
+      - 'firmware/gm/Playback*'
+      - '.github/workflows/v1-effective-loop-host.yml'
+  workflow_dispatch:
+jobs:
+  prepared-zone-survey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build production-resolver Host exporter
+        run: bash scripts/build_v1_loop_exporter.sh
+      - name: Policy, CLI and production offset/mode regression tests
+        env:
+          V1_LOOP_EXPORTER: ${{ github.workspace }}/build/v1-loop-host/export_prepared_loops
+        run: python -m unittest discover -s tests -p 'test_v1*loop*.py' -v
+      - name: Analyze the checked-in GeneralUser GS bank
+        run: |
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 128 \
+            --output build/v1-loop-host/generaluser-effective.json
+          python -m tools.v1_loop_crossfade_planner assets/sf2/full/GeneralUser-GS.sf2 \
+            --output build/v1-loop-host/three-reference-loops.json
+      - name: Upload review evidence (no PCM/audio redistribution)
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-effective-loop-review
+          path: |
+            build/v1-loop-host/*.json
+            build/v1-loop-host/*.md
+          if-no-files-found: error
