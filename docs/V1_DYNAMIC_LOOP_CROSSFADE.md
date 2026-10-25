@@ -61,3 +61,28 @@ Before embedding into ESP32-S3:
 
 Do not enable blanket crossfade or consider a numerical seam reduction a
 listening PASS.
+
+## Real-bank survey (Host)
+
+```sh
+python3 -m unittest tests.test_v1_loop_crossfade_survey -v
+python3 -m tools.v1_loop_crossfade_survey \
+  assets/sf2/full/GeneralUser-GS.sf2 \
+  --limit 128 --max-frames 200000 \
+  --output build/v1-loop-survey.json
+```
+
+Inspect `build/v1-loop-survey.md` and upload both report and JSON. It
+stratifies 128 raw shdr loop lengths, records skipped long loops, and
+prints every advisory recommendation and risk-review flag. Defaults are
+deterministic and bound the amount of sample PCM loaded. It does not
+inspect `instrument`/`preset` zone offsets, sample modes, or linked
+stereo sample semantics. Therefore this survey is **not** proof that its
+chosen loops are the effective GM playback loops, and raw-header output
+must not be compared as though it were the normalized 604/602/62 audition.
+Review flags (spectral distance >=0.3, nonzero local lag estimate, period
+change >=1%) are *triage*, not validated perceptual pass/fail thresholds.
+
+The full SF2 file is not bundled in the Host CI runner; execute the
+real-bank survey locally with the user's qualified SF2 asset. Do not
+treat synthetic CI fixtures as evidence for broad-bank quality.
