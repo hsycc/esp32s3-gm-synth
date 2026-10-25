@@ -9,6 +9,10 @@ on:
       - 'tools/loop_cursor_probe.cpp'
       - 'tools/v1_loop_executor_check.py'
       - 'scripts/test_v1_loop_cursor.sh'
+      - 'tests/voice/test_loop_release_oracle.py'
+      - 'tools/loop_release_probe.cpp'
+      - 'tools/v1_loop_release_check.py'
+      - 'scripts/test_v1_loop_release.sh'
       - '.github/workflows/v1-loop-cursor-host.yml'
   workflow_dispatch:
 permissions:
@@ -32,6 +36,9 @@ jobs:
             tools/v1_effective_loop_survey.py tools/m7_loop_seam_audio.py \
             tools/v1_loop_matched_peak.py firmware/voice \
             ':(exclude)firmware/voice/experimental/**'
+          git diff --exit-code 48a67182df0f504371050b5f762dedc950e5f12e -- \
+            firmware/voice/experimental/LoopCrossfadeCursor.h \
+            tools/v1_loop_executor_check.py tools/loop_cursor_probe.cpp
       - name: GCC cursor, production Direct parity and native oracle
         run: bash scripts/test_v1_loop_cursor.sh
       - name: Clang address and undefined-behavior sanitizers
@@ -40,6 +47,16 @@ jobs:
           SANITIZE: '1'
           V1_CURSOR_BUILD_DIR: build/v1-loop-cursor-sanitized
         run: bash scripts/test_v1_loop_cursor.sh
+      - name: GCC bounded release, default parity and independent oracle
+        env:
+          V1_RELEASE_BUILD_DIR: build/v1-loop-cursor
+        run: bash scripts/test_v1_loop_release.sh
+      - name: Clang bounded release sanitizers
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_RELEASE_BUILD_DIR: build/v1-loop-release-sanitized
+        run: bash scripts/test_v1_loop_release.sh
       - name: Export production geometry and run the frozen Host policy
         run: |
           bash scripts/build_v1_loop_exporter.sh
@@ -53,6 +70,12 @@ jobs:
             --probe build/v1-loop-cursor/loop_cursor_probe \
             --reference 604 --reference 602 --reference 62 \
             --output build/v1-loop-cursor/execution-equivalence.json
+      - name: Verify actual modes and forced UntilRelease with effective raw tails
+        run: |
+          python -m tools.v1_loop_release_check assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-cursor/generaluser-effective.json \
+            --probe build/v1-loop-cursor/loop_release_probe \
+            --output build/v1-loop-cursor/release-equivalence.json
       - uses: actions/upload-artifact@v4
         with:
           name: v1-loop-cursor-evidence
