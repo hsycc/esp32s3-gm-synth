@@ -47,6 +47,28 @@ class PlannerTests(unittest.TestCase):
             self.assertIn("derivative_ratio", candidate)
         self.assertEqual(result["candidates"][0]["overlap_change_rms"], 0)
 
+    def test_local_spectral_diagnostics_are_bounded(self):
+        import math
+        # Mixed harmonics exercise spectral shape and finite lag estimates.
+        pcm = [round(12000*math.sin(2*math.pi*i/31) +
+                     2000*math.sin(2*math.pi*i/9)) for i in range(4096)]
+        result = evaluate(pcm)
+        self.assertEqual(len(result["candidates"]), 4)
+        self.assertIsNone(result["candidates"][0]["spectral_distance"])
+        for c in result["candidates"][1:]:
+            self.assertIn(c["spectral_status"],
+                          ("LOCAL_DIAGNOSTIC_ONLY", "INSUFFICIENT_SIGNAL"))
+            if c["spectral_distance"] is not None:
+                self.assertGreaterEqual(c["spectral_distance"], 0)
+                self.assertLessEqual(c["spectral_distance"], 2.00001)
+
+    def test_silence_reports_insufficient_signal(self):
+        result = evaluate([0]*4096)
+        self.assertEqual(result["selected_fade_frames"], 0)
+        self.assertTrue(all(
+            c["spectral_status"] == "INSUFFICIENT_SIGNAL"
+            for c in result["candidates"][1:]))
+
     def test_period_budget_rejects_long_fades(self):
         # All fades exceed the conservative period-change budget.
         result = evaluate([0] * 224 + [20000] * 32, (0, 16, 32, 64))
