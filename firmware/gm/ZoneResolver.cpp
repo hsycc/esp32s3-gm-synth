@@ -874,6 +874,11 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         }
         prepareModEnvelope(
             zone, key, effective_velocity, note_on_deltas, &params.mod_envelope);
+        // BEGIN V1_APP_LOOP
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+        batch->zone_indices[batch->count] = static_cast<std::uint16_t>(i);
+#endif
+        // END V1_APP_LOOP
         ++batch->count;
     }
 
@@ -1033,6 +1038,11 @@ ZoneResolveStatus ZoneResolver::resolveNoteOn(
         params.realtime_control.cc21_filter_offset_cents = sf2::positiveLinearToAmount(
             static_cast<std::uint8_t>(127u - channel_state.filter_controller_21),
             zone.note_on_filter.cc21_to_cutoff_cents);
+        // BEGIN V1_APP_LOOP
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+        batch->zone_indices[batch->count] = static_cast<std::uint16_t>(i);
+#endif
+        // END V1_APP_LOOP
         ++batch->count;
     }
 
@@ -1231,7 +1241,18 @@ bool RealtimeProgramEventApplier::apply(
 #endif
     bool all_started = true;
     for (std::size_t i = 0; i < batch_.count; ++i) {
+        // BEGIN V1_APP_LOOP
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+        if (experimental_starter_ != nullptr
+                ? experimental_starter_(experimental_context_, *program,
+                    batch_.zone_indices[i], event, batch_.voices[i], voices)
+                : voices.start(batch_.voices[i])) {
+#else
+        // END V1_APP_LOOP
         if (voices.start(batch_.voices[i])) {
+        // BEGIN V1_APP_LOOP
+#endif
+        // END V1_APP_LOOP
             util::saturatingIncrement(stats_.voices_started);
         } else {
             util::saturatingIncrement(stats_.voice_start_failures);

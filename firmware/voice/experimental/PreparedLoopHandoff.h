@@ -279,6 +279,49 @@ public:
     }
 #endif
     // END V1_VOICE_BINDING
+    // BEGIN V1_APP_LOOP
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Audio-owner preflight before ANY of the three commits. The application
+    // gate keeps control from replacing READY until the joint acknowledgement.
+    bool audioReadyMatches(const gm::PlaybackProgramSnapshot* playback,
+                           const sample::ProgramSnapshot* residency) const noexcept {
+        return phase_.load(std::memory_order_acquire) == Ready &&
+            buffers_[ready_].program.matches(playback, residency);
+    }
+
+    // This method calls VoicePool exactly once for a selected plan. Admission
+    // failure must not be retried as Direct (which would alter stealing stats).
+    // `raw_key/velocity` are the incoming selection values; params.velocity may
+    // already be overridden by SF2 fixedVelocity and is NOT the zone selector.
+    LoopBindingStatus startPoolVoice(std::uint16_t zone,
+                                    const gm::PlaybackProgramSnapshot* playback,
+                                    const sample::ProgramSnapshot* residency,
+                                    std::uint8_t raw_key, std::uint8_t raw_velocity,
+                                    voice::VoicePool& pool,
+                                    const voice::VoiceStartParams& params,
+                                    bool& started) noexcept {
+        started = false;
+        if (active_ == absent) return LoopBindingStatus::MissingPlan;
+        const auto& b = buffers_[active_];
+        if (!b.program.matches(playback, residency) || zone >= playback->zone_count ||
+            params.channel != playback->channel || params.key != raw_key ||
+            !playback->zones[zone].matches(raw_key, raw_velocity) ||
+            params.sample_id != playback->zones[zone].sample_id)
+            return LoopBindingStatus::ContextMismatch;
+        for (std::size_t i = 0; i < b.count; ++i) {
+            if (b.entries[i].zone != zone) continue;
+            const auto context = b.entries[i].plan.context();
+            auto requested = params;
+            requested.experimental_loop_opt_in = true;
+            requested.experimental_loop_plan = &b.entries[i].plan;
+            requested.experimental_loop_context = &context;
+            started = pool.start(requested);
+            return LoopBindingStatus::Ok;
+        }
+        return LoopBindingStatus::MissingPlan;
+    }
+#endif
+    // END V1_APP_LOOP
     // Quiescent only. Not a racing cancel or a realtime shutdown API.
     bool resetQuiescent() noexcept {
         if (!clear(0) || !clear(1)) return false;
