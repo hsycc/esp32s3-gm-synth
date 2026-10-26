@@ -1,0 +1,33 @@
+name: v1-loop-voice-host
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v1-loop-voice-host.yml'
+      - 'firmware/voice/**'
+      - 'tests/voice/**'
+      - 'scripts/test_v1_loop_voice.sh'
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  baseline-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          fetch-depth: 0
+      - name: Export frozen code only for reproducible integration review
+        run: |
+          git archive --format=tar.gz --output=voice-baseline-source.tar.gz 6d954a7bc200cd0ec300873e7e106fff2a87a692 firmware scripts tests tools .github
+          sha256sum voice-baseline-source.tar.gz > voice-baseline-source.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-voice-baseline-source
+          path: voice-baseline-source.*
+          retention-days: 7
+          if-no-files-found: error
