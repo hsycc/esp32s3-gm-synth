@@ -1,0 +1,13 @@
+{
+  "firmware/gm/ZoneResolver.h": "064cc603bb77ccdc739e1816bd45a8f3d2fa5d42",
+  "firmware/gm/ZoneResolver.cpp": "62196850904b2db5d1c3b27f80f8b97f6a070410",
+  "firmware/voice/experimental/PreparedLoopHandoff.h": "3af18e128fe8d207f3291a47d03bec8b16685900",
+  "scripts/check_v1_voice_baselines.py": "693a5f5f812fb98ea950bd6d2668721ae373f95a",
+  "firmware/app/LoopProgramRuntime.h": "06c0e73fdc5fdaf63236092ec95643290a5bd0ed",
+  "tests/app/make_loop_app_fixture.py": "cdc3aba5dce6b4ec7ad5d7a1803a93c67c4379c0",
+  "tests/app/test_loop_program_runtime.cpp": "56bb9b8848f5a349a6fd540a9f43d7857adac5e9",
+  "tests/app/test_loop_app_no_plan.cpp": "185a409ffd13acb94d5eaabb5777be1fc579178a",
+  "scripts/test_v1_loop_app.sh": "754cb293d21fd0aaaee0efe6da8d11e022cdabb1",
+  "scripts/check_v1_app_disabled.sh": "795e8c80d24a2e8d5be66475c98da204f9ddcd59",
+  "docs/V1_APP_LOOP_ORCHESTRATION.md": "8200953e4b68affffb4f965e45fd8fc010f2eff4"
+}

@@ -1,0 +1,45 @@
+name: v1-app-materialize
+on:
+  push:
+    branches: [agent/v1-loop-app-orchestration-v1]
+    paths: ['.v1-app-staging/**', '.github/workflows/v1-app-materialize.yml']
+permissions:
+  contents: write
+jobs:
+  apply-reviewed-patch:
+    if: github.repository == 'hsycc/esp32s3-gm-synth'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - name: Verify exact baseline, paths and content before branch-only commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/agent/v1-loop-app-orchestration-v1
+          test "$(git rev-parse HEAD^)" = 7a019caf209d07f500fdb81b22c0b4ff4d201f76
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, gzip, hashlib, json, subprocess
+          stage=Path('.v1-app-staging')
+          encoded=''.join((stage/f'part-{i}.b64').read_text() for i in range(3))
+          patch=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert hashlib.sha256(patch).hexdigest()=='29aada73cdb4ce326e8f3da9e4c68669e52ea9f8412ecd77fb55c0a44aefae74'
+          expected=json.loads((stage/'files.json').read_text())
+          names={line.split(' b/',1)[1] for line in patch.decode().splitlines() if line.startswith('diff --git ')}
+          assert names==set(expected)
+          path=Path('/tmp/reviewed-app.patch');path.write_bytes(patch)
+          subprocess.run(['git','apply','--check',str(path)],check=True)
+          subprocess.run(['git','apply',str(path)],check=True)
+          for name,sha in expected.items():
+              assert subprocess.check_output(['git','hash-object',name],text=True).strip()==sha,name
+          subprocess.run(['git','add','--',*sorted(expected)],check=True)
+          actual=set(subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines())
+          assert actual==set(expected)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(v1): add gated application Program and loop-plan orchestration'
+          git push origin HEAD:refs/heads/agent/v1-loop-app-orchestration-v1

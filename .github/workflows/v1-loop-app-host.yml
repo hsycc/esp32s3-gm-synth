@@ -1,0 +1,60 @@
+name: v1-loop-app-host
+on:
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - 'tests/app/**'
+      - 'scripts/*v1*app*'
+      - 'scripts/check_v1_voice_baselines.py'
+      - '.github/workflows/v1-loop-app-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  application-orchestration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preserve frozen source and removable production hooks
+        run: python3 scripts/check_v1_voice_baselines.py
+      - name: Default-off object and no-hook MIDI trace parity
+        run: |
+          set -euo pipefail
+          bash scripts/check_v1_app_disabled.sh 2>&1 | tee app-disabled.log
+      - name: Actual production parser MIDI service and concurrent transaction tests
+        run: |
+          set -euo pipefail
+          bash scripts/test_v1_loop_app.sh 2>&1 | tee app-gcc.log
+      - name: Address and undefined-behavior sanitizers
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_APP_BUILD_DIR: build/v1-loop-app-sanitized
+        run: |
+          set -euo pipefail
+          bash scripts/test_v1_loop_app.sh 2>&1 | tee app-sanitized.log
+      - name: Require complete execution and deterministic traces
+        run: |
+          set -euo pipefail
+          grep -Fx 'APP_LOOP_RESULT suites=8 PASS default_firmware_unchanged=1' app-gcc.log
+          grep -Fx 'APP_LOOP_RESULT suites=8 PASS default_firmware_unchanged=1' app-sanitized.log
+          cmp build/v1-loop-app/disabled/old.txt build/v1-loop-app/disabled/new-0.txt
+          cmp build/v1-loop-app/disabled/old.txt build/v1-loop-app/disabled/new-1.txt
+          cmp build/v1-loop-app/fixture.sha256 build/v1-loop-app-sanitized/fixture.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-app-evidence
+          path: |
+            app-*.log
+            build/v1-loop-app/disabled/*.txt
+            build/v1-loop-app/fixture.sha256
+            build/v1-loop-app-sanitized/fixture.sha256
+          if-no-files-found: error
