@@ -11,6 +11,7 @@ on:
       - 'tools/v1_loop_voice_check.py'
       - 'scripts/*v1*voice*'
       - '.github/workflows/v1-loop-voice-host.yml'
+      - 'scripts/check_v1_*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -49,7 +50,7 @@ jobs:
           python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
             --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
             --output build/v1-loop-voice/generaluser-effective.json
-          echo '400bebd3c728bdbbce4356e723581d66fb87898e87774f20e1bcff25caab36b1  build/v1-loop-voice/generaluser-effective.json' | sha256sum -c -
+          bash scripts/check_v1_frozen_loop_report.sh build/v1-loop-voice/generaluser-effective.json
       - name: Real Prepare to production Voice, retirement and exact PCM
         run: |
           python -m tools.v1_loop_voice_check assets/sf2/full/GeneralUser-GS.sf2 \

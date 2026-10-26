@@ -14,6 +14,7 @@ on:
       - 'tools/v1_loop_release_check.py'
       - 'scripts/test_v1_loop_release.sh'
       - '.github/workflows/v1-loop-cursor-host.yml'
+      - 'scripts/check_v1_*'
   workflow_dispatch:
 permissions:
   contents: read

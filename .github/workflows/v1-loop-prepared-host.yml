@@ -11,6 +11,7 @@ on:
       - 'tests/voice/test_loop*'
       - 'scripts/test_v1_loop_prepared.sh'
       - '.github/workflows/v1-loop-prepared-host.yml'
+      - 'scripts/check_v1_*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -51,7 +52,7 @@ jobs:
           python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
             --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
             --output build/v1-loop-prepared/generaluser-effective.json
-          echo '400bebd3c728bdbbce4356e723581d66fb87898e87774f20e1bcff25caab36b1  build/v1-loop-prepared/generaluser-effective.json' | sha256sum --check
+          bash scripts/check_v1_frozen_loop_report.sh build/v1-loop-prepared/generaluser-effective.json
       - name: Actual SF2 Prepare Source Residency switch and exact PCM
         run: |
           python -m tools.v1_loop_prepared_check assets/sf2/full/GeneralUser-GS.sf2 \
