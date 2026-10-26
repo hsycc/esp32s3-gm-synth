@@ -1,0 +1,96 @@
+name: v1-loop-target
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'sdkconfig.defaults'
+      - 'main/**'
+      - 'firmware/**'
+      - 'tests/idf/loop_voice/**'
+      - 'tests/voice/loop_voice_target_cases.h'
+      - 'tests/voice/test_loop_voice_target_native.cpp'
+      - 'tests/test_v1_loop_target_evidence.py'
+      - 'tools/v1_loop_target_evidence.py'
+      - 'scripts/build_v1_loop_target.sh'
+      - 'scripts/run_v1_loop_target_qemu.sh'
+      - '.github/workflows/v1-loop-target.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Evidence validator rejects incomplete or disabled builds
+        run: python3 -m unittest discover -s tests -p test_v1_loop_target_evidence.py -v
+      - name: Native shared fixture and sanitizers
+        run: |
+          set -euo pipefail
+          mkdir -p build/v1-loop-target
+          sources=(firmware/sample/PublishedSampleDirectory.cpp firmware/voice/VoiceRenderer.cpp firmware/voice/VoiceEffectsBus.cpp firmware/voice/VoiceRuntimeControl.cpp firmware/voice/GlobalEffectsProcessor.cpp tests/voice/test_loop_voice_target_native.cpp)
+          for compiler in g++ clang++; do
+            flags=(-std=c++17 -O2 -Wall -Wextra -Werror -pthread -Ifirmware -DGM_SYNTH_EXPERIMENTAL_VOICE_LOOP=1)
+            if [[ "$compiler" == clang++ ]]; then flags+=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer); fi
+            "$compiler" "${flags[@]}" "${sources[@]}" -o build/v1-loop-target/native-contract
+            build/v1-loop-target/native-contract | tee "build/v1-loop-target/$compiler.log"
+          done
+          cmp build/v1-loop-target/g++.log build/v1-loop-target/clang++.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-target-native
+          path: build/v1-loop-target/*.log
+          if-no-files-found: warn
+  enabled-xtensa:
+    needs: native-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record installer filesystem capacity
+        run: |
+          df -h "$RUNNER_TEMP" /tmp
+          df -i "$RUNNER_TEMP" /tmp
+      - name: Install pinned ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: 'v6.1'
+          eim-version: 'v0.20.1'
+          path: ${{ runner.temp }}/esp-idf
+          tools-path: ${{ runner.temp }}/esp-tools
+      - name: Build enabled production app and isolated target fixture
+        run: |
+          set -euo pipefail
+          mkdir -p build/v1-loop-target
+          bash scripts/build_v1_loop_target.sh 2>&1 | tee build/v1-loop-target/target-build.log
+      - name: Execute shared Voice fixture on Xtensa QEMU
+        run: |
+          set -euo pipefail
+          bash scripts/run_v1_loop_target_qemu.sh 2>&1 | tee build/v1-loop-target/execution.log
+      - name: Upload target evidence (no release approval)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-loop-target-evidence
+          path: |
+            build/v1-loop-target/*.json
+            build/v1-loop-target/*.txt
+            build/v1-loop-target/*.log
+            build/v1-loop-target/sdkconfig.*
+            build/v1-loop-target/firmware/compile_commands.json
+            build/v1-loop-target/firmware/esp32s3_gm_synth.map
+            build/v1-loop-target/smoke/compile_commands.json
+            build/v1-loop-target/smoke/v1_loop_voice_target.map
+          if-no-files-found: warn
