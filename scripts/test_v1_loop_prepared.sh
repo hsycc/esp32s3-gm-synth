@@ -6,6 +6,7 @@ mkdir -p "$OUT"
 FLAGS=(-std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Ifirmware)
 if [[ "${SANITIZE:-0}" == 1 ]]; then FLAGS+=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer); fi
 COMMON=(firmware/sample/SampleResidencyManager.cpp firmware/sample/SampleResidencySourceLoad.cpp
+ firmware/sample/SampleResidencyView.cpp
  firmware/sample/PublishedSampleDirectory.cpp firmware/sample/ProgramSnapshot.cpp
  firmware/sample/ProgramPrepareController.cpp firmware/gm/PlaybackProgramSnapshot.cpp)
 "${CXX:-g++}" "${FLAGS[@]}" "${COMMON[@]}" tests/voice/test_loop_crossfade_prepared.cpp -o "$OUT/test_prepared"

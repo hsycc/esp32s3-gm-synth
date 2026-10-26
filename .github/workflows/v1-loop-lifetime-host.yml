@@ -11,6 +11,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
   pinned-plan-lifetime:
     runs-on: ubuntu-latest
@@ -36,14 +39,16 @@ jobs:
             firmware/voice/experimental/PinnedLoopPlan.h tools/loop_pinned_probe.cpp
       - name: GCC ownership, identity, retirement and PCM parity
         run: |
-          bash scripts/test_v1_loop_lifetime.sh | tee build-lifetime-gcc.txt
+          set -euo pipefail
+          bash scripts/test_v1_loop_lifetime.sh 2>&1 | tee build-lifetime-gcc.txt
       - name: Clang address and undefined behavior sanitizers
         env:
           CXX: clang++
           SANITIZE: '1'
           V1_LIFETIME_BUILD_DIR: build/v1-loop-lifetime-sanitized
         run: |
-          bash scripts/test_v1_loop_lifetime.sh | tee build-lifetime-sanitized.txt
+          set -euo pipefail
+          bash scripts/test_v1_loop_lifetime.sh 2>&1 | tee build-lifetime-sanitized.txt
       - name: Recompute frozen full-bank review
         run: |
           bash scripts/build_v1_loop_exporter.sh

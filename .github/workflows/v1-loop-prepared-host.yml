@@ -14,6 +14,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
   prepared-plan-handoff:
     runs-on: ubuntu-latest
@@ -35,13 +38,17 @@ jobs:
             tools/v1_loop_matched_peak.py tools/v1_effective_loop_survey.py \
             tools/v1_loop_release_check.py tools/v1_loop_executor_check.py
       - name: GCC actual residency and concurrent plan handoff
-        run: bash scripts/test_v1_loop_prepared.sh 2>&1 | tee prepared-gcc.log
+        run: |
+          set -euo pipefail
+          bash scripts/test_v1_loop_prepared.sh 2>&1 | tee prepared-gcc.log
       - name: Clang address and undefined behavior sanitizers
         env:
           CXX: clang++
           SANITIZE: '1'
           V1_PREPARED_BUILD_DIR: build/v1-loop-prepared-sanitized
-        run: bash scripts/test_v1_loop_prepared.sh 2>&1 | tee prepared-sanitized.log
+        run: |
+          set -euo pipefail
+          bash scripts/test_v1_loop_prepared.sh 2>&1 | tee prepared-sanitized.log
       - name: Independent full-region oracle checks
         run: python -m unittest discover -s tests/voice -p test_loop_prepared_oracle.py -v
       - name: Recompute immutable Host selection policy
