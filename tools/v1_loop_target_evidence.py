@@ -4,6 +4,7 @@
 No hardware timing, memory budget or audible approval follows from these gates.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -23,12 +24,51 @@ RESULT = re.compile(r'^V1_TARGET_RESULT cases=(\d+) frames=(\d+) hash=(\d+)$', r
 LAYOUT = re.compile(r'^V1_TARGET_LAYOUT pointer=(\d+) voice=(\d+) params=(\d+) pool=(\d+)$', re.M)
 
 
+def expand_response_files(tokens, directory, records, stack=()):
+    """Expand GCC @files in compiler working-directory coordinates, fail closed.
+
+    Only generated files below that build directory are accepted. Nested
+    expansion is bounded and cycles, missing files and hidden -D/-U conflicts
+    remain errors, rather than treating response files as harmless text.
+    """
+    directory = Path(directory).resolve()
+    expanded = []
+    for token in tokens:
+        if not token.startswith('@'):
+            expanded.append(token)
+            continue
+        if len(stack) >= 4:
+            raise ValueError('response-file nesting exceeds bound')
+        path = Path(token[1:])
+        if not path.is_absolute():
+            path = directory / path
+        path = path.resolve()
+        try:
+            path.relative_to(directory)
+        except ValueError as exc:
+            raise ValueError('response file outside compiler build directory') from exc
+        if path in stack:
+            raise ValueError('cyclic response file')
+        if path.stat().st_size > 1048576:
+            raise ValueError('response file exceeds size bound')
+        raw = path.read_bytes()
+        if len(records) >= 64 and str(path) not in records:
+            raise ValueError('too many response files')
+        records[str(path)] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        expanded.extend(expand_response_files(shlex.split(raw.decode('utf-8')),
+                                               directory, records, stack + (path,)))
+        if len(expanded) > 100000:
+            raise ValueError('expanded compiler command exceeds bound')
+    return expanded
+
+
 def audit_build(root, database, elf, app_prefix):
     root = Path(root).resolve()
     entries = json.loads(Path(database).read_text(encoding='utf-8'))
     if not isinstance(entries, list) or not entries:
         raise ValueError('empty or invalid compile database')
     owned = []
+    response_files = {}
     app_count = 0
     for entry in entries:
         directory = Path(entry['directory'])
@@ -46,8 +86,9 @@ def audit_build(root, database, elf, app_prefix):
         tokens = entry.get('arguments')
         if tokens is None:
             tokens = shlex.split(entry['command'])
-        if not tokens or any(t.startswith('@') for t in tokens):
-            raise ValueError(f'opaque or missing compiler arguments: {relative}')
+        if not tokens:
+            raise ValueError(f'missing compiler arguments: {relative}')
+        tokens = expand_response_files(tokens, directory, response_files)
         if not any(Path(t).name.startswith('xtensa-') and Path(t).name.endswith('g++') for t in tokens):
             raise ValueError(f'not an Xtensa C++ compile: {relative}')
         definitions, undefines = [], []
@@ -87,7 +128,7 @@ def audit_build(root, database, elf, app_prefix):
     return dict(schema=1, scope='enabled target compilation/link only',
                 runtime_approved=False, macro=MACRO, value=1,
                 owned_cpp_count=len(owned), app_cpp_count=app_count,
-                translation_units=sorted(owned), elf_machine=machine)
+                translation_units=sorted(owned), response_files=response_files, elf_machine=machine)
 
 
 def compare_logs(native_text, target_text):

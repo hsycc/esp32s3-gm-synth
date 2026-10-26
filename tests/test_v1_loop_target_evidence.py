@@ -34,7 +34,7 @@ class TargetEvidenceTests(unittest.TestCase):
                 entries, database, elf = self.fixture(root)
                 entries[0]['command'] = 'xtensa-esp-elf-g++ ' + suffix
                 database.write_text(json.dumps(entries))
-                with self.assertRaises(ValueError):
+                with self.assertRaises((ValueError, OSError)):
                     audit_build(root, database, elf, 'main')
 
     def test_argument_array_and_split_definition(self):
@@ -59,8 +59,46 @@ class TargetEvidenceTests(unittest.TestCase):
                 else:
                     elf.write_bytes(b'\x7fELF\x01\x01' + b'\0' * 10 + struct.pack('<HH', 2, 3))
                 database.write_text(json.dumps(entries))
+                with self.assertRaises((ValueError, OSError)):
+                    audit_build(root, database, elf, 'main')
+
+    def test_realistic_idf_response_expansion(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            entries, database, elf = self.fixture(root)
+            (root / 'toolchain').mkdir()
+            (root / 'toolchain/cxxflags').write_text('-mlongcalls -D' + MACRO + '=1')
+            for entry in entries:
+                entry['command'] = 'xtensa-esp32s3-elf-g++ @"' + str(root / 'toolchain/cxxflags') + '" -std=gnu++26'
+            database.write_text(json.dumps(entries))
+            result = audit_build(root, database, elf, 'main')
+            self.assertEqual(len(result['response_files']), 1)
+            self.assertEqual(result['value'], 1)
+
+    def test_response_hidden_conflicts_cycles_and_escape_rejected(self):
+        variants = ['-D' + MACRO + '=0', '-U' + MACRO, '@flags.rsp', '@/outside-build/flags']
+        for flags in variants:
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                entries, database, elf = self.fixture(root)
+                (root / 'flags.rsp').write_text(flags)
+                entries[0]['command'] += ' @flags.rsp'
+                database.write_text(json.dumps(entries))
                 with self.assertRaises(ValueError):
                     audit_build(root, database, elf, 'main')
+
+    def test_nested_response_definition_and_size_bound(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            entries, database, elf = self.fixture(root)
+            (root / 'a.rsp').write_text('@b.rsp')
+            (root / 'b.rsp').write_text('-D ' + MACRO + '=1')
+            entries[0]['command'] = 'xtensa-esp-elf-g++ @a.rsp'
+            database.write_text(json.dumps(entries))
+            self.assertEqual(len(audit_build(root, database, elf, 'main')['response_files']), 2)
+            (root / 'b.rsp').write_bytes(b' ' * 1048577)
+            with self.assertRaises(ValueError):
+                audit_build(root, database, elf, 'main')
 
     def logs(self):
         result = 'V1_TARGET_RESULT cases=72 frames=12345 hash=123456\n'

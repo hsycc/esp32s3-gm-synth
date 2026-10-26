@@ -90,7 +90,9 @@ jobs:
             build/v1-loop-target/*.log
             build/v1-loop-target/sdkconfig.*
             build/v1-loop-target/firmware/compile_commands.json
+            build/v1-loop-target/firmware/toolchain/*
             build/v1-loop-target/firmware/esp32s3_gm_synth.map
             build/v1-loop-target/smoke/compile_commands.json
+            build/v1-loop-target/smoke/toolchain/*
             build/v1-loop-target/smoke/v1_loop_voice_target.map
           if-no-files-found: warn

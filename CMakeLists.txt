@@ -4,6 +4,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Explicit build-wide ABI opt-in for qualification, never enabled by defaults.
+# This compiles the optional Voice path; it does not provision any loop plan.
+option(GM_SYNTH_BUILD_VOICE_LOOP "Compile experimental Voice loop execution" OFF)
+if(GM_SYNTH_BUILD_VOICE_LOOP)
+    add_compile_definitions(GM_SYNTH_EXPERIMENTAL_VOICE_LOOP=1)
+endif()
+
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/firmware")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

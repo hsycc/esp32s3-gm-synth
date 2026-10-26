@@ -12,7 +12,7 @@ grep -Eq 'ESP-IDF v6\.1($|[.-])' "$OUT/idf-version.txt"
 python "$IDF_PATH/tools/idf.py" -B "$OUT/firmware" \
   -D "SDKCONFIG=$OUT/sdkconfig.firmware" \
   -D "SDKCONFIG_DEFAULTS=$ROOT/sdkconfig.defaults" -D IDF_TARGET=esp32s3 \
-  -D 'CMAKE_CXX_FLAGS=-DGM_SYNTH_EXPERIMENTAL_VOICE_LOOP=1' build
+  -D GM_SYNTH_BUILD_VOICE_LOOP=ON build
 python -m tools.v1_loop_target_evidence build --root "$ROOT" \
   --database "$OUT/firmware/compile_commands.json" \
   --elf "$OUT/firmware/esp32s3_gm_synth.elf" --app-prefix main \

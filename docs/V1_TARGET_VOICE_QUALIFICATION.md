@@ -5,6 +5,8 @@
 This adds target checks on top of PR #22's default-off production Voice binding.
 It does not change production Voice, Host policy, application provisioning,
 Kconfig/default profiles, PCM assets, arena size, DMA, volume or polyphony.
+A new root CMake option GM_SYNTH_BUILD_VOICE_LOOP is OFF by default; the
+qualification script explicitly sets it ON to define the macro build-wide.
 All results must be identified by the tested commit; a submitted workflow is not
 passing evidence. Keep runtime_approved=false and all stacked PRs unmerged.
 
@@ -23,11 +25,13 @@ passing evidence. Keep runtime_approved=false and all stacked PRs unmerged.
    an ES8311 or a speaker. Its memory profile is NOT the N16R8 release profile.
 
 The evidence checker inspects every owned C++ translation unit in each compile
-command database. It rejects an absent/conflicting/undefined macro, an opaque
-response file, missing core/app units, native rather than Xtensa compilers, and
+command database. It rejects an absent/conflicting/undefined macro, missing/cyclic/oversized/escaping
+response files, missing core/app units, native rather than Xtensa compilers, and
 non-Xtensa/non-32-bit/non-executable ELF headers. The smoke executable actually
 calls the feature, so it cannot pass by only compiling unused inline headers.
-Normal builds still default to macro=0. No normal sdkconfig is modified.
+GCC response files are expanded with bounded recursion and their hashes retained;
+hidden conflicting definitions still fail. Normal builds still default to
+macro=0. No normal sdkconfig is modified.
 
 ## Execution fixture
 
