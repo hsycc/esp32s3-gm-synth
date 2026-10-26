@@ -1,0 +1,81 @@
+name: v1-loop-app-target
+on:
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - 'tests/app/**'
+      - 'tests/idf/loop_app/**'
+      - 'tests/test_v1_loop_app_target_evidence.py'
+      - 'tools/v1_loop*target_evidence.py'
+      - 'scripts/*v1_loop_app_target*'
+      - '.github/workflows/v1-loop-app-target.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Strict application evidence validator
+        run: python3 -m unittest discover -s tests -p test_v1_loop_app_target_evidence.py -v
+      - name: Native production application with calculated identity
+        run: |
+          set -euo pipefail
+          bash scripts/test_v1_loop_app_target.sh | tee app-target-gcc.log
+          CXX=clang++ SANITIZE=1 V1_APP_TARGET_DIR=build/v1-loop-app-target-san bash scripts/test_v1_loop_app_target.sh | tee app-target-clang.log
+          cmp app-target-gcc.log app-target-clang.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-loop-app-target-native
+          path: app-target-*.log
+          if-no-files-found: error
+  xtensa:
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record filesystem capacity
+        run: df -h "$RUNNER_TEMP" /tmp
+      - name: Install pinned ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: 'v6.1'
+          eim-version: 'v0.20.1'
+          path: ${{ runner.temp }}/esp-idf
+          tools-path: ${{ runner.temp }}/esp-tools
+      - name: Build complete application fixture with uniform enabled ABI
+        run: |
+          set -euo pipefail
+          mkdir -p build/v1-loop-app-target
+          bash scripts/build_v1_loop_app_target.sh 2>&1 | tee build/v1-loop-app-target/build.log
+      - name: Execute MIDI transaction and FreeRTOS interleavings in QEMU
+        run: |
+          set -euo pipefail
+          bash scripts/run_v1_loop_app_target_qemu.sh 2>&1 | tee build/v1-loop-app-target/execution.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-app-target-evidence
+          path: |
+            build/v1-loop-app-target/*.json
+            build/v1-loop-app-target/*.log
+            build/v1-loop-app-target/*.txt
+            build/v1-loop-app-target/sdkconfig.target
+            build/v1-loop-app-target/generated/*
+            build/v1-loop-app-target/target/compile_commands.json
+            build/v1-loop-app-target/target/toolchain/*
+            build/v1-loop-app-target/target/v1_loop_app_target.map
+          if-no-files-found: warn
