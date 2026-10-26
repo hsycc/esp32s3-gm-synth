@@ -1,0 +1,64 @@
+name: v1-loop-lifetime-host
+on:
+  pull_request:
+    paths:
+      - 'firmware/voice/**'
+      - 'firmware/sample/**'
+      - 'tests/voice/test_loop_crossfade_lifetime.cpp'
+      - 'tools/loop_pinned_probe.cpp'
+      - 'scripts/test_v1_loop_lifetime.sh'
+      - '.github/workflows/v1-loop-lifetime-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pinned-plan-lifetime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require frozen directory, renderers and Host policy
+        run: |
+          git diff --exit-code 7f4c192f0b7a04e4070468045213e172ff8f1ac5 -- \
+            firmware/sample firmware/voice \
+            ':(exclude)firmware/voice/experimental/PinnedLoopPlan.h' \
+            tools/v1_loop_policy.py tools/v1_loop_crossfade_planner.py \
+            tools/v1_loop_matched_peak.py tools/v1_effective_loop_survey.py \
+            tools/m7_loop_seam_audio.py tools/v1_loop_executor_check.py
+      - name: GCC ownership, identity, retirement and PCM parity
+        run: |
+          bash scripts/test_v1_loop_lifetime.sh | tee build-lifetime-gcc.txt
+      - name: Clang address and undefined behavior sanitizers
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_LIFETIME_BUILD_DIR: build/v1-loop-lifetime-sanitized
+        run: |
+          bash scripts/test_v1_loop_lifetime.sh | tee build-lifetime-sanitized.txt
+      - name: Recompute frozen full-bank review
+        run: |
+          bash scripts/build_v1_loop_exporter.sh
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-lifetime/generaluser-effective.json
+          echo '400bebd3c728bdbbce4356e723581d66fb87898e87774f20e1bcff25caab36b1  build/v1-loop-lifetime/generaluser-effective.json' | sha256sum -c -
+      - name: Compare every Host candidate while plan and publication are retired
+        run: |
+          python -m tools.v1_loop_executor_check assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-lifetime/generaluser-effective.json \
+            --probe build/v1-loop-lifetime/loop_pinned_probe \
+            --reference 604 --reference 602 --reference 62 \
+            --output build/v1-loop-lifetime/pinned-execution-equivalence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-loop-lifetime-evidence
+          path: |
+            build/v1-loop-lifetime/*.json
+            build-lifetime-*.txt
+          if-no-files-found: error
