@@ -23,10 +23,10 @@ struct Source final : sample::SampleSource {
         for (std::size_t i=0;i<pcm.size();++i) pcm[i]=static_cast<std::int16_t>(static_cast<int>((i*711)%60001)-30000);
     }
     bool descriptorFor(sample::SampleId id, sample::SampleDescriptor* out) override {
-        ++calls; if (id!=d.id || !out) return false; *out=d; return true;
+        ++calls; if ((id!=d.id && id!=d.id+1) || !out) return false; *out=d; out->id=id; return true;
     }
     bool fillSample(sample::SampleId id, std::uint8_t* out, std::size_t bytes) override {
-        ++calls; if (id!=d.id || bytes!=sizeof(pcm) || !out) return false;
+        ++calls; if ((id!=d.id && id!=d.id+1) || bytes!=sizeof(pcm) || !out) return false;
         std::memcpy(out,pcm.data(),bytes); return true;
     }
 };
@@ -153,14 +153,17 @@ void real_retirement() {
     assert(h.audioStart(0,&f.snapshot,f.samples.active(0),v)==B::Ok);
     const auto* old_record=f.directory.published(23);
     // Retire through the PRODUCTION coordinator, not a mocked refcount.
-    assert(f.controller.prepareProgram(0,0,2,2,nullptr,0));
-    gm::PlaybackProgramSnapshot empty{};
-    empty.channel=0; empty.program=2; empty.token=2; empty.bank_generation=1;
+    const sample::SampleId replacement_id=24;
+    assert(f.controller.prepareProgram(0,0,2,2,&replacement_id,1));
+    auto replacement_zone=f.zones[0]; replacement_zone.sample_id=replacement_id;
+    gm::PlaybackProgramSnapshot replacement{};
+    replacement.channel=0; replacement.program=2; replacement.token=2; replacement.bank_generation=1;
+    replacement.zones=&replacement_zone; replacement.zone_count=1;
     PreparedLoopContextBuilder next;
-    assert(next.begin(f.source,f.residency,f.directory,empty,*f.samples.ready(0),f.asset)==S::Ok);
+    assert(next.begin(f.source,f.residency,f.directory,replacement,*f.samples.ready(0),f.asset)==S::Ok);
     assert(h.controlBegin(next)==S::Ok); assert(h.controlPublish()==S::Ok);
     assert(f.samples.commitAtBlockBoundary(0));
-    assert(h.audioCommitAtBlockBoundary(&empty,f.samples.active(0))==S::Ok);
+    assert(h.audioCommitAtBlockBoundary(&replacement,f.samples.active(0))==S::Ok);
     assert(h.controlAcknowledge()==S::Ok);
     assert(f.controller.acknowledgeAndRetire(0,2).valid());
     assert(f.directory.published(23)==nullptr);

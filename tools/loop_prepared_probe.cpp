@@ -80,12 +80,43 @@ int main(int argc,char** argv) {
         sf2::Sf2PlaybackProgramPreparer preparer;
         const auto prepared=preparer.prepare(pdta,req);
         require(prepared.ok() && snapshot.valid() && zone<snapshot.zone_count,"program prepare failed");
-        // Host arena is computed for this program's complete dependency set.
-        // This gate measures semantics, NOT whether the program fits S3 PSRAM.
+        // Prepare a different REAL program that does not reference the tested
+        // sample. Production deliberately rejects empty dependency programs.
+        // Independent Zone/index storage keeps the old snapshot immutable.
+        std::vector<gm::PlaybackZone> replacement_zones(cap);
+        std::array<gm::PlaybackProgramKeySpan,128> replacement_spans{};
+        std::vector<std::uint16_t> replacement_indices(cap*128);
+        std::vector<sample::SampleId> replacement_dependencies(cap);
+        gm::PlaybackProgramSnapshot replacement{};
+        auto next_req=req;
+        next_req.token=2; next_req.playback_zones=replacement_zones.data();
+        next_req.key_spans=replacement_spans.data(); next_req.key_zone_indices=replacement_indices.data();
+        next_req.dependencies=replacement_dependencies.data(); next_req.snapshot=&replacement;
+        sf2::PlaybackPrepareResult replacement_result;
+        bool found=false;
+        for (std::size_t i=0;i<pdta.presetCount();++i) {
+            sf2::Sf2PdtaReader::PresetHeader h{};
+            require(pdta.presetHeader(i,&h),"replacement preset header failed");
+            if (h.program>255 || (h.bank==bank && h.program==program)) continue;
+            next_req.bank=h.bank; next_req.program=static_cast<std::uint8_t>(h.program);
+            replacement_result=preparer.prepare(pdta,next_req);
+            if (!replacement_result.ok() || !replacement.valid() || !replacement_result.dependency_count) continue;
+            const auto end=replacement_dependencies.begin()+replacement_result.dependency_count;
+            if (std::find(replacement_dependencies.begin(),end,zones[zone].sample_id)!=end) continue;
+            found=true; break;
+        }
+        require(found,"no disjoint replacement program");
+        // Host capacity covers both complete dependency sets during READY.
+        // It is deliberately reported, not claimed to fit the S3/R8 budget.
         std::size_t arena_bytes=4096;
         for (std::size_t i=0;i<prepared.dependency_count;++i) {
             sample::SampleDescriptor d;
             require(source.descriptorFor(dependencies[i],&d),"source dependency descriptor failed");
+            arena_bytes+=sample::SampleResidencyManager::alignedBytes(d.pcm_bytes);
+        }
+        for (std::size_t i=0;i<replacement_result.dependency_count;++i) {
+            sample::SampleDescriptor d;
+            require(source.descriptorFor(replacement_dependencies[i],&d),"replacement descriptor failed");
             arena_bytes+=sample::SampleResidencyManager::alignedBytes(d.pcm_bytes);
         }
         require(arena_bytes<=128u*1024u*1024u,"host arena safety cap exceeded");
@@ -119,17 +150,16 @@ int main(int argc,char** argv) {
         require(handoff.audioStart(zone,playback_exchange.active(channel),resident_exchange.active(channel),voice,step)==LoopBindingStatus::Ok,"playback start failed");
         const auto* old=directory.published(context.sample_id);
         require(old!=nullptr,"missing current publication");
-        // Real program switch to an empty program: BOTH existing exchanges
-        // commit, the sidecar retires, then control retires old dependency pins.
-        gm::PlaybackProgramSnapshot empty{};
-        empty.channel=channel; empty.bank=bank; empty.program=program; empty.token=2; empty.bank_generation=1;
-        require(controller.prepareProgram(channel,bank,program,2,nullptr,0),"empty prepare failed");
-        require(playback_exchange.publishReady(&empty),"empty playback READY failed");
+        // BOTH existing exchanges switch to the prepared replacement. Its
+        // sidecar contains no optional loop plans, but its dependencies are real.
+        require(controller.prepareProgram(channel,replacement.bank,replacement.program,2,
+                replacement_dependencies.data(),replacement_result.dependency_count),"replacement residency prepare failed");
+        require(playback_exchange.publishReady(&replacement),"replacement playback READY failed");
         PreparedLoopContextBuilder next;
-        require(next.begin(source,residency,directory,empty,*resident_exchange.ready(channel),a)==PreparedLoopStatus::Ok,"empty builder failed");
-        require(handoff.controlBegin(next)==PreparedLoopStatus::Ok && handoff.controlPublish()==PreparedLoopStatus::Ok,"empty sidecar READY failed");
+        require(next.begin(source,residency,directory,replacement,*resident_exchange.ready(channel),a)==PreparedLoopStatus::Ok,"replacement builder failed");
+        require(handoff.controlBegin(next)==PreparedLoopStatus::Ok && handoff.controlPublish()==PreparedLoopStatus::Ok,"replacement sidecar READY failed");
         require(resident_exchange.commitAtBlockBoundary(channel) && playback_exchange.commitAtBlockBoundary(channel),"program commit failed");
-        require(handoff.audioCommitAtBlockBoundary(playback_exchange.active(channel),resident_exchange.active(channel))==PreparedLoopStatus::Ok,"empty sidecar commit failed");
+        require(handoff.audioCommitAtBlockBoundary(playback_exchange.active(channel),resident_exchange.active(channel))==PreparedLoopStatus::Ok,"replacement sidecar commit failed");
         require(handoff.controlAcknowledge()==PreparedLoopStatus::Ok,"sidecar retire failed");
         require(playback_exchange.acknowledgeCommit(channel,2).valid(),"playback ACK failed");
         require(controller.acknowledgeAndRetire(channel,2).valid() && controller.lastError()==sample::ProgramPrepareError::None,"dependency retire failed");
@@ -157,6 +187,8 @@ int main(int argc,char** argv) {
             <<",\"loop_end\":"<<base+context.region.loop_end<<",\"mode\":"<<static_cast<unsigned>(context.mode)
             <<",\"sample_generation\":"<<context.sample_generation<<",\"rate\":"<<context.sample_rate
             <<",\"frames\":"<<done<<",\"dependencies\":"<<prepared.dependency_count
+            <<",\"replacement_dependencies\":"<<replacement_result.dependency_count
+            <<",\"replacement_bank\":"<<replacement.bank<<",\"replacement_program\":"<<static_cast<unsigned>(replacement.program)
             <<",\"host_arena_bytes\":"<<arena.size()*4<<",\"retired_before_render\":true,\"reclaimed\":true,\"live_refs\":0}\n";
         return 0;
     } catch (const std::exception& e) { std::cerr<<e.what()<<'\n'; return 2; }

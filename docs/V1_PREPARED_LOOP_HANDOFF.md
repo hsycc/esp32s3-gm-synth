@@ -73,13 +73,14 @@ oracle, including raw tail and single-frame boundaries.
 The real-bank probe prepares a selected Program's FULL dependency list, loads
 it through Sf2SampleSource and ProgramPrepareController, derives the actual
 selected Zone context, and starts through the sidecar. It then switches both
-production exchanges to an empty program, retires the old sidecar and program
+production exchanges to another prepared program whose dependencies exclude
+the tested sample, retires the old sidecar and program
 pins, and only then emits the old voice's PCM. The voice must survive that real
 retirement, retain exact output, and allow final reclamation/eviction with zero
 live-ref or stale-release faults. Every frozen Host candidate and the explicit
 604/602/62 reference geometries are compared at multiple rates/block sizes.
 
-Host arena capacity is calculated for each full dependency set and reported;
+Host arena capacity covers both full dependency sets during READY and is reported;
 this is NOT an R8-fit or memory-budget qualification. No PCM or SF2 is uploaded:
 only JSON metrics/hashes and native test logs. No audible PASS or hardware timing
 is inferred from exact PCM equality, compiler success or sanitizer results.
@@ -92,3 +93,8 @@ commit ordering, default-off production Voice reference and fast-path hooks,
 envelope/sustain/full-FX tests, and measured N16R8 CPU/I2S/DMA. No merge or release
 is authorized by this experiment; the overlap's period and listening caveats
 remain unchanged. Do not retune the frozen scorer to accommodate this adapter.
+
+Production ProgramPrepareController rejects empty dependency lists. The integration
+test must switch to a valid replacement program, never change that production
+contract merely to simplify the test. CI uses explicit pipefail so a compiler or
+assertion failure cannot be masked by tee while saving diagnostic logs.
