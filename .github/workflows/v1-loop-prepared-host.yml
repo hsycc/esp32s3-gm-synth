@@ -29,14 +29,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Require frozen production and experimental execution baselines
-        run: |
-          git diff --exit-code ab737d2d1a090b6df3adab2b5a997696de1f51f2 -- \
-            firmware/sample firmware/gm firmware/sf2 firmware/voice \
-            ':(exclude)firmware/voice/experimental/PreparedLoopHandoff.h' \
-            tools/v1_loop_policy.py tools/v1_loop_crossfade_planner.py \
-            tools/v1_loop_matched_peak.py tools/v1_effective_loop_survey.py \
-            tools/v1_loop_release_check.py tools/v1_loop_executor_check.py
+      - name: Require frozen baselines (Voice opt-in delta checked separately)
+        run: python3 scripts/check_v1_voice_baselines.py
       - name: GCC actual residency and concurrent plan handoff
         run: |
           set -euo pipefail

@@ -2,10 +2,15 @@ name: v1-loop-voice-host
 on:
   pull_request:
     paths:
-      - '.github/workflows/v1-loop-voice-host.yml'
       - 'firmware/voice/**'
-      - 'tests/voice/**'
-      - 'scripts/test_v1_loop_voice.sh'
+      - 'firmware/sample/**'
+      - 'firmware/gm/**'
+      - 'firmware/sf2/**'
+      - 'tests/voice/test_loop_voice*'
+      - 'tools/loop_voice_probe.cpp'
+      - 'tools/v1_loop_voice_check.py'
+      - 'scripts/*v1*voice*'
+      - '.github/workflows/v1-loop-voice-host.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,21 +18,50 @@ defaults:
   run:
     shell: bash
 jobs:
-  baseline-context:
+  production-voice-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
           fetch-depth: 0
-      - name: Export frozen code only for reproducible integration review
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Frozen policy and transport plus additive binding guards
+        run: python3 scripts/check_v1_voice_baselines.py
+      - name: Default-off object and layout parity plus enabled-no-plan trace
+        run: bash scripts/check_v1_voice_disabled.sh | tee voice-disabled.log
+      - name: GCC production Voice integration and existing fast-path regressions
+        run: bash scripts/test_v1_loop_voice.sh | tee voice-gcc.log
+      - name: Clang address and undefined-behavior sanitizers
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_VOICE_BUILD_DIR: build/v1-loop-voice-sanitized
+        run: bash scripts/test_v1_loop_voice.sh | tee voice-sanitized.log
+      - name: Independent normalized-envelope oracle
+        run: python -m unittest discover -s tests/voice -p test_loop_voice_oracle.py -v
+      - name: Frozen full-bank policy
         run: |
-          git archive --format=tar.gz --output=voice-baseline-source.tar.gz 6d954a7bc200cd0ec300873e7e106fff2a87a692 firmware scripts tests tools .github
-          sha256sum voice-baseline-source.tar.gz > voice-baseline-source.sha256
+          bash scripts/build_v1_loop_exporter.sh
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-voice/generaluser-effective.json
+          echo '400bebd3c728bdbbce4356e723581d66fb87898e87774f20e1bcff25caab36b1  build/v1-loop-voice/generaluser-effective.json' | sha256sum -c -
+      - name: Real Prepare to production Voice, retirement and exact PCM
+        run: |
+          python -m tools.v1_loop_voice_check assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-voice/generaluser-effective.json \
+            --probe build/v1-loop-voice/loop_voice_probe \
+            --output build/v1-loop-voice/voice-execution.json
       - uses: actions/upload-artifact@v4
         with:
-          name: v1-voice-baseline-source
-          path: voice-baseline-source.*
-          retention-days: 7
+          name: v1-loop-voice-evidence
+          path: |
+            build/v1-loop-voice/*.json
+            build/v1-loop-voice/trace-*.txt
+            build/v1-loop-voice/size-*.txt
+            voice-*.log
           if-no-files-found: error
