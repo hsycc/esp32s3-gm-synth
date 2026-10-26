@@ -2,6 +2,15 @@
 
 #include "sample/PublishedSampleDirectory.h"
 
+// Compile-time AND per-start opt-in. All translation units must use the same
+// setting. Default builds retain the original Voice/VoiceStartParams layout.
+#ifndef GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+#define GM_SYNTH_EXPERIMENTAL_VOICE_LOOP 0
+#endif
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+#include "experimental/PinnedLoopPlan.h"
+#endif
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -227,6 +236,13 @@ struct VoiceStartParams {
     std::int16_t chorus_send_units = 0;
     EnvelopeConfig envelope{};
     VoiceRealtimeControlConfig realtime_control{};
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Borrowed only during synchronous start(). The plan must remain immutable
+    // until start returns; no plan/context pointer is retained by Voice.
+    bool experimental_loop_opt_in = false;
+    const experimental::PinnedLoopPlan* experimental_loop_plan = nullptr;
+    const experimental::LoopPlanContext* experimental_loop_context = nullptr;
+#endif
 };
 
 struct VoiceRenderResult {
@@ -301,6 +317,10 @@ public:
         std::size_t frame_count);
     void reset();
 
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    bool experimentalLoopEnabled() const { return loop_execution_enabled_; }
+    bool experimentalLoopTransitionActive() const { return loop_cursor_.transitionActive(); }
+#endif
     bool active() const { return active_; }
     bool releasing() const;
     bool stealTail() const;
@@ -377,6 +397,11 @@ private:
     sample::PublishedSampleDirectory* directory_ = nullptr;
     sample::PublishedVoiceRef ref_{};
     VoiceStartParams params_{};
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Borrows the existing Voice ref: no second sample pin/PCM allocation.
+    experimental::BoundedLoopReleaseCursor loop_cursor_{};
+    bool loop_execution_enabled_ = false;
+#endif
 
     bool active_ = false;
     bool key_released_ = false;

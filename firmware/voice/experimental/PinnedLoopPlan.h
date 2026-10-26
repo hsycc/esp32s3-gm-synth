@@ -101,6 +101,24 @@ public:
         return LoopBindingStatus::Ok;
     }
 
+    // BEGIN V1_VOICE_BINDING
+    // Synchronous production-Voice binding to its independently acquired ref.
+    // The immutable plan must be protected by the same handoff as start(). No
+    // pointer or ownership is exported; a matching generation alone is NOT
+    // sufficient if the current resident pointer has changed.
+    LoopBindingStatus validateVoiceAcquisition(
+        const sample::PublishedSampleDirectory& directory,
+        const sample::PublishedVoiceRef& acquired,
+        const LoopPlanContext& current) const noexcept {
+        if (!valid()) return LoopBindingStatus::MissingPlan;
+        if (&directory != directory_) return LoopBindingStatus::WrongDirectory;
+        if (!sameContext(context_, current)) return LoopBindingStatus::ContextMismatch;
+        if (acquired.record != ref_.record || !recordMatches(acquired, current))
+            return LoopBindingStatus::StalePublication;
+        return LoopBindingStatus::Ok;
+    }
+    // END V1_VOICE_BINDING
+
     bool reset() noexcept {
         if (ref_.valid() && !directory_->release(ref_)) return false;
         directory_ = nullptr;

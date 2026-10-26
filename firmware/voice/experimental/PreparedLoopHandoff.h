@@ -251,6 +251,34 @@ public:
             return voice.start(directory_, b.entries[i].plan, b.entries[i].plan.context(), step);
         return LoopBindingStatus::MissingPlan; // caller retains Direct; no automatic policy decision
     }
+    // BEGIN V1_VOICE_BINDING
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // One audio task only, between block boundaries. Uses the same immutable
+    // buffer/ack contract as start(); no plan pointer escapes synchronous start.
+    LoopBindingStatus startVoice(std::uint16_t zone,
+                                 const gm::PlaybackProgramSnapshot* playback,
+                                 const sample::ProgramSnapshot* residency,
+                                 voice::Voice& target,
+                                 const voice::VoiceStartParams& params) noexcept {
+        if (active_ == absent) return LoopBindingStatus::MissingPlan;
+        const auto& b = buffers_[active_];
+        if (!b.program.matches(playback, residency) || zone >= playback->zone_count ||
+            params.channel != playback->channel || !playback->zones[zone].matches(params.key, params.velocity))
+            return LoopBindingStatus::ContextMismatch;
+        if (target.active()) return LoopBindingStatus::Busy;
+        for (std::size_t i = 0; i < b.count; ++i) if (b.entries[i].zone == zone) {
+            const auto context = b.entries[i].plan.context();
+            auto requested = params;
+            requested.experimental_loop_opt_in = true;
+            requested.experimental_loop_plan = &b.entries[i].plan;
+            requested.experimental_loop_context = &context;
+            return target.start(directory_, requested) ? LoopBindingStatus::Ok :
+                LoopBindingStatus::InvalidConfiguration;
+        }
+        return LoopBindingStatus::MissingPlan;
+    }
+#endif
+    // END V1_VOICE_BINDING
     // Quiescent only. Not a racing cancel or a realtime shutdown API.
     bool resetQuiescent() noexcept {
         if (!clear(0) || !clear(1)) return false;
