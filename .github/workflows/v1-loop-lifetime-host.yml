@@ -28,9 +28,12 @@ jobs:
           git diff --exit-code 7f4c192f0b7a04e4070468045213e172ff8f1ac5 -- \
             firmware/sample firmware/voice \
             ':(exclude)firmware/voice/experimental/PinnedLoopPlan.h' \
+            ':(exclude)firmware/voice/experimental/PreparedLoopHandoff.h' \
             tools/v1_loop_policy.py tools/v1_loop_crossfade_planner.py \
             tools/v1_loop_matched_peak.py tools/v1_effective_loop_survey.py \
             tools/m7_loop_seam_audio.py tools/v1_loop_executor_check.py
+          git diff --exit-code ab737d2d1a090b6df3adab2b5a997696de1f51f2 -- \
+            firmware/voice/experimental/PinnedLoopPlan.h tools/loop_pinned_probe.cpp
       - name: GCC ownership, identity, retirement and PCM parity
         run: |
           bash scripts/test_v1_loop_lifetime.sh | tee build-lifetime-gcc.txt
