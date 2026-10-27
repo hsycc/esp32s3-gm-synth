@@ -1,8 +1,10 @@
 # Separate qualification entry; the ordinary source/dependency list below is unchanged.
-if(GM_SYNTH_BUILD_LOOP_STARTUP_QUAL)
+# Root CMake normalizes and overrides these for its requirement-scan child.
+# Do not depend on a custom cache variable that is absent in early expansion.
+if("$ENV{GM_SYNTH_STARTUP_EARLY_MODE}" STREQUAL "1")
     idf_component_register(
         SRCS "LoopStartupQualification.cpp"
-        INCLUDE_DIRS "." "${GM_SYNTH_STARTUP_GENERATED}"
+        INCLUDE_DIRS "." "$ENV{GM_SYNTH_STARTUP_EARLY_GENERATED}"
         REQUIRES firmware esp_partition esp_timer
         PRIV_REQUIRES heap freertos mbedtls)
     return()

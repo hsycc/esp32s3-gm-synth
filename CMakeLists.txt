@@ -13,7 +13,15 @@ if(GM_SYNTH_BUILD_LOOP_STARTUP_QUAL)
        NOT EXISTS "${GM_SYNTH_STARTUP_GENERATED}/bank.sf2")
         message(FATAL_ERROR "Run scripts/build_v1_loop_startup.sh in a fresh dedicated build directory")
     endif()
+    # ESP-IDF's separate early requirement-scan CMake process does not inherit
+    # custom cache options. Export normalized build-local mode/path to that
+    # child, overriding any caller environment in BOTH on and off builds.
+    set(ENV{GM_SYNTH_STARTUP_EARLY_MODE} "1")
+    set(ENV{GM_SYNTH_STARTUP_EARLY_GENERATED} "${GM_SYNTH_STARTUP_GENERATED}")
     add_compile_definitions(GM_SYNTH_LOOP_STARTUP_QUALIFICATION=1)
+else()
+    set(ENV{GM_SYNTH_STARTUP_EARLY_MODE} "0")
+    set(ENV{GM_SYNTH_STARTUP_EARLY_GENERATED} "")
 endif()
 if(GM_SYNTH_BUILD_VOICE_LOOP OR GM_SYNTH_BUILD_LOOP_STARTUP_QUAL)
     add_compile_definitions(GM_SYNTH_EXPERIMENTAL_VOICE_LOOP=1)

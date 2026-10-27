@@ -54,3 +54,37 @@ class Manifest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             p=Path(t)/'bad';p.write_bytes(b'RIFF')
             with self.assertRaises(ValueError):generate(p,Path(t)/'out','qemu')
+
+class EarlyDependencyScan(unittest.TestCase):
+    def scan(self,mode):
+        import os
+        import subprocess
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            temp=Path(temp);generated=temp/'generated';generated.mkdir()
+            for name in ('loop_startup_manifest.h','bank.sf2'):(generated/name).touch()
+            early=temp/'early.cmake'
+            early.write_text('function(idf_component_register)\n'
+                ' file(WRITE "'+(temp/'requirements.txt').as_posix()+'" "${ARGV}")\n'
+                'endfunction()\ninclude("'+(root/'main/CMakeLists.txt').as_posix()+'")\n')
+            prefix=(root/'CMakeLists.txt').read_text().split('set(EXTRA_COMPONENT_DIRS',1)[0]
+            # Run real configure then a fresh script-mode child, as IDF does.
+            (temp/'CMakeLists.txt').write_text(prefix+'\nproject(scan NONE)\n'
+                'execute_process(COMMAND "${CMAKE_COMMAND}" -P "'+early.as_posix()+'" RESULT_VARIABLE result)\n'
+                'if(NOT result EQUAL 0)\nmessage(FATAL_ERROR "early child failed")\nendif()\n')
+            env=dict(os.environ,GM_SYNTH_STARTUP_EARLY_MODE='1',GM_SYNTH_STARTUP_EARLY_GENERATED='/invalid/inherited/path')
+            subprocess.run(['cmake','-S',str(temp),'-B',str(temp/'build'),
+                '-DGM_SYNTH_BUILD_LOOP_STARTUP_QUAL='+mode,'-DGM_SYNTH_STARTUP_GENERATED='+str(generated)],
+                env=env,check=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+            return (temp/'requirements.txt').read_text(),str(generated)
+    def test_enabled_dependencies_reach_early_child(self):
+        for mode in ('ON','TRUE','1'):
+            with self.subTest(mode=mode):
+                args,generated=self.scan(mode)
+                self.assertIn('LoopStartupQualification.cpp',args)
+                self.assertIn('mbedtls',args);self.assertIn(generated,args)
+                self.assertNotIn('app_main.cpp',args)
+    def test_disabled_overrides_inherited_enable(self):
+        args,_=self.scan('OFF')
+        self.assertIn('app_main.cpp',args);self.assertNotIn('LoopStartupQualification.cpp',args)
+        self.assertNotIn('mbedtls',args);self.assertNotIn('/invalid/inherited/path',args)
