@@ -1,0 +1,74 @@
+name: v1-loop-prepared-host
+on:
+  pull_request:
+    paths:
+      - 'firmware/voice/**'
+      - 'firmware/sample/**'
+      - 'firmware/sf2/**'
+      - 'firmware/gm/Playback*'
+      - 'tools/*prepared*'
+      - 'tools/v1_loop*'
+      - 'tests/voice/test_loop*'
+      - 'scripts/test_v1_loop_prepared.sh'
+      - '.github/workflows/v1-loop-prepared-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  prepared-plan-handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require frozen production and experimental execution baselines
+        run: |
+          git diff --exit-code ab737d2d1a090b6df3adab2b5a997696de1f51f2 -- \
+            firmware/sample firmware/gm firmware/sf2 firmware/voice \
+            ':(exclude)firmware/voice/experimental/PreparedLoopHandoff.h' \
+            tools/v1_loop_policy.py tools/v1_loop_crossfade_planner.py \
+            tools/v1_loop_matched_peak.py tools/v1_effective_loop_survey.py \
+            tools/v1_loop_release_check.py tools/v1_loop_executor_check.py
+      - name: GCC actual residency and concurrent plan handoff
+        run: |
+          set -euo pipefail
+          bash scripts/test_v1_loop_prepared.sh 2>&1 | tee prepared-gcc.log
+      - name: Clang address and undefined behavior sanitizers
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_PREPARED_BUILD_DIR: build/v1-loop-prepared-sanitized
+        run: |
+          set -euo pipefail
+          bash scripts/test_v1_loop_prepared.sh 2>&1 | tee prepared-sanitized.log
+      - name: Independent full-region oracle checks
+        run: python -m unittest discover -s tests/voice -p test_loop_prepared_oracle.py -v
+      - name: Recompute immutable Host selection policy
+        run: |
+          bash scripts/build_v1_loop_exporter.sh
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-prepared/generaluser-effective.json
+          echo '400bebd3c728bdbbce4356e723581d66fb87898e87774f20e1bcff25caab36b1  build/v1-loop-prepared/generaluser-effective.json' | sha256sum --check
+      - name: Actual SF2 Prepare Source Residency switch and exact PCM
+        run: |
+          python -m tools.v1_loop_prepared_check assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-prepared/generaluser-effective.json \
+            --probe build/v1-loop-prepared/loop_prepared_probe \
+            --output build/v1-loop-prepared/prepared-execution.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-loop-prepared-evidence
+          path: |
+            build/v1-loop-prepared/*.json
+            prepared-gcc.log
+            prepared-sanitized.log
+          if-no-files-found: error

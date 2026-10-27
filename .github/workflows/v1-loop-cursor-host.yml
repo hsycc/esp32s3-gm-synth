@@ -1,0 +1,83 @@
+name: v1-loop-cursor-host
+on:
+  pull_request:
+    paths:
+      - 'firmware/voice/**'
+      - 'firmware/sample/**'
+      - 'tests/voice/test_loop_crossfade*'
+      - 'tests/test_v1_loop_executor_check.py'
+      - 'tools/loop_cursor_probe.cpp'
+      - 'tools/v1_loop_executor_check.py'
+      - 'scripts/test_v1_loop_cursor.sh'
+      - 'tests/voice/test_loop_release_oracle.py'
+      - 'tools/loop_release_probe.cpp'
+      - 'tools/v1_loop_release_check.py'
+      - 'scripts/test_v1_loop_release.sh'
+      - '.github/workflows/v1-loop-cursor-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cursor-execution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require the frozen policy and production Voice to remain unchanged
+        run: |
+          git diff --exit-code de684b82d70e8547614592fba680d53b28aa92d9 -- \
+            tools/v1_loop_policy.py tools/v1_loop_crossfade_planner.py \
+            tools/v1_effective_loop_survey.py tools/m7_loop_seam_audio.py \
+            tools/v1_loop_matched_peak.py firmware/voice \
+            ':(exclude)firmware/voice/experimental/**'
+          git diff --exit-code 48a67182df0f504371050b5f762dedc950e5f12e -- \
+            firmware/voice/experimental/LoopCrossfadeCursor.h \
+            tools/v1_loop_executor_check.py tools/loop_cursor_probe.cpp
+      - name: GCC cursor, production Direct parity and native oracle
+        run: bash scripts/test_v1_loop_cursor.sh
+      - name: Clang address and undefined-behavior sanitizers
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_CURSOR_BUILD_DIR: build/v1-loop-cursor-sanitized
+        run: bash scripts/test_v1_loop_cursor.sh
+      - name: GCC bounded release, default parity and independent oracle
+        env:
+          V1_RELEASE_BUILD_DIR: build/v1-loop-cursor
+        run: bash scripts/test_v1_loop_release.sh
+      - name: Clang bounded release sanitizers
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_RELEASE_BUILD_DIR: build/v1-loop-release-sanitized
+        run: bash scripts/test_v1_loop_release.sh
+      - name: Export production geometry and run the frozen Host policy
+        run: |
+          bash scripts/build_v1_loop_exporter.sh
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-cursor/generaluser-effective.json
+      - name: Compare every Host candidate and the audition references against C++
+        run: |
+          python -m tools.v1_loop_executor_check assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-cursor/generaluser-effective.json \
+            --probe build/v1-loop-cursor/loop_cursor_probe \
+            --reference 604 --reference 602 --reference 62 \
+            --output build/v1-loop-cursor/execution-equivalence.json
+      - name: Verify actual modes and forced UntilRelease with effective raw tails
+        run: |
+          python -m tools.v1_loop_release_check assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-cursor/generaluser-effective.json \
+            --probe build/v1-loop-cursor/loop_release_probe \
+            --output build/v1-loop-cursor/release-equivalence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-loop-cursor-evidence
+          path: build/v1-loop-cursor/*.json
+          if-no-files-found: error
