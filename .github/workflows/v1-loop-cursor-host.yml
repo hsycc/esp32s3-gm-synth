@@ -14,6 +14,7 @@ on:
       - 'tools/v1_loop_release_check.py'
       - 'scripts/test_v1_loop_release.sh'
       - '.github/workflows/v1-loop-cursor-host.yml'
+      - 'scripts/check_v1_*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,16 +30,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Require the frozen policy and production Voice to remain unchanged
-        run: |
-          git diff --exit-code de684b82d70e8547614592fba680d53b28aa92d9 -- \
-            tools/v1_loop_policy.py tools/v1_loop_crossfade_planner.py \
-            tools/v1_effective_loop_survey.py tools/m7_loop_seam_audio.py \
-            tools/v1_loop_matched_peak.py firmware/voice \
-            ':(exclude)firmware/voice/experimental/**'
-          git diff --exit-code 48a67182df0f504371050b5f762dedc950e5f12e -- \
-            firmware/voice/experimental/LoopCrossfadeCursor.h \
-            tools/v1_loop_executor_check.py tools/loop_cursor_probe.cpp
+      - name: Require frozen baselines (Voice opt-in delta checked separately)
+        run: python3 scripts/check_v1_voice_baselines.py
       - name: GCC cursor, production Direct parity and native oracle
         run: bash scripts/test_v1_loop_cursor.sh
       - name: Clang address and undefined-behavior sanitizers

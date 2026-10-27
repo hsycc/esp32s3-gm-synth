@@ -19,16 +19,28 @@ permissions:
 
 jobs:
   build-physical-n16r8:
-    runs-on: ubuntu-latest
+    # Keep the qualified LTS image; ubuntu-latest may change independently of DSP.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v6
 
+      - name: Record installer filesystem capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$RUNNER_TEMP" /tmp
+          df -i "$RUNNER_TEMP" /tmp
+
       - name: Install pinned ESP-IDF
         uses: espressif/install-esp-idf-action@v1
         with:
           version: "v6.1"
+          eim-version: "v0.20.1"
+          # Avoid the action's default /tmp/esp extraction quota.
+          path: ${{ runner.temp }}/esp-idf
+          tools-path: ${{ runner.temp }}/esp-tools
 
       - name: Build physical N16R8 M6 qualification image
         shell: bash

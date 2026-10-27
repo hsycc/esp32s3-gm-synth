@@ -418,9 +418,47 @@ bool Voice::start(sample::PublishedSampleDirectory& directory, const VoiceStartP
         return false;
     }
 
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    experimental::BoundedLoopReleaseCursor candidate_loop;
+    bool enable_loop = false;
+    const bool has_plan = params.experimental_loop_plan != nullptr;
+    const bool has_context = params.experimental_loop_context != nullptr;
+    if (params.experimental_loop_opt_in || has_plan || has_context) {
+        if (!params.experimental_loop_opt_in || !has_plan || !has_context) {
+            directory.release(acquired);
+            return false;
+        }
+        const auto& plan = *params.experimental_loop_plan;
+        const auto& c = *params.experimental_loop_context;
+        const bool mode_matches =
+            (params.loop_mode == LoopMode::None && c.mode == experimental::CursorLoopMode::None) ||
+            (params.loop_mode == LoopMode::Continuous && c.mode == experimental::CursorLoopMode::Continuous) ||
+            (params.loop_mode == LoopMode::UntilRelease && c.mode == experimental::CursorLoopMode::UntilRelease);
+        const bool range_matches = c.region.start == region_start && c.region.end == region_end &&
+            (params.loop_mode == LoopMode::None ||
+             (c.region.loop_start == region_loop_start && c.region.loop_end == region_loop_end));
+        if (!mode_matches || !range_matches || descriptor.flags != 1 ||
+            plan.validateVoiceAcquisition(directory, acquired, c) != experimental::LoopBindingStatus::Ok ||
+            !candidate_loop.start(acquired.record->pcm, descriptor.frames, c.region,
+                c.mode, params.phase_increment_q32, plan.fade(), plan.releaseBridge())) {
+            directory.release(acquired);
+            return false;
+        }
+        enable_loop = plan.fade().enabled;
+    }
+    loop_cursor_ = candidate_loop;
+    loop_execution_enabled_ = enable_loop;
+#endif
     directory_ = &directory;
     ref_ = std::move(acquired);
     params_ = params;
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Never retain a borrowed plan/context, including an explicitly Direct plan.
+    params_.experimental_loop_plan = nullptr;
+    params_.experimental_loop_context = nullptr;
+    params_.experimental_loop_opt_in = false;
+    if (!loop_execution_enabled_) loop_cursor_.reset();
+#endif
     params_.gain_left_q15 = clampQ15(params.gain_left_q15);
     params_.gain_right_q15 = clampQ15(params.gain_right_q15);
     params_.envelope.sustain_q15 = clampQ15(params.envelope.sustain_q15);
@@ -531,6 +569,12 @@ void Voice::beginRelease(
         return;
     }
 
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    if (loop_execution_enabled_) {
+        (void)loop_cursor_.setStep(current_phase_increment_q32_);
+        loop_cursor_.noteOff();
+    }
+#endif
     beginModEnvelopeRelease();
     key_released_ = true;
     fast_release_kind_ = fast_release_kind;
@@ -978,6 +1022,15 @@ void Voice::advancePhase() {
         return;
     }
 
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    if (loop_execution_enabled_) {
+        // next() already advanced at the current modulation rate. Do not advance
+        // a second time or use the legacy (unshortened) wrap interval.
+        phase_q32_ = loop_cursor_.phaseQ32();
+        if (!loop_cursor_.active()) finish();
+        return;
+    }
+#endif
     phase_q32_ += current_phase_increment_q32_;
 
     if (loopActive()) {
@@ -996,6 +1049,11 @@ void Voice::advancePhase() {
 }
 
 void Voice::finish() {
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Clear primary AND release shadow before dropping the Voice's only pin.
+    loop_cursor_.reset();
+    loop_execution_enabled_ = false;
+#endif
     if (ref_.valid() && directory_ != nullptr) {
         directory_->release(ref_);
     }
@@ -1072,7 +1130,22 @@ VoiceRenderResult Voice::renderAdd(
             break;
         }
 
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+        std::int32_t source = 0;
+        if (loop_execution_enabled_) {
+            std::int16_t raw = 0;
+            if (!loop_cursor_.setStep(current_phase_increment_q32_) || !loop_cursor_.next(raw)) {
+                finish();
+                break;
+            }
+            source = raw;
+        } else {
+            source = interpolatedSample();
+        }
+        const std::int32_t mono = applyLowpass(source);
+#else
         const std::int32_t mono = applyLowpass(interpolatedSample());
+#endif
         const std::int32_t left_gain = multiplyQ15(current_gain_left_q15_, envelope);
         const std::int32_t right_gain = multiplyQ15(current_gain_right_q15_, envelope);
         interleaved_stereo[frame * 2u] += scaleSampleQ15(mono, left_gain);

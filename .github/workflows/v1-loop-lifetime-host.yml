@@ -8,6 +8,7 @@ on:
       - 'tools/loop_pinned_probe.cpp'
       - 'scripts/test_v1_loop_lifetime.sh'
       - '.github/workflows/v1-loop-lifetime-host.yml'
+      - 'scripts/check_v1_*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,17 +27,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Require frozen directory, renderers and Host policy
-        run: |
-          git diff --exit-code 7f4c192f0b7a04e4070468045213e172ff8f1ac5 -- \
-            firmware/sample firmware/voice \
-            ':(exclude)firmware/voice/experimental/PinnedLoopPlan.h' \
-            ':(exclude)firmware/voice/experimental/PreparedLoopHandoff.h' \
-            tools/v1_loop_policy.py tools/v1_loop_crossfade_planner.py \
-            tools/v1_loop_matched_peak.py tools/v1_effective_loop_survey.py \
-            tools/m7_loop_seam_audio.py tools/v1_loop_executor_check.py
-          git diff --exit-code ab737d2d1a090b6df3adab2b5a997696de1f51f2 -- \
-            firmware/voice/experimental/PinnedLoopPlan.h tools/loop_pinned_probe.cpp
+      - name: Require frozen baselines (Voice opt-in delta checked separately)
+        run: python3 scripts/check_v1_voice_baselines.py
       - name: GCC ownership, identity, retirement and PCM parity
         run: |
           set -euo pipefail
@@ -55,7 +47,7 @@ jobs:
           python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
             --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
             --output build/v1-loop-lifetime/generaluser-effective.json
-          echo '400bebd3c728bdbbce4356e723581d66fb87898e87774f20e1bcff25caab36b1  build/v1-loop-lifetime/generaluser-effective.json' | sha256sum -c -
+          bash scripts/check_v1_frozen_loop_report.sh build/v1-loop-lifetime/generaluser-effective.json
       - name: Compare every Host candidate while plan and publication are retired
         run: |
           python -m tools.v1_loop_executor_check assets/sf2/full/GeneralUser-GS.sf2 \

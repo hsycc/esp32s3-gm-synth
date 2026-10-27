@@ -132,6 +132,12 @@ VoiceRenderResult Voice::renderAddRealtime(
         return result;
     }
 
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Correctness-first opt-in path. Existing fast paths stay untouched for
+    // Direct voices; crossfade voices reuse reference DSP and event ordering.
+    // This is NOT a qualified optimized crossfade hot path on ESP32-S3.
+    if (loop_execution_enabled_) return renderAdd(interleaved_stereo, frame_count);
+#endif
     // Continuous SF2 loops are the common resident-sample realtime case. Hoist
     // their immutable sample/region/loop metadata once per render segment even
     // when filter/LFO/mod-envelope DSP is enabled. Non-continuous playback keeps
