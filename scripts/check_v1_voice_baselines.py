@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import subprocess
+from v1_atomic_contract_source import restore_atomic_contract
 
 BASE='6d954a7bc200cd0ec300873e7e106fff2a87a692'
 bindings=['firmware/voice/experimental/PinnedLoopPlan.h',
@@ -24,7 +25,7 @@ def remove_app(text):
                    '',text,flags=re.S|re.M)
 
 for path in bindings:
-    text=Path(path).read_text()
+    text=restore_atomic_contract(path, Path(path).read_text())
     original=subprocess.check_output(['git','show',f'{BASE}:{path}']).decode()
     text,app_count=remove_app(text)
     if app_count != (1 if path.endswith('PreparedLoopHandoff.h') else 0):

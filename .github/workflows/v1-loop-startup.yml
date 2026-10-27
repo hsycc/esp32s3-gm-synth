@@ -10,6 +10,9 @@ on:
       - 'profiles/v1-loop-startup/**'
       - 'tests/app/**'
       - 'tests/test_v1_loop_startup.py'
+      - 'tests/test_v1_atomic_contract.py'
+      - 'scripts/v1_atomic_contract_source.py'
+      - 'tools/v1_atomic_backend_audit.py'
       - 'scripts/*v1_loop_startup*'
       - 'tools/v1_loop_startup*'
 permissions:
@@ -31,7 +34,7 @@ jobs:
           python3 scripts/check_v1_voice_baselines.py
           python3 scripts/check_v1_loop_startup_default.py
       - name: Manifest and evidence rejection tests
-        run: python3 -m unittest tests.test_v1_loop_startup -v
+        run: python3 -m unittest tests.test_v1_loop_startup tests.test_v1_atomic_contract -v
       - name: Native lifecycle and sanitized verification
         run: |
           mkdir -p build/v1-loop-startup-host

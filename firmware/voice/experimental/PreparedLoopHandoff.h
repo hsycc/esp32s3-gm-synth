@@ -4,6 +4,7 @@
 #include "gm/PlaybackProgramSnapshot.h"
 #include "sample/SampleSource.h"
 #include <atomic>
+#include "util/RealtimeAtomicContract.h"
 #include <limits>
 
 namespace gm_synth::voice::experimental {
@@ -169,10 +170,10 @@ private:
 template<std::size_t MaxPlans = 16>
 class PreparedLoopHandoff {
     static_assert(MaxPlans > 0 && MaxPlans <= gm::PlaybackProgramSnapshot::kMaxZones);
-    static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
-                  "handoff state requires lock-free 32-bit atomics");
 public:
-    explicit PreparedLoopHandoff(sample::PublishedSampleDirectory& directory) : directory_(directory) {}
+    explicit PreparedLoopHandoff(sample::PublishedSampleDirectory& directory) : directory_(directory) {
+        util::requireRealtimeAtomic32(phase_);
+    }
     PreparedLoopHandoff(const PreparedLoopHandoff&) = delete;
     PreparedLoopHandoff& operator=(const PreparedLoopHandoff&) = delete;
     PreparedLoopHandoff(PreparedLoopHandoff&&) = delete;

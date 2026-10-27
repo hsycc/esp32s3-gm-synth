@@ -29,3 +29,7 @@ python "$IDF_PATH/tools/idf.py" -B "$OUT/target" -D IDF_TARGET=esp32s3 \
 python -m tools.v1_loop_target_evidence build --root "$ROOT" \
     --database "$OUT/target/compile_commands.json" --elf "$OUT/target/esp32s3_gm_synth.elf" \
     --app-prefix main --output "$OUT/build-audit.json"
+
+# Keep the IDF PSRAM workaround. Inspect the actual SDK build, not a Host stub.
+python -m tools.v1_atomic_backend_audit --idf "$IDF_PATH" --build "$OUT/target" \
+    --sdkconfig "$OUT/sdkconfig" --profile "$PROFILE" --output "$OUT/atomic-backend-audit.json"
