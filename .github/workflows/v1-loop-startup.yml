@@ -4,33 +4,105 @@ on:
   pull_request:
     paths:
       - '.github/workflows/v1-loop-startup.yml'
-      - 'firmware/app/**'
+      - 'firmware/**'
       - 'main/**'
+      - 'CMakeLists.txt'
+      - 'profiles/v1-loop-startup/**'
       - 'tests/app/**'
-      - 'scripts/*loop_startup*'
-      - 'tools/*loop_startup*'
+      - 'tests/test_v1_loop_startup.py'
+      - 'scripts/*v1_loop_startup*'
+      - 'tools/v1_loop_startup*'
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
-  source:
+  host:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Frozen production and default-off source
+        run: |
+          python3 scripts/check_v1_voice_baselines.py
+          python3 scripts/check_v1_loop_startup_default.py
+      - name: Manifest and evidence rejection tests
+        run: python3 -m unittest tests.test_v1_loop_startup -v
+      - name: Native lifecycle and sanitized verification
+        run: |
+          mkdir -p build/v1-loop-startup-host
+          bash scripts/test_v1_loop_startup.sh | tee build/v1-loop-startup-host/native.log
+          CXX=clang++ SANITIZE=1 V1_STARTUP_DIR=build/v1-loop-startup-asan bash scripts/test_v1_loop_startup.sh | tee build/v1-loop-startup-host/asan.log
+          cmp build/v1-loop-startup-host/native.log build/v1-loop-startup-host/asan.log
+      - name: Exact source snapshot without production banks
+        run: |
+          git rev-parse HEAD > build/v1-loop-startup-host/commit.txt
+          git ls-tree -r HEAD > build/v1-loop-startup-host/tree.txt
+          mapfile -t configs < <(git ls-tree --name-only HEAD | grep -E '^(CMakeLists[.]txt|sdkconfig.*|partitions.*[.]csv)$')
+          git archive HEAD -- firmware main profiles scripts tests tools docs .github "${configs[@]}" | gzip > build/v1-loop-startup-host/source.tar.gz
+          sha256sum build/v1-loop-startup-host/source.tar.gz > build/v1-loop-startup-host/source.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-startup-host
+          path: |
+            build/v1-loop-startup-host/*.log
+            build/v1-loop-startup-host/*.txt
+            build/v1-loop-startup-host/*.gz
+            build/v1-loop-startup-host/*.sha256
+          if-no-files-found: error
+  xtensa:
+    needs: host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: qemu
+            mode: 'on'
+          - profile: qemu
+            mode: 'off'
+          - profile: physical
+            mode: 'on'
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Capture source only, no production SoundFont
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/v1-loop-startup
-          git rev-parse HEAD > build/v1-loop-startup/commit.txt
-          git ls-tree -r HEAD > build/v1-loop-startup/tree.txt
-          mapfile -t configs < <(git ls-tree --name-only HEAD | grep -E '^(CMakeLists[.]txt|sdkconfig.*|partitions.*[.]csv)$')
-          git archive HEAD -- firmware main scripts tests tools docs .github "${configs[@]}" > build/v1-loop-startup/source.tar
-          gzip build/v1-loop-startup/source.tar
-          sha256sum build/v1-loop-startup/source.tar.gz > build/v1-loop-startup/source.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: espressif/install-esp-idf-action@v1
         with:
-          name: v1-loop-startup-source
-          path: build/v1-loop-startup/
+          version: 'v6.1'
+          eim-version: 'v0.20.1'
+          path: ${{ runner.temp }}/esp-idf
+          tools-path: ${{ runner.temp }}/esp-tools
+      - name: Root application build and ABI audit
+        run: |
+          mkdir -p build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}
+          bash scripts/build_v1_loop_startup.sh ${{ matrix.profile }} ${{ matrix.mode }} 2>&1 | tee build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/build.log
+      - name: Execute root startup in QEMU
+        if: matrix.profile == 'qemu'
+        run: |
+          mkdir -p build/v1-loop-startup-host
+          bash scripts/test_v1_loop_startup.sh | tee build/v1-loop-startup-host/native.log
+          bash scripts/run_v1_loop_startup_qemu.sh ${{ matrix.mode }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}
+          path: |
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/*.json
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/*.log
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/*.txt
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/sdkconfig
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.h
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.sha256
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/target/compile_commands.json
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/target/toolchain/*
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/target/*.map
+            build/v1-loop-startup-${{ matrix.profile }}-${{ matrix.mode }}/target/flash_args
+            build/v1-loop-startup-host/native.log
           if-no-files-found: error

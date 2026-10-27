@@ -1,3 +1,13 @@
+# Separate qualification entry; the ordinary source/dependency list below is unchanged.
+if(GM_SYNTH_BUILD_LOOP_STARTUP_QUAL)
+    idf_component_register(
+        SRCS "LoopStartupQualification.cpp"
+        INCLUDE_DIRS "." "${GM_SYNTH_STARTUP_GENERATED}"
+        REQUIRES firmware esp_partition esp_timer
+        PRIV_REQUIRES heap freertos mbedtls)
+    return()
+endif()
+
 set(GM_SYNTH_MAIN_SRCS
     "app_main.cpp"
     "QualificationIdleMonitor.cpp"
