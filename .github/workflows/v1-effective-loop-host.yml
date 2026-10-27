@@ -1,0 +1,83 @@
+name: v1-effective-loop-host
+on:
+  pull_request:
+    paths:
+      - 'tools/*loop*'
+      - 'tests/test_v1*loop*'
+      - 'scripts/build_v1_loop_exporter.sh'
+      - 'firmware/sf2/**'
+      - 'firmware/gm/Playback*'
+      - '.github/workflows/v1-effective-loop-host.yml'
+  workflow_dispatch:
+jobs:
+  prepared-zone-survey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build production-resolver Host exporter
+        run: bash scripts/build_v1_loop_exporter.sh
+      - name: Policy, CLI and production offset/mode regression tests
+        env:
+          V1_LOOP_EXPORTER: ${{ github.workspace }}/build/v1-loop-host/export_prepared_loops
+        run: python -m unittest discover -s tests -p 'test_v1*loop*.py' -v
+      - name: Analyze the checked-in GeneralUser GS bank
+        run: |
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 128 \
+            --output build/v1-loop-host/generaluser-effective.json
+          python -m tools.v1_loop_crossfade_planner assets/sf2/full/GeneralUser-GS.sf2 \
+            --output build/v1-loop-host/three-reference-loops.json
+      - name: Complete eligible geometries with source-matched peaks
+        run: |
+          python -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-host/generaluser-effective-full.json
+      - name: Audit sampled results and actual reference Zone coverage
+        run: |
+          python -m tools.v1_loop_review \
+            --sampled build/v1-loop-host/generaluser-effective.json \
+            --full build/v1-loop-host/generaluser-effective-full.json \
+            --sample 604 --sample 602 --sample 62 --require-complete \
+            --output build/v1-loop-host/prepared-loop-candidate-audit.json
+          cat build/v1-loop-host/prepared-loop-candidate-audit.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Locate near-peak origins without changing candidate decisions
+        run: |
+          python -m tools.v1_loop_peak_origin assets/sf2/full/GeneralUser-GS.sf2 \
+            --report build/v1-loop-host/generaluser-effective-full.json \
+            --sample 604 --sample 497 --sample 806 --sample 114 \
+            --output build/v1-loop-host/peak-origin-diagnostics.json
+      - name: Read immutable v2 source for controlled comparison
+        uses: actions/checkout@v4
+        with:
+          ref: d52bbe5e31c7c29d5c8aa00518cc5701fcf2c18b
+          path: build/v1-loop-baseline
+          sparse-checkout: tools
+          lfs: false
+          persist-credentials: false
+      - name: Recompute v2 on the identical bank and exporter
+        run: |
+          python build/v1-loop-baseline/tools/v1_effective_loop_survey.py \
+            assets/sf2/full/GeneralUser-GS.sf2 \
+            --exporter build/v1-loop-host/export_prepared_loops --limit 4096 \
+            --output build/v1-loop-host/generaluser-effective-v2.json
+      - name: Require identical raw metrics and only peak-attribution changes
+        run: |
+          python -m tools.v1_loop_peak_compare \
+            --before build/v1-loop-host/generaluser-effective-v2.json \
+            --after build/v1-loop-host/generaluser-effective-full.json \
+            --output build/v1-loop-host/source-matched-peak-comparison.json
+          cat build/v1-loop-host/source-matched-peak-comparison.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload review evidence (no PCM/audio redistribution)
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-effective-loop-review
+          path: |
+            build/v1-loop-host/*.json
+            build/v1-loop-host/*.md
+          if-no-files-found: error
