@@ -23,6 +23,12 @@ struct ResolvedVoiceBatch {
     std::size_t count = 0;
     std::array<voice::VoiceStartParams, kCapacity> voices{};
 
+    // BEGIN V1_APP_LOOP
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Exact prepared-zone identity, not an inferred sample/geometry match.
+    std::array<std::uint16_t, kCapacity> zone_indices{};
+#endif
+    // END V1_APP_LOOP
     void clear() { count = 0; }
 };
 
@@ -114,6 +120,19 @@ public:
     explicit RealtimeProgramEventApplier(PlaybackProgramSnapshotExchange& programs)
         : programs_(programs) {}
 
+    // BEGIN V1_APP_LOOP
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    using ExperimentalVoiceStarter = bool (*)(
+        void*, const PlaybackProgramSnapshot&, std::uint16_t,
+        const realtime::RealtimeEvent&, const voice::VoiceStartParams&, voice::VoicePool&);
+    // Configure only before audio starts, or after it is quiescent. The callback
+    // consumes borrowed plans synchronously; it must not mutate channel state.
+    void setExperimentalVoiceStarter(ExperimentalVoiceStarter start, void* context) {
+        experimental_starter_ = start;
+        experimental_context_ = context;
+    }
+#endif
+    // END V1_APP_LOOP
     bool apply(const realtime::RealtimeEvent& event, voice::VoicePool& voices);
 
     static bool callback(
@@ -141,6 +160,12 @@ private:
     std::uint32_t allocateNoteInstanceId();
     std::size_t refreshActiveVoices(std::uint8_t channel, voice::VoicePool& voices);
 
+    // BEGIN V1_APP_LOOP
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    ExperimentalVoiceStarter experimental_starter_ = nullptr;
+    void* experimental_context_ = nullptr;
+#endif
+    // END V1_APP_LOOP
     PlaybackProgramSnapshotExchange& programs_;
     MidiChannelStateBank channel_states_{};
     ZoneResolver resolver_{};
