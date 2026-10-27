@@ -85,7 +85,7 @@ void runLoopStartupQualification() {
     bool ok=status==app::LoopStartupStatus::Running;
     const auto initial=session->analysis();const auto initial_budget=session->budget();
     std::printf("STARTUP_READY status=%u session=%" PRIu64 " plans=%u analyzed=%u work=%u reads=%u arena_capacity=%u session_bytes=%u\n",
-        unsigned(status),session->serial(),unsigned(session->stage().admitted),initial.completed,initial_budget.used,initial_budget.pcm_reads,
+        unsigned(status),session->serial(),unsigned(session->stage().admitted),unsigned(initial.completed),unsigned(initial_budget.used),unsigned(initial_budget.pcm_reads),
         unsigned(session->residencyStats().capacity_bytes),unsigned(sizeof(Session)));
     std::printf("STARTUP_ASSET bytes=%u sha256=%s\n",unsigned(manifest::bytes),manifest::digest_hex);
     memory("ready");
@@ -122,7 +122,7 @@ void runLoopStartupQualification() {
     std::printf("STARTUP_TIMING startup_us=%" PRIu64 " hash_us=%" PRIu64 " service_max_us=%" PRIu64 " render_avg_us=%" PRIu64 " render_max_us=%" PRIu64 " diagnostic_only=1\n",
         std::uint64_t(startup_us),hash_us,service_max,blocks?render_total/blocks:0,render_max);
     std::printf("STARTUP_PCM capacity=%u high_water=%u used=%u allocation_failures=%u\n",
-        unsigned(pcm.capacity_bytes),unsigned(pcm.high_water_bytes),unsigned(pcm.used_bytes),pcm.allocation_failures);
+        unsigned(pcm.capacity_bytes),unsigned(pcm.high_water_bytes),unsigned(pcm.used_bytes),unsigned(pcm.allocation_failures));
     ok=session->stop() && ok;
     session->~Session();heap_caps_free(object);
     ok=ok && r.releases==1 && !r.mapped && !r.arena;
