@@ -1,0 +1,35 @@
+name: v1-loop-startup
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/v1-loop-startup.yml'
+      - 'firmware/app/**'
+      - 'main/**'
+      - 'tests/app/**'
+      - 'scripts/*loop_startup*'
+      - 'tools/*loop_startup*'
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Capture source only, no production SoundFont
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/v1-loop-startup
+          git rev-parse HEAD > build/v1-loop-startup/commit.txt
+          git ls-tree -r HEAD > build/v1-loop-startup/tree.txt
+          git archive HEAD -- firmware main scripts tests tools docs .github CMakeLists.txt sdkconfig.defaults sdkconfig.physical.defaults sdkconfig.m7-release.defaults > build/v1-loop-startup/source.tar
+          gzip build/v1-loop-startup/source.tar
+          sha256sum build/v1-loop-startup/source.tar.gz > build/v1-loop-startup/source.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-loop-startup-source
+          path: build/v1-loop-startup/
+          if-no-files-found: error
