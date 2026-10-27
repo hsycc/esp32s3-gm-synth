@@ -1,0 +1,101 @@
+name: v1-loop-analysis
+on:
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - 'tools/v1_loop*'
+      - 'tools/loop_analysis_probe.cpp'
+      - 'tests/app/**'
+      - 'tests/idf/loop_analysis/**'
+      - 'tests/test_v1_loop_analysis_evidence.py'
+      - 'scripts/*v1*loop*analysis*'
+      - '.github/workflows/v1-loop-analysis.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Frozen production and selection guards
+        run: python3 scripts/check_v1_voice_baselines.py
+      - name: Evidence rejection tests
+        run: python3 -m unittest tests.test_v1_loop_analysis_evidence -v
+      - name: GCC resident provider and bounded-core tests
+        run: |
+          mkdir -p build/v1-loop-analysis
+          bash scripts/test_v1_loop_analysis.sh | tee build/v1-loop-analysis/gcc.log
+      - name: Clang ASan and UBSan
+        env:
+          CXX: clang++
+          SANITIZE: '1'
+          V1_ANALYSIS_DIR: build/v1-loop-analysis-asan
+        run: |
+          bash scripts/test_v1_loop_analysis.sh | tee build/v1-loop-analysis/clang.log
+          cmp build/v1-loop-analysis/gcc.log build/v1-loop-analysis/clang.log
+      - name: Differential synthetic boundary cases
+        run: |
+          python3 -m tools.v1_loop_analysis_check --probe build/v1-loop-analysis/probe --output build/v1-loop-analysis/synthetic.json
+          python3 -m tools.v1_loop_analysis_check --probe build/v1-loop-analysis-asan/probe --output build/v1-loop-analysis/synthetic-asan.json
+      - name: Unchanged full-bank prepared-loop policy
+        run: |
+          bash scripts/build_v1_loop_exporter.sh
+          python3 -m tools.v1_effective_loop_survey assets/sf2/full/GeneralUser-GS.sf2 --exporter build/v1-loop-host/export_prepared_loops --limit 4096 --output build/v1-loop-analysis/generaluser-effective.json
+          bash scripts/check_v1_frozen_loop_report.sh build/v1-loop-analysis/generaluser-effective.json
+      - name: Every prepared loop and every candidate against frozen policy
+        run: |
+          python3 -m tools.v1_loop_analysis_check --probe build/v1-loop-analysis/probe --sf2 assets/sf2/full/GeneralUser-GS.sf2 --report build/v1-loop-analysis/generaluser-effective.json --output build/v1-loop-analysis/bank-parity.json
+          python3 -m tools.v1_loop_analysis_check --probe build/v1-loop-analysis-asan/probe --sf2 assets/sf2/full/GeneralUser-GS.sf2 --report build/v1-loop-analysis/generaluser-effective.json --output build/v1-loop-analysis/bank-parity-asan.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-analysis-host
+          path: |
+            build/v1-loop-analysis/*.json
+            build/v1-loop-analysis/*.log
+            build/v1-loop-analysis/generated/fixture.sha256
+          if-no-files-found: error
+  xtensa:
+    needs: host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pinned ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: 'v6.1'
+          eim-version: 'v0.20.1'
+          path: ${{ runner.temp }}/esp-idf
+          tools-path: ${{ runner.temp }}/esp-tools
+      - name: Build enabled resident-analysis application
+        run: |
+          mkdir -p build/v1-loop-analysis
+          bash scripts/build_v1_loop_analysis_target.sh 2>&1 | tee build/v1-loop-analysis/target-build.log
+      - name: Execute automatic resident analysis and MIDI Program change
+        run: bash scripts/run_v1_loop_analysis_qemu.sh 2>&1 | tee build/v1-loop-analysis/execution.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-analysis-target
+          path: |
+            build/v1-loop-analysis/*.json
+            build/v1-loop-analysis/*.log
+            build/v1-loop-analysis/*.txt
+            build/v1-loop-analysis/sdkconfig.target
+            build/v1-loop-analysis/generated/*.h
+            build/v1-loop-analysis/generated/fixture.sha256
+            build/v1-loop-analysis/target/compile_commands.json
+            build/v1-loop-analysis/target/toolchain/*
+            build/v1-loop-analysis/target/v1_loop_analysis_target.map
+          if-no-files-found: error
