@@ -77,6 +77,27 @@ class Configuration(unittest.TestCase):
             with self.subTest(profile=profile):
                 self.assertFalse(check_config(self.config(profile), profile)['physical_timing_approved'])
 
+    def test_sdk_compatibility_aliases_may_repeat_identically(self):
+        # IDF 6.1 generates this legacy Wi-Fi alias twice in sdkconfig.
+        for profile in PROFILES:
+            with self.subTest(profile=profile):
+                config = self.config(profile)
+                alias = 'CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=10\n'
+                expected = check_config(config + alias, profile)
+                self.assertEqual(check_config(config + alias + alias, profile), expected)
+                self.assertEqual(check_config(config + alias + alias +
+                    'CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15=32767\n', profile), expected)
+
+    def test_conflicting_duplicate_configuration_is_rejected(self):
+        config = self.config('physical')
+        for additions in (
+            'CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=10\n'
+            'CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=32\n',
+            'CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15=16384\n',
+        ):
+            with self.subTest(additions=additions), self.assertRaisesRegex(ValueError, 'conflicting configuration key'):
+                check_config(config + additions, 'physical')
+
     def test_no_hidden_capacity_buffer_volume_or_watchdog_relaxation(self):
         config = self.config('physical')
         for original, replacement in (

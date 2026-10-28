@@ -18,8 +18,10 @@ def check_config(text, profile):
     for line in text.splitlines():
         if line.startswith('CONFIG_') and '=' in line:
             key, value = line.split('=', 1)
-            if key in config:
-                raise ValueError('duplicate configuration key: ' + key)
+            # IDF 6.1 emits some compatibility aliases more than once with
+            # the same value. Conflicting definitions remain ambiguous.
+            if key in config and config[key] != value:
+                raise ValueError('conflicting configuration key: ' + key)
             config[key] = value
     required = {
         'CONFIG_IDF_TARGET': '"esp32s3"',
