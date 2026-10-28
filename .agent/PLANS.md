@@ -4,11 +4,36 @@ This is the durable execution plan for the ESP32-S3 GM / native-SF2 synth. Keep 
 
 ## Current project position
 
-The **M0–M8 source integration batch** is assembled on `agent/m6-sf2-playback-prepare-v1`. M7 PR #17 and M8 PR #18 have merged into that branch. Core implementation and tracked CI/physical stress work are complete for the tested configurations; representative audible approval and V1 release remain open.
+The **M0–M8 source integration batch is in main**. PRs #19–#24 have also merged.
+PR #25 completed serial startup/session qualification and merged as
+`51dc57d42057e9c23d3cf593717f56cc3841c92e` on 2026-10-28, retaining history.
+Its reviewed HEAD `5502e97468fdace04ed43180f43bf477179a541b` passed all 17
+triggered workflows / 25 check runs, with current-head QEMU on/off artifacts
+verified. All five workflows triggered by that main push also succeeded
+(including ESP-IDF run `40636633886`). Main push checks are a separate trigger
+set, not the same 17 runs.
+Core implementation and historical physical stress work are complete for the
+tested configurations; new enabled-path hardware, audible approval and V1
+release remain open.
 
 M8 reference: `bb31908b` three physical runs PASS with PCM checksum `fe69915701738934`, 24 nominal normal/full-FX sample voices, eight stable pathological heavy-DSP voices, no WDT/hard-gate failures and final backlog zero. User confirmed the recorded `-dirty` suffix is not a blocker for this source integration; retain the actual banner without claiming clean CI binary identity. See `benchmarks/M8_PHYSICAL_THREE_RUN_2026-10-24.md`.
 
-Current focus: integrate into `main` with CI, then complete audible tests, release DAC-level/headroom trials and final supported-asset packaging. These remain independent gates; no V1 publication is implied.
+Current focus: the new concurrent control/audio owner and continuous I2S/DMA,
+then one consolidated on/off hardware batch for memory, Prepare/render latency,
+actual Loop Voice coverage and sustained polyphony. See
+`docs/V1_LOOP_REALTIME_INTEGRATION.md`. Batch development and Host/CI/QEMU are the
+daily verification path; do not ask for physical reruns after every small edit.
+Keep feature defaults OFF, original M8 load/volume/DMA/WDT settings and the
+`prepared-loop-review-v3-source-matched-peak` policy frozen. Do not restart
+Sample 604 scoring or open another overlapping startup Draft. Listening,
+DAC/headroom, compatibility/licenses and final version/package freeze remain
+independent release gates; no V1 publication is implied.
+
+The new fixed FM Program16 24-Voice workload has a reproduced digital-headroom
+failure in both Direct and analysis-on Host rendering. Preserve its negative
+qualification and zero-clipping gate; do not lower velocity, Voice count, FX,
+master or DAC settings to relabel it PASS. It remains distinct from pending
+physical CPU/DMA measurements and from the frozen Crossfade scoring policy.
 
 M6 physical product qualification is complete at:
 
@@ -191,7 +216,9 @@ Worst transient pure-render block remains 24 simultaneous NoteOn events at about
 
 ## M7 — GM128 / user-SF2 release qualification
 
-Status: **ACTIVE.**
+Status: **CORE / TESTED-BANK AUTOMATION AND HISTORICAL PHYSICAL WORK COMPLETE;
+representative listening and final release remain open.** The subsections below
+retain the implementation plan and are not new instructions to repeat it.
 
 Detailed task: `tasks/M7_GM128_USER_SF2_RELEASE.md`.
 

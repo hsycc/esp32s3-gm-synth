@@ -1,7 +1,8 @@
 # V1 audible acceptance worksheet
 
-Status: **NOT RUN**. A serial PASS, a matching PCM checksum or generated WAV files
-do not complete any listening row. Fill observations only after actual listening.
+Status: **PHYSICAL WORKSHEET NOT RUN; existing Host loop preferences recorded**.
+A serial PASS, a matching PCM checksum or generated WAV files do not complete
+physical listening. Fill new observations only after actual listening.
 This worksheet does not implement new firmware, MIDI ingress or a new player.
 
 ## Record the exact audition setup
@@ -29,9 +30,9 @@ ES8311 speaker: this board's qualification path averages L/R to mono.
 | A3 | CC21 sweep while voices sound; filter change should be audible without a new unintended note or unrelated gain/pitch jump | Existing synthetic physical stress fixture, logged `0,64,127,0`; not a real-bank CC21 audition | NOT RUN |
 | A4 | Representative real-bank long-loop / string or pad, drums and release tails | Requires an explicitly selected preset/clip and an actual audition path; do not assume the current benchmark provides these as real-bank audio | NOT RUN |
 | A5 | Reverb/chorus send changes, tail continuity and mute behavior at intended release volume | Need actual audible/recorded evidence; stress counters alone are insufficient; current logs cover unity master only | NOT RUN |
-| A6 | Loop A/B sample 604: direct vs 16f/32f/64f; click, pitch/timbre and repetition | Existing GeneralUser host WAV exporter / previously supplied WAVs | NOT RUN |
-| A7 | Loop A/B sample 602: direct vs 16f/32f/64f; same checks | Existing GeneralUser host WAV exporter / previously supplied WAVs | NOT RUN |
-| A8 | Loop A/B sample 62: direct vs 16f/32f/64f; prefer no processing when it is already clean | Existing GeneralUser host WAV exporter / previously supplied WAVs | NOT RUN |
+| A6 | Loop A/B sample 604: direct vs 16f/32f/64f; click, pitch/timbre and repetition | User listened to the previously supplied Host references and preferred32f | HOST PREFERENCE RECORDED; physical instrument NOT RUN |
+| A7 | Loop A/B sample 602: direct vs 16f/32f/64f; same checks | User reported little difference, without selecting forced processing | HOST OBSERVATION RECORDED; physical instrument NOT RUN |
+| A8 | Loop A/B sample 62: direct vs 16f/32f/64f; prefer no processing when it is already clean | User reported little difference, without selecting forced processing | HOST OBSERVATION RECORDED; physical instrument NOT RUN |
 | A9 | Left/right and pan semantics | Host stereo PCM evidence or a real stereo output path; mono speaker audition is NOT APPLICABLE for spatial correctness | NOT RUN |
 
 The qualification image is an automated benchmark, not an established manual
@@ -67,8 +68,12 @@ Decision: **NOT RUN** (replace with PASS, FAIL or DEFERRED + explicit reason).
 
 Evidence reference: **NOT RECORDED**
 
-For 604/602/62: selected variant **UNDECIDED**; audible advantage **UNRECORDED**;
-period/pitch/timbre trade-off **UNREVIEWED**. No global runtime crossfade approved.
+For the already supplied Host references: 604 selected variant **32f**;
+602/62 **little difference, no forced-processing selection**. These are user
+observations carried forward in the 2026-10-28 handoff, not newly run tests.
+Do not ask for the same choice again. Effective-range automatic selection stays
+frozen; full-instrument period/pitch/timbre and physical output remain separate
+uncompleted checks. No global runtime crossfade is approved.
 
 ## Exit rule
 

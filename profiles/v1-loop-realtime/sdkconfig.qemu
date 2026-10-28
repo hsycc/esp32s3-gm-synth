@@ -1,0 +1,5 @@
+CONFIG_SPIRAM=n
+# Test only: the emulator is an execution/ownership gate, not a SHA or I2S model.
+CONFIG_MBEDTLS_HARDWARE_SHA=n
+CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=n
+CONFIG_GM_SYNTH_I2S_QUAL_ENABLE=n

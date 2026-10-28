@@ -1,6 +1,11 @@
 # M8 `bb31908b` Three-run N16R8 Physical Validation
 
-**Result: 3/3 physical hard gates passed; provenance remains conditional due to `-dirty`.**
+**Current disposition (2026-10-28): 3/3 physical hard gates passed. The user
+expressly accepted the recorded `bb31908-dirty` image for source integration;
+the historical dirty condition below is superseded and is not a merge blocker.**
+Keep the actual banner and log hashes: this acceptance does not claim identity
+with a clean CI ELF. None of these measurements qualify the newly enabled
+Crossfade execution path. Original observations and historical wording follow.
 
 Source: three user-supplied full serial logs, with embedded compile date October 24, 2026. No wall-clock run duration or multi-hour soak evidence is inferred. 44.1 kHz, 64-frame blocks, 8 × 64 DMA, master Q15 32767, ES8311 -12 dB.
 
@@ -35,7 +40,7 @@ M8 worst 24-NoteOn stage breakdown: Event Apply 741–742 us, Voice Render 1209�
 
 Average render 736 us in M8 vs 718 us in prior M7 summary (+2.5%), max backlog 749 vs 840–846 us (lower), DMA minimum margin 10861 vs 10764–10770 us (higher). Instrumentation/workload interpretation should remain cautious.
 
-## Evidence boundaries
+## Evidence boundaries recorded at the time
 
 - All three boots identify as `bb31908-dirty`, ELF SHA prefix `8a66d5396`; this establishes matching printed identity prefixes, not proof of complete binary identity or clean source-binary equivalence.
 - Monitor was invoked from the original working directory (not the suggested detached worktree). Review `git status`, `git diff`, staged diff, full ELF SHA and build config used at build time.
@@ -43,7 +48,7 @@ Average render 736 us in M8 vs 718 us in prior M7 summary (+2.5%), max backlog 7
 - Expected unstable 12-heavy-voice boundary is characterization, not a hard gate failure.
 - PR #17 earlier `95aa189-dirty` provenance must also be resolved before unconditional release merge.
 
-## Disposition
+## Historical disposition — superseded by the accepted decision above
 
 Treat M8 hardware realtime/semantic gates as passed in these three logs, but **hold unconditional code release/PR merge** until the dirty-build provenance is reconciled. Proceed to controlled listening and final compatibility/release claims.
 

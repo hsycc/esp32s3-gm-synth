@@ -1,0 +1,10 @@
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_MBEDTLS_HARDWARE_SHA=y
+CONFIG_GM_SYNTH_PCM_ARENA_BYTES=4718592
+# Enable the existing codec configuration dependency; the separate entry uses
+# the new continuous runner, never the historical M8 qualification runner.
+CONFIG_GM_SYNTH_RENDER_BENCHMARK_ENABLE=y
+CONFIG_GM_SYNTH_I2S_QUAL_ENABLE=y

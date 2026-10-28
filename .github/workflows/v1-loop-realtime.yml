@@ -1,0 +1,104 @@
+name: v1-loop-realtime
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/v1-loop-realtime.yml'
+      - 'CMakeLists.txt'
+      - 'firmware/**'
+      - 'main/**'
+      - 'profiles/v1-loop-realtime/**'
+      - 'scripts/*v1_loop_realtime*'
+      - 'tools/v1_loop_realtime*'
+      - 'tools/v1_loop_target_evidence.py'
+      - 'tools/v1_atomic_backend_audit.py'
+      - 'tests/app/**'
+      - 'tests/test_v1_loop_realtime.py'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preserve frozen policy, original audio and startup defaults
+        run: |
+          python3 scripts/check_v1_voice_baselines.py
+          python3 scripts/check_v1_loop_startup_default.py
+          python3 -m unittest tests.test_v1_loop_realtime tests.test_v1_loop_startup tests.test_v1_atomic_contract -v
+      - name: Production provider, concurrent render and owner shutdown
+        run: |
+          mkdir -p build/v1-loop-realtime-host
+          bash scripts/test_v1_loop_realtime.sh | tee build/v1-loop-realtime-host/native.log
+          CXX=clang++ SANITIZE=1 V1_REALTIME_DIR=build/v1-loop-realtime-asan bash scripts/test_v1_loop_realtime.sh | tee build/v1-loop-realtime-host/asan.log
+      - name: ThreadSanitizer ownership and publication races
+        run: |
+          CXX=g++ THREAD_SANITIZE=1 V1_REALTIME_DIR=build/v1-loop-realtime-tsan bash scripts/test_v1_loop_realtime.sh | tee build/v1-loop-realtime-host/tsan.log
+      - name: Auditable source identity
+        run: |
+          git rev-parse HEAD > build/v1-loop-realtime-host/commit.txt
+          git ls-tree -r HEAD > build/v1-loop-realtime-host/tree.txt
+          git archive HEAD -- firmware main profiles scripts tests tools docs .github CMakeLists.txt | gzip > build/v1-loop-realtime-host/source.tar.gz
+          sha256sum build/v1-loop-realtime-host/source.tar.gz > build/v1-loop-realtime-host/source.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-realtime-host
+          path: |
+            build/v1-loop-realtime-host/*.log
+            build/v1-loop-realtime-host/*.txt
+            build/v1-loop-realtime-host/*.gz
+            build/v1-loop-realtime-host/*.sha256
+          if-no-files-found: error
+  xtensa:
+    needs: host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [qemu, physical]
+        mode: ['on', 'off']
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: espressif/install-esp-idf-action@v1
+        with:
+          version: 'v6.1'
+          eim-version: 'v0.20.1'
+          path: ${{ runner.temp }}/esp-idf
+          tools-path: ${{ runner.temp }}/esp-tools
+      - name: Build continuous application, audit ABI and atomic backend, package exact flash inputs
+        run: |
+          mkdir -p build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}
+          bash scripts/build_v1_loop_realtime.sh ${{ matrix.profile }} ${{ matrix.mode }} 2>&1 | tee build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/build.log
+      - uses: actions/download-artifact@v4
+        if: matrix.profile == 'qemu'
+        with:
+          name: v1-loop-realtime-host
+          path: build/v1-loop-realtime-host
+      - name: Execute real control/audio tasks in QEMU
+        if: matrix.profile == 'qemu'
+        run: bash scripts/run_v1_loop_realtime_qemu.sh ${{ matrix.mode }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}
+          path: |
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/*.json
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/*.log
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/*.txt
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/sdkconfig
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.h
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.json
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.sha256
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/flash-bundle/**
+          if-no-files-found: error
