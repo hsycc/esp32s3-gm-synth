@@ -1,6 +1,7 @@
 #include "LoopRealtimeQualification.h"
 #include "LoopRealtimeI2s.h"
 #include "app/LoopRealtimeSession.h"
+#include "app/LoopRealtimeReplay.h"
 #include "realtime/RealtimeHealthTracker.h"
 #include "loop_realtime_manifest.h"
 #include "sdkconfig.h"
@@ -21,9 +22,13 @@
 
 namespace gm_synth::bringup {
 namespace {
-using Session = app::LoopRealtimeSession<>;
+// Two configured channels, sharing one source/allocator and control scratch.
+// The 16-zone bound keeps the SAME target specialization within QEMU's
+// internal-only heap; it is not a claim of 16-channel or arbitrary-bank approval.
+using Session = app::LoopRealtimeSession<16, 8, 2>;
 using Storage = Session::Storage;
 namespace manifest = loop_realtime_manifest;
+namespace replay = app::loop_realtime_replay;
 constexpr unsigned kInternal = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 constexpr unsigned kBudgetUs = 1451;
 constexpr unsigned kCohortBlocks = 4096;
@@ -71,25 +76,37 @@ struct Context {
     TaskHandle_t parent = nullptr;
     std::atomic<std::uint32_t> audio_done{0}, control_done{0}, audio_ready{0};
     std::atomic<std::uint32_t> frame{0}, program{manifest::initial_program};
+    std::atomic<std::uint32_t> replay_program{manifest::initial_program};
     std::atomic<std::uint32_t> cohort_first{0}, cohort_end{0};
+    std::atomic<std::uint32_t> replay_first{0}, replay_second{0}, replay_cleanup{0}, replay_end{0};
     // Each following member is owned by ONE actor, read by coordinator after join.
     bool audio_ok = true, control_ok = true;
     int audio_core = -1, control_core = -1;
     unsigned blocks = 0, voices_peak = 0, loops_peak = 0, program_switches = 0;
     unsigned blocks_during_prepare = 0, audio_stack = 0, control_stack = 0;
     unsigned queued = 0, note_ons = 0, note_offs = 0, cc = 0, sustain = 0, pc = 0;
+    unsigned pitch_bends = 0, pressure = 0;
+    unsigned replay_eligible = 0, replay_events = 0;
+    std::uint64_t replay_event_checksum = replay::kHashOffset;
+    bool replay_complete = false;
+    unsigned replay_switches = 0, replay_channel_mask = 0, replay_loop_channel_mask = 0;
+    unsigned replay_concurrent_blocks = 0, replay_prepare_with_other_loop = 0;
+    unsigned replay_voices_peak = 0, replay_loops_peak = 0;
+    unsigned drain_frames = 0, drain_us = 0;
     unsigned io_yields = 0, analysis_yields = 0, service_calls = 0;
     unsigned stalls = 0, work_consecutive = 0;
     unsigned cohort_blocks = 0, cohort_voices_min = 32, cohort_voices_max = 0;
     unsigned cohort_loops_min = 32, cohort_loops_max = 0;
-    std::uint64_t cohort_clipped = 0;
+    std::uint64_t cohort_clipped = 0, cohort_raw_overload = 0;
     std::uint64_t checksum = UINT64_C(14695981039346656037);
     Latency render, service, cohort_render;
     realtime::RealtimeHealthTracker health{kBudgetUs, LoopRealtimeI2s::kDmaWindowUs};
     realtime::RealtimeHealthTracker cohort_health{kBudgetUs, LoopRealtimeI2s::kDmaWindowUs};
     LoopRealtimeI2sStats i2s{};
     Context() {
-        for (auto* word : {&audio_done, &control_done, &audio_ready, &frame, &program, &cohort_first, &cohort_end})
+        for (auto* word : {&audio_done, &control_done, &audio_ready, &frame, &program,
+                          &replay_program, &cohort_first, &cohort_end, &replay_first,
+                          &replay_second, &replay_cleanup, &replay_end})
             util::requireRealtimeAtomic32(*word);
     }
 };
@@ -99,6 +116,47 @@ std::uint32_t elapsed(std::int64_t start, std::int64_t end) {
         end > start ? static_cast<std::uint64_t>(end - start) : 0,
         std::numeric_limits<std::uint32_t>::max()));
 }
+
+bool outputProbe() {
+    // A separate control-startup check of actual compiled target arithmetic.
+    // It never contributes Voice workload, timing, headroom or listening PASS.
+    // Volatile source values prevent replacing the entire probe with a folded
+    // constant at compile time; the production class executes the conversion.
+    volatile std::int32_t extreme_min = std::numeric_limits<std::int32_t>::min();
+    volatile std::int32_t extreme_max = std::numeric_limits<std::int32_t>::max();
+    std::array<std::int32_t, 128> input{};
+    for (unsigned frame = 0; frame < 64; frame += 4) {
+        input[2 * frame] = extreme_min; input[2 * frame + 1] = extreme_max;
+        input[2 * frame + 2] = extreme_max; input[2 * frame + 3] = 0;
+        input[2 * frame + 4] = -32768; input[2 * frame + 5] = 16384;
+        input[2 * frame + 6] = 32768; input[2 * frame + 7] = -65536;
+    }
+    app::OutputPeakProtector bypass;
+    app::OutputPeakProtector peak(app::OutputPeakProtector::Mode::Peak64);
+    std::array<std::int16_t, 128> plain{}, protected_pcm{};
+    bool ok = bypass.process(input.data(), 64, 32767, plain.data()) &&
+        peak.process(input.data(), 64, 32767, protected_pcm.data());
+    const bool first_zero = std::all_of(protected_pcm.begin(), protected_pcm.end(),
+        [](std::int16_t value) { return value == 0; });
+    ok = first_zero && peak.flush(protected_pcm.data()) && ok;
+    const auto& raw = bypass.stats();
+    const auto& limited = peak.stats();
+    ok = ok && raw.input_frames == 64 && raw.output_frames == 64 &&
+        raw.raw_peak_abs == UINT32_C(2147483648) && raw.raw_overload_samples == 80 && raw.post_hard_clipped == 80 &&
+        limited.input_frames == 64 && limited.output_frames == 128 && limited.latency_frames == 64 &&
+        limited.raw_peak_abs == raw.raw_peak_abs && limited.raw_overload_samples == raw.raw_overload_samples &&
+        limited.post_hard_clipped == 0 && limited.post_peak_abs == 32766 &&
+        limited.gain_min_q30 == 16383 && limited.limited_frames == 64 &&
+        plain[0] == -32768 && plain[1] == 32767 && plain[3] == 0 &&
+        protected_pcm[0] == -32766 && protected_pcm[1] == 32765 && protected_pcm[3] == 0;
+    std::printf("REALTIME_OUTPUT_PROBE cases=1 input_frames=%" PRIu64 " bypass_raw_overload=%" PRIu64 " bypass_clipped=%" PRIu64 " peak_raw_overload=%" PRIu64 " peak_clipped=%" PRIu64 " raw_peak_abs=%u peak_peak_abs=%u peak_gain_min_q30=%u peak_limited_frames=%" PRIu64 " peak_latency_frames=%u peak_output_frames=%" PRIu64 " first_zero=%u pass=%u physical_timing_approved=0\n",
+        limited.input_frames, raw.raw_overload_samples, raw.post_hard_clipped, limited.raw_overload_samples,
+        limited.post_hard_clipped, unsigned(limited.raw_peak_abs), unsigned(limited.post_peak_abs),
+        unsigned(limited.gain_min_q30), limited.limited_frames, unsigned(limited.latency_frames),
+        limited.output_frames, unsigned(first_zero), unsigned(ok));
+    return ok;
+}
+
 bool hash(const std::uint8_t* data, std::size_t bytes, app::VerifiedReadOnlyBank::Digest& out) noexcept {
     const auto before = esp_timer_get_time();
     psa_hash_operation_t operation = PSA_HASH_OPERATION_INIT;
@@ -130,19 +188,52 @@ void memory(const char* phase) {
         unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
 }
 
-bool enqueue(Context& c, std::uint32_t frame, realtime::EventType type, unsigned a, unsigned b = 0) {
-    realtime::RealtimeEvent event{};
-    event.timestamp_frame = frame; event.channel = 0; event.type = type;
-    event.data1 = static_cast<std::uint8_t>(a); event.data2 = static_cast<std::uint8_t>(b);
+bool enqueue(Context& c, const realtime::RealtimeEvent& event) {
     if (!c.session->enqueue(event)) return false;
     ++c.queued;
-    switch (type) {
+    switch (event.type) {
     case realtime::EventType::NoteOn: ++c.note_ons; break;
     case realtime::EventType::NoteOff: ++c.note_offs; break;
-    case realtime::EventType::ControlChange: ++c.cc; if (a == 64) ++c.sustain; break;
+    case realtime::EventType::ControlChange: ++c.cc; if (event.data1 == 64) ++c.sustain; break;
     case realtime::EventType::ProgramChange: ++c.pc; break;
+    case realtime::EventType::PitchBend: ++c.pitch_bends; break;
+    case realtime::EventType::ChannelPressure: ++c.pressure; break;
     default: break;
     }
+    return true;
+}
+bool enqueue(Context& c, std::uint32_t frame, realtime::EventType type, unsigned a, unsigned b = 0,
+             unsigned channel = 0) {
+    realtime::RealtimeEvent event{};
+    event.timestamp_frame = frame; event.channel = static_cast<std::uint8_t>(channel); event.type = type;
+    event.data1 = static_cast<std::uint8_t>(a); event.data2 = static_cast<std::uint8_t>(b);
+    return enqueue(c, event);
+}
+
+bool replaySegment(Context& c, bool second, std::uint32_t frame) {
+    const auto base = frame + 16u * 64u;
+    if (base + replay::kSegmentFrames + replay::kTailFrames >= manifest::blocks * 64u) return false;
+    for (auto event : replay::segment(second, manifest::initial_program, manifest::replacement_program)) {
+        event.timestamp_frame += base;
+        if (!enqueue(c, event)) return false;
+        ++c.replay_events;
+        c.replay_event_checksum = replay::hashEvent(c.replay_event_checksum, event);
+    }
+    (second ? c.replay_second : c.replay_first).store(base, std::memory_order_release);
+    return true;
+}
+
+bool replayCleanup(Context& c, std::uint32_t frame) {
+    const auto base = frame + 16u * 64u;
+    if (base + replay::kTailFrames >= manifest::blocks * 64u) return false;
+    for (auto event : replay::cleanup()) {
+        event.timestamp_frame += base;
+        if (!enqueue(c, event)) return false;
+        ++c.replay_events;
+        c.replay_event_checksum = replay::hashEvent(c.replay_event_checksum, event);
+    }
+    c.replay_cleanup.store(base, std::memory_order_relaxed);
+    c.replay_end.store(base + replay::kTailFrames, std::memory_order_release);
     return true;
 }
 bool initialEvents(Context& c) {
@@ -169,6 +260,7 @@ bool returnedEvents(Context& c, std::uint32_t frame) {
         enqueue(c, base + 32u * 64u + 3u, T::NoteOff, 61) &&
         enqueue(c, base + 64u * 64u, T::ControlChange, 64, 0) &&
         enqueue(c, base + 80u * 64u, T::ControlChange, 21, 0);
+    c.replay_eligible = base + (80u + 256u) * 64u;
     if (!ok || !manifest::physical || manifest::synthetic) return ok;
     // One actual 24-sample-Voice full-FX regression cohort. This is not a sweep
     // or an assertion that the previous M8 stable boundary transfers unchanged.
@@ -176,12 +268,14 @@ bool returnedEvents(Context& c, std::uint32_t frame) {
     const auto first = begin + 64u; // onset burst remains in global statistics
     const auto end = first + kCohortBlocks * 64u;
     if (end + 128u * 64u >= manifest::blocks * 64u) return false;
-    ok = enqueue(c, begin - 64u, T::ControlChange, 120, 0);
+    ok = enqueue(c, begin - 64u, T::ControlChange, 120, 0) &&
+        enqueue(c, begin - 64u, T::ControlChange, 120, 0, 1);
     for (unsigned key = 48; ok && key < 72; ++key) ok = enqueue(c, begin, T::NoteOn, key, 64);
     for (unsigned key = 48; ok && key < 72; ++key) ok = enqueue(c, end, T::NoteOff, key);
     if (ok) {
         c.cohort_end.store(end, std::memory_order_relaxed);
         c.cohort_first.store(first, std::memory_order_release);
+        c.replay_eligible = end + 256u * 64u;
     }
     return ok;
 }
@@ -209,11 +303,21 @@ void controlTask(void* opaque) {
         } else if (stage == 1 && program == manifest::initial_program &&
                    s.controlServiceStats().service_successes >= 2) {
             c.control_ok = returnedEvents(c, frame); stage = 2;
+        } else if (stage == 2 && frame >= c.replay_eligible) {
+            c.control_ok = replaySegment(c, false, frame); stage = 3;
+        } else if (stage == 3 && c.replay_program.load(std::memory_order_acquire) == manifest::replacement_program &&
+                   s.phase(1) == Session::Phase::Idle && s.controlServiceStats().service_successes >= 3) {
+            c.control_ok = replaySegment(c, true, frame); stage = 4;
+        } else if (stage == 4 && c.replay_program.load(std::memory_order_acquire) == manifest::initial_program &&
+                   s.phase(1) == Session::Phase::Idle && s.controlServiceStats().service_successes >= 4) {
+            c.control_ok = replayCleanup(c, frame); stage = 5;
+        } else if (stage == 5 && frame >= c.replay_end.load(std::memory_order_acquire)) {
+            c.replay_complete = true; stage = 6;
         }
         if (!c.control_ok) { s.requestStop(); break; }
         vTaskDelay(1); // give CPU0 idle its normal WDT opportunity
     }
-    c.control_ok = c.control_ok && stage == 2;
+    c.control_ok = c.control_ok && stage == 6;
     c.control_stack = uxTaskGetStackHighWaterMark(nullptr);
     s.controlStop();
     const auto parent = c.parent;
@@ -230,31 +334,36 @@ void audioTask(void* opaque) {
     c.audio_ok = !manifest::physical || sink.start();
     c.audio_ready.store(1, std::memory_order_release);
     std::array<std::int16_t, 128> output{};
-    unsigned previous_program = manifest::initial_program;
+    unsigned previous_program = manifest::initial_program, previous_replay_program = manifest::initial_program;
     std::int64_t previous_write_end = 0;
-    std::uint64_t previous_clipped = 0;
+    std::uint64_t previous_clipped = 0, previous_raw_overload = 0;
     for (unsigned block = 0; c.audio_ok && block < manifest::blocks && !s.stopRequested(); ++block) {
         const auto cycle_start = esp_timer_get_time();
         // Account for the preceding block's bounded post-write diagnostics as
         // producer work too; they are not free CPU time between DMA writes.
         const auto carried_work_us = previous_write_end ? elapsed(previous_write_end, cycle_start) : 0u;
         const auto phase = s.phase();
+        const auto replay_phase = s.phase(1);
         c.audio_ok = s.audioRender(output.data());
         const auto render_end = esp_timer_get_time();
         if (!c.audio_ok) break;
         const auto render_us = elapsed(cycle_start, render_end);
         c.render.add(render_us); ++c.blocks;
         const auto program = s.audioProgram();
+        const auto replay_program = s.audioProgram(1);
         const auto voices = s.audioVoices();
         const auto loops = s.audioLoops();
         c.voices_peak = std::max(c.voices_peak, voices);
         c.loops_peak = std::max(c.loops_peak, loops);
         if (program != previous_program) { ++c.program_switches; previous_program = program; }
-        if (phase == Session::Phase::Preparing || s.phase() == Session::Phase::Preparing) ++c.blocks_during_prepare;
+        if (replay_program != previous_replay_program) { ++c.replay_switches; previous_replay_program = replay_program; }
+        if (phase == Session::Phase::Preparing || s.phase() == Session::Phase::Preparing ||
+            replay_phase == Session::Phase::Preparing || s.phase(1) == Session::Phase::Preparing) ++c.blocks_during_prepare;
         for (auto value : output) { c.checksum ^= static_cast<std::uint16_t>(value); c.checksum *= UINT64_C(1099511628211); }
         const auto frame = static_cast<std::uint32_t>(s.audioFrame());
         c.frame.store(frame, std::memory_order_release);
         c.program.store(program, std::memory_order_release);
+        c.replay_program.store(replay_program, std::memory_order_release);
         std::uint32_t downmix_us = 0;
         const auto write_start = esp_timer_get_time();
         if (manifest::physical) c.audio_ok = sink.write(output.data(), downmix_us);
@@ -265,22 +374,58 @@ void audioTask(void* opaque) {
         c.health.addBlock(render_us, work_us);
         const auto first = c.cohort_first.load(std::memory_order_acquire);
         const auto end = c.cohort_end.load(std::memory_order_relaxed);
-        const auto clipped_now = s.audioStats().clipped_samples;
+        const auto output_stats = s.audioOutputStats();
+        const auto clipped_now = output_stats.post_hard_clipped;
+        const auto raw_overload_now = output_stats.raw_overload_samples;
         if (first && frame - 64u >= first && frame - 64u < end) {
             ++c.cohort_blocks; c.cohort_render.add(render_us); c.cohort_health.addBlock(render_us, work_us);
             c.cohort_voices_min = std::min(c.cohort_voices_min, voices);
             c.cohort_voices_max = std::max(c.cohort_voices_max, voices);
             c.cohort_loops_min = std::min(c.cohort_loops_min, loops);
             c.cohort_loops_max = std::max(c.cohort_loops_max, loops);
-            c.cohort_clipped += clipped_now - previous_clipped;
+            c.cohort_raw_overload += raw_overload_now - previous_raw_overload;
         }
+        // Post-output belongs to the delayed input cohort in peak mode. The
+        // independent raw overload count above remains on its original frame.
+        if (first && frame - 64u >= first + output_stats.latency_frames &&
+            frame - 64u < end + output_stats.latency_frames)
+            c.cohort_clipped += clipped_now - previous_clipped;
         previous_clipped = clipped_now;
+        previous_raw_overload = raw_overload_now;
+        const auto replay_first = c.replay_first.load(std::memory_order_acquire);
+        if (replay_first && frame - 64u >= replay_first) {
+            const auto voices0 = s.audioVoices(0), voices1 = s.audioVoices(1);
+            const auto loops0 = s.audioLoops(0), loops1 = s.audioLoops(1);
+            if (voices0) c.replay_channel_mask |= 1u;
+            if (voices1) c.replay_channel_mask |= 2u;
+            if (loops0) c.replay_loop_channel_mask |= 1u;
+            if (loops1) c.replay_loop_channel_mask |= 2u;
+            if (voices0 && voices1) ++c.replay_concurrent_blocks;
+            if (loops0 && (replay_phase == Session::Phase::Preparing || s.phase(1) == Session::Phase::Preparing))
+                ++c.replay_prepare_with_other_loop;
+            c.replay_voices_peak = std::max(c.replay_voices_peak, voices);
+            c.replay_loops_peak = std::max(c.replay_loops_peak, loops);
+        }
         if (manifest::physical) {
             if (elapsed(cycle_start, cycle_end) + carried_work_us > LoopRealtimeI2s::kDmaWindowUs) ++c.stalls;
             c.work_consecutive = work_us > kBudgetUs ? c.work_consecutive + 1u : 0;
             // A real overload is a recorded failure, not a reason to change the
             // load/buffer/WDT. End before sustained CPU1 idle starvation.
             if (c.work_consecutive >= 128u || c.health.snapshot().backlog_exceeded_dma_window) c.audio_ok = false;
+        }
+    }
+    // One pending 64-frame output block is emitted only on normal completion.
+    // It is timed and sent, but is never counted as another rendered input block.
+    if (c.audio_ok && c.blocks == manifest::blocks && !s.stopRequested()) {
+        const auto before = esp_timer_get_time();
+        if (s.audioDrainOutput(output.data())) {
+            c.drain_frames = 64;
+            for (auto value : output) { c.checksum ^= static_cast<std::uint16_t>(value); c.checksum *= UINT64_C(1099511628211); }
+            std::uint32_t downmix_us = 0;
+            if (manifest::physical) c.audio_ok = sink.write(output.data(), downmix_us);
+            else vTaskDelay(1);
+            c.drain_us = elapsed(before, esp_timer_get_time());
+            if (manifest::physical && c.drain_us > LoopRealtimeI2s::kDmaWindowUs) ++c.stalls;
         }
     }
     c.audio_stack = uxTaskGetStackHighWaterMark(nullptr);
@@ -312,8 +457,9 @@ bool join(Context& c) {
 } // namespace
 
 void runLoopRealtimeQualification() {
-    std::printf("REALTIME_BEGIN profile=%s analysis=%u synthetic=%u root_application=1 control_core=0 audio_core=1\n",
-        manifest::profile, unsigned(manifest::analysis), unsigned(manifest::synthetic));
+    std::printf("REALTIME_BEGIN schema=2 profile=%s analysis=%u synthetic=%u output_mode=%s channels=2 root_application=1 control_core=0 audio_core=1\n",
+        manifest::profile, unsigned(manifest::analysis), unsigned(manifest::synthetic), manifest::output_mode);
+    if (!outputProbe()) { std::puts("REALTIME_FAIL output_probe"); return; }
     memory("before");
     const auto* partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "loop_bank");
     if (!partition || !partition->readonly || manifest::bytes > partition->size || psa_crypto_init() != PSA_SUCCESS) {
@@ -344,6 +490,7 @@ void runLoopRealtimeQualification() {
     c->session = session; c->parent = xTaskGetCurrentTaskHandle();
     app::LoopRealtimeConfig config;
     config.program = manifest::initial_program;
+    config.output_mode = manifest::output_peak ? app::OutputPeakProtector::Mode::Peak64 : app::OutputPeakProtector::Mode::Bypass;
     config.analysis.experimental_opt_in = manifest::analysis;
     config.analysis.checkpoint = analysisCheckpoint; config.analysis.checkpoint_context = c;
     config.io_checkpoint = ioCheckpoint; config.io_context = c;
@@ -352,9 +499,10 @@ void runLoopRealtimeQualification() {
     const auto status = session->start(std::move(lease), manifest::digest, hash, serials, config);
     const auto startup_us = static_cast<std::uint64_t>(esp_timer_get_time() - before);
     bool ok = status == app::LoopStartupStatus::Running;
-    std::printf("REALTIME_READY status=%u session=%" PRIu64 " plans=%u analyses=%u session_bytes=%u storage_bytes=%u storage_psram=%u arena_capacity=%u\n",
+    std::printf("REALTIME_READY status=%u session=%" PRIu64 " plans=%u analyses=%u channel1_plans=%u channel1_analyses=%u session_bytes=%u storage_bytes=%u storage_psram=%u arena_capacity=%u\n",
         unsigned(status), session->serial(), unsigned(session->controlStage().admitted),
-        unsigned(session->controlAnalysis().completed), unsigned(sizeof(Session)), unsigned(sizeof(Storage)),
+        unsigned(session->controlAnalysis().completed), unsigned(session->controlStage(1).admitted),
+        unsigned(session->controlAnalysis(1).completed), unsigned(sizeof(Session)), unsigned(sizeof(Storage)),
         unsigned(manifest::physical), unsigned(session->controlResidencyStats().capacity_bytes));
     std::printf("REALTIME_ASSET bytes=%u sha256=%s initial_program=%u replacement_program=%u\n",
         unsigned(manifest::bytes), manifest::digest_hex, unsigned(manifest::initial_program), unsigned(manifest::replacement_program));
@@ -376,6 +524,7 @@ void runLoopRealtimeQualification() {
         ok = join(*c) && control_created == pdPASS && audio_created == pdPASS && ok;
     }
     const auto audio = session->audioStats();
+    const auto output = session->audioOutputStats();
     const auto service = session->controlServiceStats();
     const auto io = session->controlIoStats();
     const auto analysis_timing = session->controlAnalysisTiming();
@@ -388,29 +537,51 @@ void runLoopRealtimeQualification() {
     const bool cohort_ok = !cohort_required || (c->cohort_blocks == kCohortBlocks &&
         c->cohort_voices_min == 24 && c->cohort_voices_max == 24 &&
         (manifest::analysis ? c->cohort_loops_min == 24 : c->cohort_loops_max == 0) &&
-        c->cohort_clipped == 0 && cohort.backlogHealthy() && c->cohort_render.maximum <= kBudgetUs);
+        cohort.backlogHealthy() && c->cohort_render.maximum <= kBudgetUs);
     const bool physical_io_ok = !manifest::physical || (health.backlogHealthy() && c->stalls == 0 &&
         c->i2s.sent > 0 && c->i2s.queue_overflows == 0 && c->i2s.write_errors == 0 &&
         c->i2s.timeouts == 0 && c->i2s.partial_writes == 0);
+    const bool replay_ok = c->replay_complete && c->replay_events == replay::kEvents &&
+        c->replay_switches == 2 && c->replay_channel_mask == replay::kChannelMask && c->replay_concurrent_blocks > 0 &&
+        (manifest::analysis ? c->replay_loop_channel_mask == replay::kChannelMask && c->replay_prepare_with_other_loop > 0
+                            : c->replay_loop_channel_mask == 0);
+    const bool output_accounting_ok = output.input_frames == audio.output_frames &&
+        output.output_frames == output.input_frames + c->drain_frames &&
+        c->drain_frames == (manifest::output_peak ? 64u : 0u) &&
+        output.latency_frames == (manifest::output_peak ? 64u : 0u);
     const bool integration_ok = ok && c->audio_ok && c->control_ok && c->blocks == manifest::blocks &&
         audio.events_applied == c->queued && audio.events_rejected == 0 &&
-        c->program_switches == 2 && service.service_successes == 2 && service.ack_failures == 0 &&
+        c->program_switches == 2 && service.service_successes == 4 && service.commit_acks == 4 && service.ack_failures == 0 &&
         (manifest::analysis ? c->loops_peak > 0 && c->blocks_during_prepare > 0 : c->loops_peak == 0) &&
         queue.rejected_full == 0 && queue.rejected_invalid == 0 && queue.rejected_out_of_order == 0 &&
         publication.stale_release_faults == 0 && c->audio_stack >= 2048 && c->control_stack >= 2048 &&
-        c->control_core == 0 && c->audio_core == 1 && physical_io_ok;
+        c->control_core == 0 && c->audio_core == 1 && physical_io_ok && output_accounting_ok;
     // Transaction/I2S integration, measured cohort and digital headroom remain
     // separate results. Any failed required gate keeps the overall result FAIL.
-    ok = integration_ok && cohort_ok && audio.clipped_samples == 0;
+    const bool digital_headroom_ok = output.post_hard_clipped == 0;
+    const bool headroom_only_failure = integration_ok && cohort_ok && replay_ok && !digital_headroom_ok;
+    ok = integration_ok && cohort_ok && replay_ok && digital_headroom_ok;
     std::printf("REALTIME_ACTORS control_core=%d audio_core=%d\n", c->control_core, c->audio_core);
-    std::printf("REALTIME_GATES integration=%s cohort=%s digital_headroom=%s\n",
+    std::printf("REALTIME_GATES integration=%s cohort=%s replay=%s raw_headroom=%s digital_headroom=%s\n",
         integration_ok ? "PASS" : "FAIL", cohort_required ? (cohort_ok ? "PASS" : "FAIL") : "NOT_RUN",
-        audio.clipped_samples == 0 ? "PASS" : "FAIL");
+        replay_ok ? "PASS" : "FAIL", output.raw_overload_samples == 0 ? "PASS" : "FAIL",
+        digital_headroom_ok ? "PASS" : "FAIL");
     std::printf("REALTIME_RESULT frames=%" PRIu64 " blocks=%u checksum=%" PRIu64 " events=%" PRIu64 " rejected=%" PRIu64 " clipped=%" PRIu64 " voices_peak=%u loop_voices_peak=%u program_switches=%u blocks_during_prepare=%u\n",
         audio.output_frames, c->blocks, c->checksum, audio.events_applied, audio.events_rejected,
         audio.clipped_samples, c->voices_peak, c->loops_peak, c->program_switches, c->blocks_during_prepare);
-    std::printf("REALTIME_CONTROL queued=%u note_on=%u note_off=%u cc=%u sustain=%u program_change=%u services=%u prepared=%" PRIu64 " acknowledgements=%" PRIu64 " ack_failures=%" PRIu64 " io_reads=%" PRIu64 " io_bytes=%" PRIu64 " io_yields=%u analysis_yields=%u\n",
-        c->queued, c->note_ons, c->note_offs, c->cc, c->sustain, c->pc, c->service_calls,
+    std::printf("REALTIME_OUTPUT mode=%s latency_frames=%u raw_peak_abs=%" PRIu64 " raw_overload_samples=%" PRIu64 " post_peak_abs=%" PRIu64 " post_hard_clipped=%" PRIu64 " limited_frames=%" PRIu64 " gain_min_q30=%u input_frames=%" PRIu64 " output_frames=%" PRIu64 " drain_frames=%u drain_wall_us=%u\n",
+        manifest::output_mode, unsigned(output.latency_frames), std::uint64_t{output.raw_peak_abs}, output.raw_overload_samples,
+        std::uint64_t{output.post_peak_abs}, output.post_hard_clipped, output.limited_frames, unsigned(output.gain_min_q30),
+        output.input_frames, output.output_frames, c->drain_frames, c->drain_us);
+    std::printf("REALTIME_REPLAY name=%s events=%u definition_hash=%" PRIu64 " event_checksum=%" PRIu64 " first_frame=%u second_frame=%u cleanup_frame=%u end_frame=%u program_switches=%u channel_mask=%u loop_channel_mask=%u concurrent_blocks=%u prepare_with_other_loop=%u voices_peak=%u loop_voices_peak=%u complete=%u\n",
+        replay::kName, c->replay_events, replay::definitionHash(manifest::initial_program, manifest::replacement_program),
+        c->replay_event_checksum, unsigned(c->replay_first.load(std::memory_order_relaxed)),
+        unsigned(c->replay_second.load(std::memory_order_relaxed)), unsigned(c->replay_cleanup.load(std::memory_order_relaxed)),
+        unsigned(c->replay_end.load(std::memory_order_relaxed)), c->replay_switches, c->replay_channel_mask,
+        c->replay_loop_channel_mask, c->replay_concurrent_blocks, c->replay_prepare_with_other_loop,
+        c->replay_voices_peak, c->replay_loops_peak, unsigned(c->replay_complete));
+    std::printf("REALTIME_CONTROL queued=%u note_on=%u note_off=%u cc=%u sustain=%u program_change=%u pitch_bend=%u channel_pressure=%u services=%u prepared=%" PRIu64 " acknowledgements=%" PRIu64 " ack_failures=%" PRIu64 " io_reads=%" PRIu64 " io_bytes=%" PRIu64 " io_yields=%u analysis_yields=%u\n",
+        c->queued, c->note_ons, c->note_offs, c->cc, c->sustain, c->pc, c->pitch_bends, c->pressure, c->service_calls,
         service.service_successes, service.commit_acks, service.ack_failures, io.reads, io.bytes, c->io_yields, c->analysis_yields);
     std::printf("REALTIME_TIMING startup_us=%" PRIu64 " hash_us=%" PRIu64 " prepare_avg_us=%u prepare_max_us=%u render_avg_us=%u render_p95_upper_us=%u render_p99_upper_us=%u render_max_us=%u quantile_bucket_us=16 physical=%u\n",
         startup_us, hash_us, unsigned(c->service.average()), unsigned(c->service.maximum),
@@ -423,9 +594,10 @@ void runLoopRealtimeQualification() {
         unsigned(health.min_dma_margin_us), unsigned(health.backlog_exceeded_dma_window), c->stalls, unsigned(c->i2s.writes),
         unsigned(c->i2s.write_errors), unsigned(c->i2s.timeouts), unsigned(c->i2s.partial_writes), unsigned(c->i2s.sent), unsigned(c->i2s.queue_overflows),
         unsigned(queue.rejected_full + queue.rejected_invalid + queue.rejected_out_of_order), c->audio_stack, c->control_stack);
-    std::printf("REALTIME_COHORT requested=24 required=%u blocks=%u voices_min=%u voices_max=%u loops_min=%u loops_max=%u clipped=%" PRIu64 " render_avg_us=%u render_p95_upper_us=%u render_p99_upper_us=%u render_max_us=%u max_backlog_us=%" PRIu64 " final_backlog_us=%" PRIu64 " gate=%s\n",
+    std::printf("REALTIME_COHORT requested=24 required=%u blocks=%u voices_min=%u voices_max=%u loops_min=%u loops_max=%u clipped=%" PRIu64 " raw_overload_samples=%" PRIu64 " render_avg_us=%u render_p95_upper_us=%u render_p99_upper_us=%u render_max_us=%u max_backlog_us=%" PRIu64 " final_backlog_us=%" PRIu64 " gate=%s\n",
         unsigned(cohort_required), c->cohort_blocks, c->cohort_blocks ? c->cohort_voices_min : 0, c->cohort_voices_max,
-        c->cohort_blocks ? c->cohort_loops_min : 0, c->cohort_loops_max, c->cohort_clipped, unsigned(c->cohort_render.average()),
+        c->cohort_blocks ? c->cohort_loops_min : 0, c->cohort_loops_max, c->cohort_clipped, c->cohort_raw_overload,
+        unsigned(c->cohort_render.average()),
         unsigned(c->cohort_render.upper(95)), unsigned(c->cohort_render.upper(99)), unsigned(c->cohort_render.maximum),
         cohort.max_backlog_us, cohort.final_backlog_us, cohort_required ? (cohort_ok ? "PASS" : "FAIL") : "NOT_RUN");
     std::printf("REALTIME_PCM capacity=%u high_water=%u used=%u allocation_failures=%u stale_refs=%" PRIu64 "\n",
@@ -433,7 +605,8 @@ void runLoopRealtimeQualification() {
         publication.stale_release_faults);
     memory("joined");
     const bool audio_stopped = session->audioStopped(), control_stopped = session->controlStopped();
-    ok = session->stopQuiescent() && ok;
+    const bool stop_ok = session->stopQuiescent();
+    ok = stop_ok && ok;
     const auto final_publication = session->publicationStats();
     ok = ok && final_publication.live_voice_refs == 0 && final_publication.active_acquirers == 0 &&
         final_publication.stale_release_faults == 0;
@@ -445,7 +618,12 @@ void runLoopRealtimeQualification() {
         unsigned(resources.mapped), unsigned(resources.arena != nullptr), unsigned(final_publication.live_voice_refs),
         unsigned(final_publication.active_acquirers), final_publication.stale_release_faults);
     memory("stopped");
-    std::puts(ok ? "REALTIME_PASS runtime_approved=0 physical_timing_approved=0" : "REALTIME_FAIL exercise");
+    if (ok) std::puts("REALTIME_PASS runtime_approved=0 physical_timing_approved=0");
+    else if (headroom_only_failure && stop_ok && audio_stopped && control_stopped &&
+             final_publication.live_voice_refs == 0 && final_publication.active_acquirers == 0 &&
+             final_publication.stale_release_faults == 0 && resources.releases == 1 && !resources.mapped && !resources.arena)
+        std::puts("REALTIME_FAIL reason=digital_headroom runtime_approved=0 physical_timing_approved=0");
+    else std::puts("REALTIME_FAIL reason=qualification");
     std::fflush(stdout);
 }
 } // namespace gm_synth::bringup

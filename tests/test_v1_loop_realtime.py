@@ -5,11 +5,14 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-from tests.app.make_loop_analysis_fixture import generate as fixture
-from tools.v1_loop_realtime_manifest import generate, PROFILES, SYNTHETIC_SHA, FM_SHA
+from tests.app.make_loop_replay_fixture import generate as fixture
+from tests.app.make_loop_analysis_fixture import generate as legacy_fixture
+from tools.v1_loop_realtime_manifest import generate, PROFILES, PROFILES_V2, SYNTHETIC_SHA, REPLAY_SYNTHETIC_SHA, FM_SHA
 from tools.v1_loop_realtime_bundle import check_config, flash_inputs, source_identity
-from tools.v1_loop_realtime_evidence import validate, validate_host
+from tools.v1_loop_realtime_evidence import validate, validate_host, validate_output_host, replay_hash
+from scripts import v1_loop_realtime_hardware as hardware
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,9 +23,14 @@ class Manifest(unittest.TestCase):
             directory = Path(temporary)
             fixture(directory / 'fixture')
             source = directory / 'fixture/fixture.sf2'
-            self.assertEqual(generate(source, directory / 'out', 'qemu'), SYNTHETIC_SHA)
+            self.assertEqual(generate(source, directory / 'out', 'qemu'), REPLAY_SYNTHETIC_SHA)
             header = (directory / 'out/loop_realtime_manifest.h').read_text()
             self.assertIn('analysis=false', header)
+            self.assertIn('output_peak=false', header)
+            self.assertIn('output_mode[]="bypass"', header)
+            manifest = json.loads((directory / 'out/manifest.json').read_text())
+            self.assertEqual((manifest['schema'], manifest['channels'], manifest['max_zones']), (2, 2, 16))
+            self.assertEqual((manifest['blocks'], manifest['output_latency_frames']), (6144, 0))
             self.assertIn('synthetic=true', header)
             self.assertEqual((directory / 'out/bank.sf2').read_bytes(), source.read_bytes())
 
@@ -40,6 +48,26 @@ class Manifest(unittest.TestCase):
             self.assertFalse(manifest['synthetic'])
             self.assertFalse(manifest['physical_timing_approved'])
             self.assertEqual(hashlib.sha256((directory / 'bank.sf2').read_bytes()).hexdigest(), FM_SHA)
+
+    def test_peak_mode_is_explicit_and_cannot_change_workload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fixture(directory / 'fixture')
+            source = directory / 'fixture/fixture.sf2'
+            generate(source, directory / 'out', 'qemu', True, 'peak')
+            report = json.loads((directory / 'out/manifest.json').read_text())
+            self.assertEqual(report['output_mode'], 'peak')
+            self.assertEqual(report['output_latency_frames'], 64)
+            self.assertTrue(report['analysis'])
+            for key, value in PROFILES_V2['qemu'].items():
+                self.assertEqual(report[key], value)
+            self.assertEqual(PROFILES['qemu']['blocks'], 2048)
+            self.assertEqual(PROFILES['qemu']['sha256'], SYNTHETIC_SHA)
+            with self.assertRaises(ValueError):
+                generate(source, directory / 'bad', 'qemu', True, 'magic-auto-gain')
+            legacy_fixture(directory / 'legacy')
+            with self.assertRaises(ValueError):
+                generate(directory / 'legacy/fixture.sf2', directory / 'bad-bank', 'qemu', True, 'peak')
 
     def test_substitution_and_changed_bytes_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -289,6 +317,7 @@ class FlashBundle(unittest.TestCase):
         with self.assertRaises(ValueError):
             flash_inputs(self.build, self.generated, {'flash_files': self.files})
 
+
     def test_external_file_and_missing_bytes_rejected(self):
         outside = self.root / 'bank.sf2'
         outside.write_bytes(b'not the generated input')
@@ -299,6 +328,96 @@ class FlashBundle(unittest.TestCase):
         with self.assertRaises(ValueError):
             flash_inputs(self.build, self.generated, {'flash_files': self.files})
 
+
+class HardwareOperations(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.bundle = self.root / 'bundle'
+        (self.bundle / 'images').mkdir(parents=True)
+        rows = []
+        for offset, name in zip(hardware.OFFSETS, hardware.NAMES):
+            relative = f'images/{offset:06x}-{name}'
+            data = (ROOT / 'assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2').read_bytes() \
+                if name == 'bank.sf2' else b'qualification fixture'
+            (self.bundle / relative).write_bytes(data)
+            rows.append(dict(offset=offset, file=relative, bytes=len(data),
+                             sha256=hashlib.sha256(data).hexdigest()))
+        self.manifest = dict(schema=2, profile='physical', source_commit='a' * 40,
+            runtime_approved=False, physical_timing_approved=False, release_approved=False,
+            tracked_inputs_match_head=True, build_inputs_match_head=True,
+            owned_translation_units_match_head=True, flash_files=rows)
+        (self.bundle / 'bundle-manifest.json').write_text(json.dumps(self.manifest))
+        (self.bundle / 'asset-manifest.json').write_text(json.dumps(
+            dict(PROFILES_V2['physical'], schema=2, profile='physical', output_mode='peak')))
+        self.resign()
+        self.backup = self.root / 'backup'
+
+    def resign(self):
+        lines = [hardware.sha256(p) + '  ' + p.relative_to(self.bundle).as_posix()
+                 for p in sorted(self.bundle.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS']
+        (self.bundle / 'SHA256SUMS').write_text('\n'.join(lines) + '\n')
+
+    def save_backup(self):
+        def fake(port, arguments, log):
+            self.assertEqual(port, 'test-port')
+            if arguments == ['read-mac']:
+                return 'MAC: 12:34:56:78:9a:bc\n'
+            self.assertEqual(arguments[:3], ['read-flash', '0x0', '0x1000000'])
+            Path(arguments[3]).write_bytes(bytes(hardware.FLASH_BYTES))
+            return 'read complete\n'
+        with mock.patch.object(hardware, 'run_esptool', side_effect=fake):
+            hardware.backup('test-port', self.backup, 'bb31908-dirty')
+
+    def test_offline_inspection_detects_tampering_and_app_only_bundle(self):
+        with mock.patch.object(hardware, 'run_esptool', side_effect=AssertionError('no serial access')):
+            self.assertEqual(hardware.inspect_bundle(self.bundle)['source_commit'], 'a' * 40)
+            path = self.bundle / self.manifest['flash_files'][2]['file']
+            path.write_bytes(b'tampered')
+            with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
+                hardware.inspect_bundle(self.bundle)
+            self.resign()
+            with self.assertRaisesRegex(ValueError, 'Flash input hash'):
+                hardware.inspect_bundle(self.bundle)
+            self.manifest['flash_files'] = self.manifest['flash_files'][2:3]
+            (self.bundle / 'bundle-manifest.json').write_text(json.dumps(self.manifest))
+            self.resign()
+            with self.assertRaisesRegex(ValueError, 'four-input'):
+                hardware.inspect_bundle(self.bundle)
+
+    def test_full_backup_and_same_device_required_before_write(self):
+        self.save_backup()
+        saved = hardware.check_backup(self.backup)
+        self.assertEqual(saved['operator_reported_banner'], 'bb31908-dirty')
+        with self.assertRaises(FileExistsError):
+            hardware.backup('test-port', self.backup)
+        with mock.patch.object(hardware, 'device_mac', return_value='00:00:00:00:00:00'), \
+                mock.patch.object(hardware, 'run_esptool') as command:
+            with self.assertRaisesRegex(ValueError, 'another device'):
+                hardware.flash_or_rollback('test-port', self.backup, self.root / 'wrong-device.log', self.bundle)
+            command.assert_not_called()
+        (self.backup / 'flash-16MiB.bin').write_bytes(b'partial')
+        with mock.patch.object(hardware, 'device_mac') as identify:
+            with self.assertRaisesRegex(ValueError, 'backup required'):
+                hardware.flash_or_rollback('test-port', self.backup, self.root / 'partial.log', self.bundle)
+            identify.assert_not_called()
+
+    def test_flash_uses_all_four_inputs_and_rollback_preserves_complete_image(self):
+        self.save_backup()
+        with mock.patch.object(hardware, 'device_mac', return_value='12:34:56:78:9a:bc'), \
+                mock.patch.object(hardware, 'run_esptool', return_value='verified') as command:
+            result = hardware.flash_or_rollback('test-port', self.backup, self.root / 'flash.log', self.bundle)
+            arguments = command.call_args.args[1]
+            self.assertEqual(arguments[:7], ['write-flash', '--flash-mode', 'dio', '--flash-freq',
+                                            '80m', '--flash-size', '16MB'])
+            self.assertEqual(arguments[7::2], ['0x0', '0x8000', '0x10000', '0x210000'])
+            self.assertFalse(result['physical_timing_approved'])
+            self.assertFalse(result['listening_approved'])
+            hardware.flash_or_rollback('test-port', self.backup, self.root / 'rollback.log')
+            arguments = command.call_args.args[1]
+            self.assertEqual(arguments, ['write-flash', '--flash-mode', 'keep', '--flash-freq', 'keep',
+                                        '--flash-size', 'keep', '0x0', str(self.backup / 'flash-16MiB.bin')])
 
 NATIVE = '''REALTIME_HOST_CASE default_off PASS
 REALTIME_HOST_CASE continuous_real_provider overlapped_blocks=24 midi_events=11 PASS
@@ -358,6 +477,104 @@ def physical_log():
              'dma_window_us=11610 master_q15=32767 dac_db=-12 mono_avg_lr=1 '
              'bclk=1411200 mclk=11289600 dma_bytes=1024\n')
     return text.replace('REALTIME_RESULT', armed + 'REALTIME_RESULT')
+
+
+def marker(tag, **values):
+    return tag + ' ' + ' '.join(f'{key}={value}' for key, value in values.items()) + '\n'
+
+
+def output_native_log():
+    """Parser fixture only: these strings are never runtime evidence."""
+    text = NATIVE
+    for name in ('exact_bypass_and_master', 'delay_identity_and_drain', 'int32_extremes_invalid_calls',
+                 'stereo_linked_smooth_attack_release', 'unchanged_real_fm_matrix_deterministic',
+                 'multichannel_musical_replay_deterministic', 'two_channel_concurrent_prepare_stop'):
+        text += 'OUTPUT_HOST_CASE ' + name + ' PASS physical_timing_approved=0 listening_approved=0\n'
+    for loop in ('off', 'on'):
+        raw, held, peak = (9950, 9915, 44381) if loop == 'off' else (4479, 4445, 41708)
+        for mode in ('bypass', 'peak'):
+            protected = mode == 'peak'
+            text += marker('OUTPUT_BANK_RESULT', loop=loop, output=mode, voices=24,
+                loops=24 if loop == 'on' else 0, events=68, cohort_raw_overload=held,
+                raw_overload_samples=raw, raw_peak_abs=peak,
+                post_hard_clipped=0 if protected else raw, post_peak_abs=32766 if protected else peak,
+                input_frames=301376, output_frames=301376 + 64 * protected, latency_frames=64 * protected,
+                gain_min_q30=800000000 if protected else (1 << 30), limited_frames=100000 if protected else 0,
+                checksum=123, deterministic=1, physical_timing_approved=0, listening_approved=0)
+            text += marker('OUTPUT_REPLAY_RESULT', loop=loop, output=mode, configured_channels=2,
+                channel_mask=3, loop_channel_mask=3 if loop == 'on' else 0, events=117, program_switches=2,
+                voices=8, loops=8 if loop == 'on' else 0, channel0_voices=6, channel1_voices=2,
+                channel0_loops=6 if loop == 'on' else 0, channel1_loops=2 if loop == 'on' else 0,
+                definition_hash=4354443756388215394, trace_hash=11334338450196719549,
+                raw_overload_samples=0, raw_peak_abs=15111 if loop == 'off' else 16410,
+                post_hard_clipped=0, post_peak_abs=15111 if loop == 'off' else 16410,
+                input_frames=245440, output_frames=245440 + 64 * protected, latency_frames=64 * protected,
+                gain_min_q30=1 << 30, limited_frames=0, checksum=123,
+                deterministic=1, physical_timing_approved=0, listening_approved=0)
+    return text + marker('OUTPUT_CONCURRENT_RESULT', configured_channels=2,
+        audio_blocks_during_prepare=152, stop_unacked=1, released=1, stale_refs=0, physical_timing_approved=0) + \
+        marker('OUTPUT_HOST_PASS', checks=200, cases=7, physical_timing_approved=0, listening_approved=0)
+
+
+def target_v2_log(profile='qemu', mode='peak', analysis=1):
+    """Synthetic parser fixture, including the deliberately failing bypass."""
+    physical, protected = profile == 'physical', mode == 'peak'
+    text = physical_log() if physical else TARGET
+    frames, blocks = (2097152, 32768) if physical else (393216, 6144)
+    initial = 16 if physical else 0
+    raw, raw_peak, cohort_raw = (4479, 41708, 4445) if physical else (0, 16000, 0)
+    post = 0 if protected else raw
+    first = 400000 if physical else 64000
+    second, cleanup = first + 90240, first + 180480
+    changes = [
+        ('REALTIME_BEGIN ', 'REALTIME_BEGIN schema=2 output_mode=' + mode + ' channels=2 '),
+        ('plans=1 analyses=1', 'plans=1 analyses=1 channel1_plans=1 channel1_analyses=1'),
+        ('plans=3 analyses=3', 'plans=3 analyses=3 channel1_plans=3 channel1_analyses=3'),
+        ('frames=131072 blocks=2048', f'frames={frames} blocks={blocks}'),
+        ('events=68', 'events=186'), ('events=19', 'events=136'),
+        ('queued=68 note_on=28 note_off=27 cc=11', 'queued=186 note_on=56 note_off=54 cc=58'),
+        ('queued=19 note_on=4 note_off=3 cc=10', 'queued=136 note_on=32 note_off=30 cc=56'),
+        ('sustain=4 program_change=2', 'sustain=14 program_change=4 pitch_bend=8 channel_pressure=6'),
+        ('prepared=2 acknowledgements=2', 'prepared=4 acknowledgements=4'),
+        ('digital_headroom=PASS', f'replay=PASS raw_headroom={"FAIL" if raw else "PASS"} digital_headroom={"FAIL" if post else "PASS"}'),
+        ('clipped=0 voices_peak=', f'clipped={post} voices_peak='),
+        ('loops_max=0 clipped=0', 'loops_max=0 clipped=0 raw_overload_samples=0'),
+        ('loops_max=24 clipped=0', f'loops_max=24 clipped={cohort_raw if not protected else 0} raw_overload_samples={cohort_raw}'),
+    ]
+    if not physical:
+        changes.append((SYNTHETIC_SHA, REPLAY_SYNTHETIC_SHA))
+    if physical and protected:
+        changes.append(('writes=32768', 'writes=32769'))
+    for old, new in changes:
+        text = text.replace(old, new)
+    text = text.replace('REALTIME_MEMORY phase=before',
+        'REALTIME_OUTPUT_PROBE cases=1 input_frames=64 bypass_raw_overload=80 bypass_clipped=80 '
+        'peak_raw_overload=80 peak_clipped=0 raw_peak_abs=2147483648 peak_peak_abs=32766 '
+        'peak_gain_min_q30=16383 peak_limited_frames=64 peak_latency_frames=64 peak_output_frames=128 '
+        'first_zero=1 pass=1 physical_timing_approved=0\nREALTIME_MEMORY phase=before')
+    output = marker('REALTIME_OUTPUT', mode=mode, latency_frames=64 * protected, raw_peak_abs=raw_peak,
+        raw_overload_samples=raw, post_peak_abs=32766 if protected and physical else raw_peak,
+        post_hard_clipped=post, limited_frames=100000 if protected and physical else 0,
+        gain_min_q30=800000000 if protected and physical else (1 << 30), input_frames=frames,
+        output_frames=frames + 64 * protected, drain_frames=64 * protected, drain_wall_us=100 if protected else 0)
+    score = marker('REALTIME_REPLAY', name='two-channel-phrase-v1', events=117,
+        definition_hash=replay_hash(initial, 1), event_checksum=replay_hash(initial, 1, first, second, cleanup),
+        first_frame=first, second_frame=second, cleanup_frame=cleanup, end_frame=cleanup + 65536,
+        program_switches=2, channel_mask=3, loop_channel_mask=3, concurrent_blocks=100,
+        prepare_with_other_loop=10, voices_peak=8, loop_voices_peak=8, complete=1)
+    text = text.replace('REALTIME_CONTROL', output + score + 'REALTIME_CONTROL')
+    if post:
+        text = text.replace('REALTIME_PASS runtime_approved=0 physical_timing_approved=0',
+                            'REALTIME_FAIL reason=digital_headroom runtime_approved=0 physical_timing_approved=0')
+    if not analysis:
+        for old, new in (('analysis=1', 'analysis=0'), ('plans=3', 'plans=0'), ('analyses=3', 'analyses=0'),
+                         ('plans=1', 'plans=0'), ('analyses=1', 'analyses=0'), ('loops_min=24', 'loops_min=0'),
+                         ('loops_max=24', 'loops_max=0'), ('loop_channel_mask=3', 'loop_channel_mask=0'),
+                         ('loop_voices_peak=24', 'loop_voices_peak=0'), ('loop_voices_peak=8', 'loop_voices_peak=0'),
+                         ('loop_voices_peak=2', 'loop_voices_peak=0'), ('analysis_yields=30', 'analysis_yields=0'),
+                         ('prepare_with_other_loop=10', 'prepare_with_other_loop=0')):
+            text = text.replace(old, new)
+    return text
 
 
 class Evidence(unittest.TestCase):
@@ -422,6 +639,93 @@ class Evidence(unittest.TestCase):
         for line in NATIVE.splitlines():
             with self.subTest(line=line), self.assertRaises(ValueError):
                 validate_host(NATIVE.replace(line + '\n', ''))
+
+
+class OutputReplayEvidence(unittest.TestCase):
+    def test_full_mode_matrix_has_distinct_output_and_physical_scopes(self):
+        native = output_native_log()
+        for profile in ('qemu', 'physical'):
+            for mode in ('bypass', 'peak'):
+                for analysis in (0, 1):
+                    failure = profile == 'physical' and mode == 'bypass'
+                    with self.subTest(profile=profile, mode=mode, analysis=analysis):
+                        report = validate(native, target_v2_log(profile, mode, analysis),
+                                          profile, analysis, mode, failure)
+                        self.assertEqual(report['schema'], 2)
+                        self.assertEqual(report['qualified'], not failure)
+                        self.assertEqual(report['observed_hard_gate_pass'], not failure)
+                        self.assertFalse(report['runtime_approved'])
+                        self.assertFalse(report['physical_timing_approved'])
+                        self.assertFalse(report['listening_approved'])
+                        self.assertEqual(report['output']['output_frames'],
+                                         report['frames'] + (64 if mode == 'peak' else 0))
+
+    def test_old_schema_and_default_mode_cannot_be_silently_upgraded(self):
+        self.assertEqual(validate(NATIVE, TARGET, 'qemu', 1)['schema'], 1)
+        with self.assertRaises(ValueError):
+            validate(output_native_log(), target_v2_log(), 'qemu', 1)
+        with self.assertRaises(ValueError):
+            validate(output_native_log(), TARGET, 'qemu', 1, 'peak')
+        with self.assertRaises(ValueError):
+            validate(output_native_log(), target_v2_log(), 'qemu', 1, 'bypass')
+
+    def test_raw_failure_can_only_be_collected_with_all_other_gates_passing(self):
+        native, text = output_native_log(), target_v2_log('physical', 'bypass')
+        with self.assertRaisesRegex(ValueError, 'fatal target marker'):
+            validate(native, text, 'physical', 1, 'bypass')
+        for old, new in (('integration=PASS', 'integration=FAIL'), ('cohort=PASS', 'cohort=FAIL'),
+                         ('render_max_us=0', 'render_max_us=1452'), ('raw_headroom=FAIL', 'raw_headroom=PASS'),
+                         ('live_refs=0', 'live_refs=1'), ('raw_overload_samples=4479', 'raw_overload_samples=0'),
+                         ('reason=digital_headroom', 'reason=qualification'), ('partial=0', 'partial=1')):
+            with self.subTest(field=old), self.assertRaises(ValueError):
+                validate(native, text.replace(old, new), 'physical', 1, 'bypass', True)
+        with self.assertRaises(ValueError):
+            validate(native, target_v2_log('qemu', 'bypass'), 'qemu', 1, 'bypass', True)
+        with self.assertRaises(ValueError):
+            validate(native, target_v2_log('physical', 'peak'), 'physical', 1, 'peak', True)
+
+    def test_output_counters_latency_and_exact_score_trace_are_required(self):
+        text, native = target_v2_log(), output_native_log()
+        for old, new in (
+            ('peak_raw_overload=80', 'peak_raw_overload=0'), ('peak_clipped=0', 'peak_clipped=1'),
+            ('peak_gain_min_q30=16383', 'peak_gain_min_q30=1073741824'), ('first_zero=1', 'first_zero=0'),
+            ('channel1_plans=3', 'channel1_plans=0'), ('channel1_analyses=3', 'channel1_analyses=0'),
+            ('latency_frames=64', 'latency_frames=0'), ('drain_frames=64', 'drain_frames=0'),
+            ('output_frames=393280', 'output_frames=393216'), ('post_hard_clipped=0', 'post_hard_clipped=1'),
+            ('peak_abs=16000', 'peak_abs=40000'), ('gain_min_q30=1073741824', 'gain_min_q30=1073741825'),
+            ('replay=PASS', 'replay=FAIL'), ('channel_mask=3', 'channel_mask=1'),
+            ('loop_channel_mask=3', 'loop_channel_mask=1'), ('concurrent_blocks=100', 'concurrent_blocks=0'),
+            ('prepare_with_other_loop=10', 'prepare_with_other_loop=0'), ('pitch_bend=8', 'pitch_bend=0'),
+            ('channel_pressure=6', 'channel_pressure=0'), ('prepared=4', 'prepared=2'),
+            ('first_frame=64000', 'first_frame=64064'), ('definition_hash=16085105900585868882', 'definition_hash=1'),
+            ('complete=1', 'complete=0'),
+        ):
+            with self.subTest(field=old), self.assertRaises(ValueError):
+                validate(native, text.replace(old, new), 'qemu', 1, 'peak')
+        for tag in ('REALTIME_OUTPUT', 'REALTIME_REPLAY', 'REALTIME_OUTPUT_PROBE'):
+            line = next(row for row in text.splitlines() if row.startswith(tag + ' '))
+            for changed in (text.replace(line + '\n', ''), text + line + '\n'):
+                with self.subTest(tag=tag), self.assertRaises(ValueError):
+                    validate(native, changed, 'qemu', 1, 'peak')
+
+    def test_host_original_negative_candidate_and_musical_rows_are_all_required(self):
+        native = output_native_log()
+        self.assertEqual(validate_output_host(native)['cases'], 7)
+        for line in native.splitlines():
+            if line.startswith(('OUTPUT_HOST_CASE', 'OUTPUT_BANK_RESULT', 'OUTPUT_REPLAY_RESULT', 'OUTPUT_CONCURRENT_RESULT')):
+                with self.subTest(missing=line.split()[0]), self.assertRaises(ValueError):
+                    validate_output_host(native.replace(line + '\n', ''))
+        for old, new in (('raw_overload_samples=9950', 'raw_overload_samples=0'),
+                         ('cohort_raw_overload=4445', 'cohort_raw_overload=0'),
+                         ('post_hard_clipped=9950', 'post_hard_clipped=0'),
+                         ('definition_hash=4354443756388215394', 'definition_hash=1'),
+                         ('trace_hash=11334338450196719549', 'trace_hash=1'),
+                         ('channel1_loops=2', 'channel1_loops=0'),
+                         ('audio_blocks_during_prepare=152', 'audio_blocks_during_prepare=0'),
+                         ('physical_timing_approved=0', 'physical_timing_approved=1'),
+                         ('listening_approved=0', 'listening_approved=1')):
+            with self.subTest(field=old), self.assertRaises(ValueError):
+                validate_output_host(native.replace(old, new))
 
 
 if __name__ == '__main__':

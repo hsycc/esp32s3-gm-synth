@@ -237,6 +237,15 @@ void ScheduledAudioBlockRenderer::finalize(std::int16_t* interleaved_stereo) {
         mix_.data(),
         kFramesPerBlock);
 
+    // BEGIN V1_OUTPUT_FINALIZER
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    if (output_finalizer_) {
+        output_finalizer_(output_context_, mix_.data(), kFramesPerBlock,
+            master_gain_q15_, interleaved_stereo, stats_);
+        return;
+    }
+#endif
+    // END V1_OUTPUT_FINALIZER
     const bool master_bypass = master_gain_q15_ == voice::kQ15Unity;
     for (std::size_t index = 0; index < mix_.size(); ++index) {
         // Post-FX master affects dry + chorus/reverb together. Keep the

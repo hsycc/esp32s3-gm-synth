@@ -18,3 +18,7 @@ fi
 SOURCES=(firmware/sample/*.cpp firmware/gm/*.cpp firmware/sf2/*.cpp firmware/voice/*.cpp firmware/realtime/*.cpp)
 "${CXX:-g++}" "${FLAGS[@]}" "${SOURCES[@]}" tests/app/test_loop_realtime.cpp -lcrypto -o "$OUT/native"
 "$OUT/native" assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2
+"${CXX:-g++}" "${FLAGS[@]}" "${SOURCES[@]}" tests/app/test_loop_output.cpp -lcrypto -o "$OUT/output"
+# WAV files are deterministic host renders with explicit candidate latency;
+# no device execution or human listening approval is inferred from generation.
+"$OUT/output" assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2 "$OUT/audition"
