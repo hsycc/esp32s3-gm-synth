@@ -1,0 +1,3 @@
+CONFIG_SPIRAM=n
+# Test only: do not depend on emulated SHA hardware.
+CONFIG_MBEDTLS_HARDWARE_SHA=n

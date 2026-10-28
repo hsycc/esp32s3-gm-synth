@@ -4,6 +4,7 @@
 #include "gm/ZoneResolver.h"
 #include "realtime/ScheduledAudioBlockRenderer.h"
 #include "voice/experimental/PreparedLoopHandoff.h"
+#include "util/RealtimeAtomicContract.h"
 
 #if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
 
@@ -37,14 +38,15 @@ template<std::size_t MaxPlans = 16>
 class LoopProgramChannel {
 public:
     enum class Phase : std::uint32_t { Idle, Preparing, Ready, Committed, Fault };
-    static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
     LoopProgramChannel(std::uint8_t channel, sample::SampleSource& source,
         sample::SampleResidencyManager& residency, sample::PublishedSampleDirectory& directory,
         sample::ProgramSnapshotExchange& samples, gm::PlaybackProgramSnapshotExchange& playback,
         loop::PreparedLoopAsset asset, LoopProposalProvider provider = nullptr, void* context = nullptr)
         : channel_(channel), source_(source), residency_(residency), directory_(directory),
           samples_(samples), playback_(playback), asset_(asset), provider_(provider),
-          provider_context_(context), handoff_(directory), coordinator_(samples, playback) {}
+          provider_context_(context), handoff_(directory), coordinator_(samples, playback) {
+        util::requireRealtimeAtomic32(phase_);
+    }
     LoopProgramChannel(const LoopProgramChannel&) = delete;
     LoopProgramChannel& operator=(const LoopProgramChannel&) = delete;
 
