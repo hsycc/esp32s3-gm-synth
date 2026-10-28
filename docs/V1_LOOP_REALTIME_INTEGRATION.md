@@ -194,6 +194,10 @@ compile database, build/atomic audits, source commit/tree and dirty state, and
 SHA256SUMS. The physical bank's existing source/license notices are included.
 Packaging is not a product redistribution-license approval or V1 publication.
 
+`source-status.txt` preserves dirty paths; `source-identity.json` compares actual
+build inputs with HEAD. A dirty checkout can still have unchanged tracked inputs.
+Untracked files contribute only path, size and hashes; their contents are not archived.
+
 Use the exact matching on/off bundles after the batch's automated gates finish.
 Keep 44.1 kHz, 64-frame blocks, 8×64 DMA, master Q15 32767 and DAC −12 dB.
 The new `loop_bank` raw partition layout differs from the historical M7 FAT

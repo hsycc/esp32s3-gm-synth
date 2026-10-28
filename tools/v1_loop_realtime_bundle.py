@@ -1,14 +1,97 @@
 #!/usr/bin/env python3
 """Collect a complete, relocatable qualification image; never flash or approve it."""
 import argparse
+import fnmatch
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
+import stat
 import subprocess
 
 from tools.v1_loop_realtime_manifest import PROFILES
+
+
+SOURCE_PREFIXES = ('firmware/', 'main/', 'profiles/', 'scripts/', 'tools/',
+                   'tests/', '.github/')
+ROOT_SOURCE_PATTERNS = ('CMakeLists.txt', '*.cmake', 'sdkconfig*', 'partitions*.csv',
+                        'dependencies.lock', 'idf_component.yml', '.gitattributes', '.gitignore')
+
+
+def source_identity(root, owned_translation_units=()):
+    """Record actual build inputs and dirty paths without copying unknown content."""
+    root = Path(root).resolve()
+
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(root), *args])
+
+    commit, tree = git('rev-parse', 'HEAD', 'HEAD^{tree}').decode().splitlines()
+    object_format = git('rev-parse', '--show-object-format').decode().strip()
+    status = git('status', '--porcelain=v1', '--untracked-files=all').decode()
+    head = {}
+    for entry in git('ls-tree', '-r', '-z', commit).split(b'\0'):
+        if entry:
+            metadata, path = entry.split(b'\t', 1)
+            mode, kind, blob = metadata.decode().split()
+            head[os.fsdecode(path)] = dict(mode=mode, kind=kind, blob=blob)
+    tracked = {os.fsdecode(p) for p in git('ls-files', '-z').split(b'\0') if p}
+    untracked = {os.fsdecode(p) for p in git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0') if p}
+
+    def in_scope(path):
+        return path.startswith(SOURCE_PREFIXES) or ('/' not in path and any(
+            fnmatch.fnmatchcase(path, pattern) for pattern in ROOT_SOURCE_PATTERNS))
+
+    def fingerprint(relative):
+        path = root / relative
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return dict(kind='missing')
+        if stat.S_ISLNK(info.st_mode):
+            # Hash the link itself. Never read or publish its target's contents.
+            data = os.fsencode(os.readlink(path))
+            blob = hashlib.new(object_format, b'blob ' + str(len(data)).encode() + b'\0' + data)
+            return dict(kind='symlink', mode='120000', bytes=len(data),
+                        sha256=hashlib.sha256(data).hexdigest(), git_blob=blob.hexdigest())
+        if not path.resolve().is_relative_to(root):
+            return dict(kind='outside_root', bytes=info.st_size)
+        if not stat.S_ISREG(info.st_mode):
+            return dict(kind='non_regular', bytes=info.st_size)
+        sha256 = hashlib.sha256()
+        blob = hashlib.new(object_format, b'blob ' + str(info.st_size).encode() + b'\0')
+        with path.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                sha256.update(chunk)
+                blob.update(chunk)
+        return dict(kind='file', mode='100755' if info.st_mode & stat.S_IXUSR else '100644',
+                    bytes=info.st_size, sha256=sha256.hexdigest(), git_blob=blob.hexdigest())
+
+    owned = sorted(set(owned_translation_units))
+    if any(Path(p).is_absolute() or '..' in Path(p).parts for p in owned):
+        raise ValueError('owned translation unit is outside the source tree')
+    paths = sorted({p for p in set(head) | tracked | untracked if in_scope(p)} | set(owned))
+    rows = []
+    for path in paths:
+        expected = head.get(path)
+        current = fingerprint(path)
+        rows.append(dict(path=path, tracked=path in head or path in tracked,
+                         head=expected, working=current,
+                         matches_head=bool(expected and current.get('git_blob') == expected['blob']
+                                           and current.get('mode') == expected['mode'])))
+    by_path = {row['path']: row for row in rows}
+    identity = dict(schema=1, source_commit=commit, source_tree=tree,
+                    source_dirty=bool(status.strip()), git_object_format=object_format,
+                    scope=dict(prefixes=SOURCE_PREFIXES, root_patterns=ROOT_SOURCE_PATTERNS,
+                               soundfont_identity='asset-manifest.json and flash input SHA256'),
+                    tracked_inputs_match_head=all(row['matches_head'] for row in rows if row['tracked']),
+                    build_inputs_match_head=all(row['matches_head'] for row in rows),
+                    owned_translation_units=owned,
+                    owned_translation_units_match_head=all(by_path[p]['matches_head'] for p in owned),
+                    inputs=rows,
+                    untracked=[dict(path=p, **fingerprint(p)) for p in sorted(untracked)])
+    return status, identity
 
 
 def check_config(text, profile):
@@ -122,9 +205,8 @@ def collect(root, build, generated, sdkconfig, output):
                 root / 'profiles/v1-loop-realtime/partitions.csv']
     if any(not p.is_file() for p in required):
         raise ValueError('incomplete build/config/backend evidence')
-    source_commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
-    source_tree = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD^{tree}'], text=True).strip()
-    dirty = bool(subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain', '--untracked-files=normal'], text=True).strip())
+    audit = json.loads((build.parent / 'build-audit.json').read_text())
+    source_status, identity = source_identity(root, audit['translation_units'])
     output.mkdir(parents=True)
     (output / 'images').mkdir()
     flash_lines = [shlex.join(write_args)]
@@ -149,8 +231,14 @@ def collect(root, build, generated, sdkconfig, output):
     shutil.copyfile(root / 'assets/sf2/SOURCES.md', output / 'SF2-SOURCES.md')
     if profile == 'physical':
         shutil.copyfile(root / 'assets/sf2/licenses/FM_GM_OpenSoundFont_GPL-3.0.txt', output / 'SF2-GPL-3.0.txt')
-    result = dict(schema=1, source_commit=source_commit, source_tree=source_tree,
-                  source_dirty=dirty, profile=profile, analysis=spec['analysis'],
+    (output / 'source-status.txt').write_text(source_status)
+    (output / 'source-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+    result = dict(schema=1, source_commit=identity['source_commit'], source_tree=identity['source_tree'],
+                  source_dirty=identity['source_dirty'],
+                  tracked_inputs_match_head=identity['tracked_inputs_match_head'],
+                  build_inputs_match_head=identity['build_inputs_match_head'],
+                  owned_translation_units_match_head=identity['owned_translation_units_match_head'],
+                  profile=profile, analysis=spec['analysis'],
                   runtime_approved=False, physical_timing_approved=False,
                   release_approved=False, flash_files=entries, configuration=config)
     (output / 'bundle-manifest.json').write_text(json.dumps(result, indent=2) + '\n')

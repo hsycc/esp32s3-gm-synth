@@ -8,7 +8,7 @@ import unittest
 
 from tests.app.make_loop_analysis_fixture import generate as fixture
 from tools.v1_loop_realtime_manifest import generate, PROFILES, SYNTHETIC_SHA, FM_SHA
-from tools.v1_loop_realtime_bundle import check_config, flash_inputs
+from tools.v1_loop_realtime_bundle import check_config, flash_inputs, source_identity
 from tools.v1_loop_realtime_evidence import validate, validate_host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +119,83 @@ class Configuration(unittest.TestCase):
             check_config(self.config('qemu'), 'physical')
         with self.assertRaises(ValueError):
             check_config(self.config('physical'), 'qemu')
+
+
+class SourceIdentity(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / 'source'
+        self.root.mkdir()
+        for path in ('firmware/a.cpp', 'firmware/include/a.h', 'main/app.cpp',
+                     'profiles/qualification/sdkconfig', 'CMakeLists.txt',
+                     'sdkconfig.defaults', 'partitions.csv', 'assets/bank.sf2'):
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('original\n')
+        self.git('init', '-q')
+        self.git('add', '.')
+        self.git('-c', 'user.name=Identity test', '-c', 'user.email=identity@example.invalid',
+                 'commit', '-qm', 'fixture')
+
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.root), *args])
+
+    def test_clean_inputs_cover_headers_configuration_and_owned_units(self):
+        status, result = source_identity(self.root, ['firmware/a.cpp', 'main/app.cpp'])
+        self.assertEqual(status, '')
+        self.assertFalse(result['source_dirty'])
+        self.assertTrue(result['tracked_inputs_match_head'])
+        self.assertTrue(result['build_inputs_match_head'])
+        self.assertTrue(result['owned_translation_units_match_head'])
+        paths = {row['path'] for row in result['inputs']}
+        self.assertTrue({'firmware/include/a.h', 'profiles/qualification/sdkconfig',
+                         'CMakeLists.txt', 'sdkconfig.defaults', 'partitions.csv'} <= paths)
+        self.assertNotIn('assets/bank.sf2', paths)
+
+    def test_index_dirty_and_working_input_identity_are_separate(self):
+        source = self.root / 'firmware/a.cpp'
+        source.write_text('staged change\n')
+        self.git('add', 'firmware/a.cpp')
+        source.write_text('original\n')
+        status, result = source_identity(self.root, ['firmware/a.cpp'])
+        self.assertIn('MM firmware/a.cpp', status)
+        self.assertTrue(result['source_dirty'])
+        self.assertTrue(result['tracked_inputs_match_head'])
+        source.write_text('actual changed bytes\n')
+        _, result = source_identity(self.root, ['firmware/a.cpp'])
+        self.assertFalse(result['tracked_inputs_match_head'])
+        self.assertFalse(result['owned_translation_units_match_head'])
+
+    def test_staged_rename_retains_deleted_and_added_input(self):
+        self.git('mv', 'firmware/a.cpp', 'firmware/new name.cpp')
+        _, result = source_identity(self.root, ['firmware/new name.cpp'])
+        rows = {row['path']: row for row in result['inputs']}
+        self.assertEqual(rows['firmware/a.cpp']['working']['kind'], 'missing')
+        self.assertIsNone(rows['firmware/new name.cpp']['head'])
+        self.assertFalse(result['tracked_inputs_match_head'])
+        self.assertFalse(result['owned_translation_units_match_head'])
+
+    def test_untracked_config_records_identity_and_symlink_does_not_follow_target(self):
+        value = 'private configuration content is not an artifact\n'
+        (self.root / 'config.toml').write_text(value)
+        nested = self.root / 'scratch/nested config.toml'
+        nested.parent.mkdir()
+        nested.write_text(value)
+        outside = Path(self.temporary.name) / 'outside-secret'
+        outside.write_text('target content must not be read\n')
+        (self.root / 'external-link').symlink_to(outside)
+        status, result = source_identity(self.root, ['firmware/a.cpp'])
+        self.assertIn('scratch/nested config.toml', status)
+        self.assertTrue(result['source_dirty'])
+        self.assertTrue(result['tracked_inputs_match_head'])
+        self.assertTrue(result['build_inputs_match_head'])
+        rows = {row['path']: row for row in result['untracked']}
+        self.assertEqual(rows['config.toml']['sha256'], hashlib.sha256(value.encode()).hexdigest())
+        self.assertEqual(rows['external-link']['kind'], 'symlink')
+        self.assertEqual(rows['external-link']['sha256'], hashlib.sha256(os.fsencode(outside)).hexdigest())
+        self.assertNotIn(value, json.dumps(result))
+        self.assertNotIn(str(outside), json.dumps(result))
 
 
 class EarlyDependencyScan(unittest.TestCase):

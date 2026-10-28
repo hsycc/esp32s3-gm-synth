@@ -1,12 +1,18 @@
 # Experimental bounded loop-release bridge
 
+Status update, 2026-10-28: PRs #19–#25 have merged into main. The scope below is
+the original standalone bridge experiment; later opt-in Voice/application
+bindings are documented separately. Defaults remain OFF and physical/audible
+approval remains open; see `V1_RELEASE_CLOSEOUT.md`.
+
 ## Scope and frozen baseline
 
 `BoundedLoopReleaseCursor` is a separate, explicitly opt-in wrapper around the
-unchanged `LoopCrossfadeCursor` from `48a67182`. It is not referenced by production
-Voice, a build configuration, or Program Prepare. The `de684b82` Host policy,
-thresholds, soundbanks, gains, DMA and polyphony are unchanged. Both PRs remain
-Draft; this work does not authorize a merge or any runtime plan.
+unchanged `LoopCrossfadeCursor` from `48a67182`. The original experiment did not
+bind it to production Voice, a build configuration, or Program Prepare. The
+`de684b82` Host policy, thresholds, soundbanks, gains, DMA and polyphony were
+unchanged by that experiment. Its original Draft restriction is historical;
+the standalone evidence does not approve a runtime plan.
 
 The original cursor and its immediate-release oracle remain unchanged and are
 retested in CI. Default release bridging is disabled. Direct (fade=0), None,
