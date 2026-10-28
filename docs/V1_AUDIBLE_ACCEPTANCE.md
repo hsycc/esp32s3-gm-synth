@@ -3,7 +3,9 @@
 Status: **PHYSICAL WORKSHEET NOT RUN; existing Host loop preferences recorded**.
 A serial PASS, a matching PCM checksum or generated WAV files do not complete
 physical listening. Fill new observations only after actual listening.
-This worksheet does not implement new firmware, MIDI ingress or a new player.
+The automated two-channel replay and output comparison files now described in
+`V1_OUTPUT_HEADROOM.md` provide a concrete additional audition source. They do
+not implement manual MIDI ingress or constitute listening observations.
 
 ## Record the exact audition setup
 
@@ -34,6 +36,8 @@ ES8311 speaker: this board's qualification path averages L/R to mono.
 | A7 | Loop A/B sample 602: direct vs 16f/32f/64f; same checks | User reported little difference, without selecting forced processing | HOST OBSERVATION RECORDED; physical instrument NOT RUN |
 | A8 | Loop A/B sample 62: direct vs 16f/32f/64f; prefer no processing when it is already clean | User reported little difference, without selecting forced processing | HOST OBSERVATION RECORDED; physical instrument NOT RUN |
 | A9 | Left/right and pan semantics | Host stereo PCM evidence or a real stereo output path; mono speaker audition is NOT APPLICABLE for spatial correctness | NOT RUN |
+| A10 | Output bypass/Peak64 at identical playback level: attacks, pumping, sustain and tail continuity | New eight-file Host comparison set: real-bank fixed 24-Voice scene plus two-channel musical phrase, Loop off/on × output bypass/peak. Peak files include an explicit initial 64-frame delay and drained tail. See artifact hashes/metadata; no listening has been inferred from their generation | NOT RUN |
+| A11 | Channel-1 Program changes while channel 0 sustains a real Loop Voice; controller isolation and NoteOff | New fixed `two-channel-phrase-v1`, 117 events, same Session/Voice/FX/I2S path on target; does not qualify arbitrary manual input or 16 simultaneous parts | NOT RUN |
 
 The qualification image is an automated benchmark, not an established manual
 MIDI instrument frontend. Do not request arbitrary live notes/program selection

@@ -112,6 +112,20 @@ public:
     void render(std::uint64_t block_start_frame, std::int16_t* interleaved_stereo);
 
     const ScheduledAudioStats& stats() const { return stats_; }
+    // BEGIN V1_OUTPUT_FINALIZER
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Optional application output stage after FX, before PCM conversion. The
+    // callback owns master scaling and conversion and updates output-only stats.
+    // Configure before the first block, then retain its context for the stream.
+    using OutputFinalizer = void (*)(void*, const std::int32_t*, std::size_t,
+        std::int32_t, std::int16_t*, ScheduledAudioStats&) noexcept;
+    bool setOutputFinalizerQuiescent(OutputFinalizer fn, void* context) noexcept {
+        if (stats_.blocks_rendered || (fn && !context)) return false;
+        output_finalizer_ = fn; output_context_ = context;
+        return true;
+    }
+#endif
+    // END V1_OUTPUT_FINALIZER
 
     // Global digital post-FX master. Default is exact bypass so all existing
     // SF2/MIDI/qualification PCM output remains bit-identical. 0=mute,
@@ -169,6 +183,12 @@ private:
     voice::GlobalEffectsProcessor effects_{};
     ScheduledAudioStats stats_{};
     std::int32_t master_gain_q15_ = voice::kQ15Unity;
+    // BEGIN V1_OUTPUT_FINALIZER
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    OutputFinalizer output_finalizer_ = nullptr;
+    void* output_context_ = nullptr;
+#endif
+    // END V1_OUTPUT_FINALIZER
 
     bool worst_profile_enabled_ = false;
     std::uint32_t last_profiled_render_us_ = 0;

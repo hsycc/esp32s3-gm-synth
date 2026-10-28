@@ -11,7 +11,7 @@ import shutil
 import stat
 import subprocess
 
-from tools.v1_loop_realtime_manifest import PROFILES
+from tools.v1_loop_realtime_manifest import PROFILES, PROFILES_V2, OUTPUT_MODES
 
 
 SOURCE_PREFIXES = ('firmware/', 'main/', 'profiles/', 'scripts/', 'tools/',
@@ -178,9 +178,13 @@ def collect(root, build, generated, sdkconfig, output):
         raise ValueError('refusing to overwrite existing flash bundle')
     spec = json.loads((generated / 'manifest.json').read_text())
     profile = spec['profile']
-    expected = PROFILES.get(profile)
+    expected = (PROFILES_V2 if spec.get('schema') == 2 else PROFILES
+                if spec.get('schema') == 1 else {}).get(profile)
     if expected is None or any(spec.get(key) != value for key, value in expected.items()):
         raise ValueError('generated manifest does not match the pinned profile')
+    if spec.get('schema') == 2 and (spec.get('output_mode') not in OUTPUT_MODES or
+            spec.get('output_latency_frames') != (64 if spec['output_mode'] == 'peak' else 0)):
+        raise ValueError('generated output mode/latency mismatch')
     config = check_config(sdkconfig.read_text(), profile)
     description = json.loads((build / 'flasher_args.json').read_text())
     entries = flash_inputs(build, generated, description)
@@ -231,9 +235,27 @@ def collect(root, build, generated, sdkconfig, output):
     shutil.copyfile(root / 'assets/sf2/SOURCES.md', output / 'SF2-SOURCES.md')
     if profile == 'physical':
         shutil.copyfile(root / 'assets/sf2/licenses/FM_GM_OpenSoundFont_GPL-3.0.txt', output / 'SF2-GPL-3.0.txt')
+        shutil.copyfile(root / 'scripts/v1_loop_realtime_hardware.py', output / 'hardware.py')
+        (output / 'HARDWARE.txt').write_text(
+            'This bundle is a compiled qualification input, not a hardware or listening PASS.\n'
+            'Use the pinned ESP-IDF v6.1 Python environment (esptool installed).\n'
+            'Keep backups, serial logs and recordings OUTSIDE this immutable bundle.\n'
+            'First inspect without connecting a device:\n'
+            '  python hardware.py inspect\n'
+            'Before the first layout transition, read all 16 MiB and preserve its SHA256:\n'
+            '  python hardware.py backup --port PORT --output /path/to/original-backup --banner bb31908-dirty\n'
+            'The --banner value is an operator observation; bb31908-dirty remains accepted.\n'
+            'Flash always uses bootloader, partition table, application AND native SF2:\n'
+            '  python hardware.py flash --port PORT --backup /path/to/original-backup --log /path/to/flash.log\n'
+            'Capture the complete boot-to-return serial log for every on/off and bypass/peak run.\n'
+            'Record the exact source tree, bundle hashes, device, power/codec setup and listening notes.\n'
+            'The same original backup can be reused across the consolidated matrix.\n'
+            'Rollback checks the same device MAC and full backup hash before restoring every byte:\n'
+            '  python hardware.py rollback --port PORT --backup /path/to/original-backup --log /path/to/rollback.log\n'
+            'No helper command approves timing, 24-Voice capacity, audio quality or V1 release.\n')
     (output / 'source-status.txt').write_text(source_status)
     (output / 'source-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
-    result = dict(schema=1, source_commit=identity['source_commit'], source_tree=identity['source_tree'],
+    result = dict(schema=spec['schema'], source_commit=identity['source_commit'], source_tree=identity['source_tree'],
                   source_dirty=identity['source_dirty'],
                   tracked_inputs_match_head=identity['tracked_inputs_match_head'],
                   build_inputs_match_head=identity['build_inputs_match_head'],
@@ -241,6 +263,9 @@ def collect(root, build, generated, sdkconfig, output):
                   profile=profile, analysis=spec['analysis'],
                   runtime_approved=False, physical_timing_approved=False,
                   release_approved=False, flash_files=entries, configuration=config)
+    if spec['schema'] == 2:
+        result.update(output_mode=spec['output_mode'], output_latency_frames=spec['output_latency_frames'],
+                      channels=spec['channels'], max_zones=spec['max_zones'], listening_approved=False)
     (output / 'bundle-manifest.json').write_text(json.dumps(result, indent=2) + '\n')
     hashes = []
     for path in sorted(output.rglob('*')):

@@ -12,16 +12,23 @@ triggered workflows / 25 check runs, with current-head QEMU on/off artifacts
 verified. All five workflows triggered by that main push also succeeded
 (including ESP-IDF run `40636633886`). Main push checks are a separate trigger
 set, not the same 17 runs.
+PR #26 then merged as `4b097e8bd65e86893e343943342b51e42377c03d`, after
+12/12 workflows, 24/24 checks and all five current-head artifact verifications.
+Its main push triggered two successful workflows: `host-tests` / `40641662730`
+and `esp-idf-build` / `40641662879`. Concurrent owners/I2S are integrated;
+hardware execution and listening of that path remain unapproved.
 Core implementation and historical physical stress work are complete for the
 tested configurations; new enabled-path hardware, audible approval and V1
 release remain open.
 
 M8 reference: `bb31908b` three physical runs PASS with PCM checksum `fe69915701738934`, 24 nominal normal/full-FX sample voices, eight stable pathological heavy-DSP voices, no WDT/hard-gate failures and final backlog zero. User confirmed the recorded `-dirty` suffix is not a blocker for this source integration; retain the actual banner without claiming clean CI binary identity. See `benchmarks/M8_PHYSICAL_THREE_RUN_2026-10-24.md`.
 
-Current focus: the new concurrent control/audio owner and continuous I2S/DMA,
-then one consolidated on/off hardware batch for memory, Prepare/render latency,
+Current focus: explicit default-OFF output peak protection and reproducible
+two-channel replay, then one consolidated on/off × bypass/peak hardware batch
+for memory, Prepare/render latency,
 actual Loop Voice coverage and sustained polyphony. See
-`docs/V1_LOOP_REALTIME_INTEGRATION.md`. Batch development and Host/CI/QEMU are the
+`docs/V1_OUTPUT_HEADROOM.md` and `docs/V1_LOOP_REALTIME_INTEGRATION.md`.
+Batch development and Host/CI/QEMU are the
 daily verification path; do not ask for physical reruns after every small edit.
 Keep feature defaults OFF, original M8 load/volume/DMA/WDT settings and the
 `prepared-loop-review-v3-source-matched-peak` policy frozen. Do not restart
@@ -34,6 +41,9 @@ failure in both Direct and analysis-on Host rendering. Preserve its negative
 qualification and zero-clipping gate; do not lower velocity, Voice count, FX,
 master or DAC settings to relabel it PASS. It remains distinct from pending
 physical CPU/DMA measurements and from the frozen Crossfade scoring policy.
+The output candidate retains those same raw counts while bounding final PCM,
+with explicit 64-frame latency and terminal drain. Its numerical Host pass is
+not a new physical 24-Voice, 16-channel or audible approval.
 
 M6 physical product qualification is complete at:
 

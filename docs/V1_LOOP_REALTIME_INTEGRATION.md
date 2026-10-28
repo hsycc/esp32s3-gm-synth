@@ -2,6 +2,14 @@
 
 ## Position and scope
 
+The original integration described below merged in PR #26 as
+`4b097e8bd65e86893e343943342b51e42377c03d`. Its final head passed 12 workflows /
+24 checks; the merge's two main workflows also succeeded. This document keeps
+the schema-1 single-channel workload and negative headroom evidence as history.
+For the new two-channel replay and independently optional output candidate,
+including schema-2 profiles, see `V1_OUTPUT_HEADROOM.md`. New profiles do not
+retroactively qualify the old images or reinterpret their evidence.
+
 PR #25 merged normally into `main` as
 `51dc57d42057e9c23d3cf593717f56cc3841c92e`. Its reviewed head was
 `5502e97468fdace04ed43180f43bf477179a541b`; all 17 triggered workflows and 25

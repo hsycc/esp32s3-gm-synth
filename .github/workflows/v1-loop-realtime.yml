@@ -9,10 +9,13 @@ on:
       - 'main/**'
       - 'profiles/v1-loop-realtime/**'
       - 'scripts/*v1_loop_realtime*'
+      - 'scripts/check_v1_output_bypass.sh'
+      - 'scripts/check_v1_loop_startup_default.py'
       - 'tools/v1_loop_realtime*'
       - 'tools/v1_loop_target_evidence.py'
       - 'tools/v1_atomic_backend_audit.py'
       - 'tests/app/**'
+      - 'tests/realtime/test_output_bypass_trace.cpp'
       - 'tests/test_v1_loop_realtime.py'
 permissions:
   contents: read
@@ -32,6 +35,7 @@ jobs:
         run: |
           python3 scripts/check_v1_voice_baselines.py
           python3 scripts/check_v1_loop_startup_default.py
+          bash scripts/check_v1_output_bypass.sh
           python3 -m unittest tests.test_v1_loop_realtime tests.test_v1_loop_startup tests.test_v1_atomic_contract -v
       - name: Production provider, concurrent render and owner shutdown
         run: |
@@ -56,6 +60,7 @@ jobs:
             build/v1-loop-realtime-host/*.txt
             build/v1-loop-realtime-host/*.gz
             build/v1-loop-realtime-host/*.sha256
+            build/v1-loop-realtime-host/audition/**
           if-no-files-found: error
   xtensa:
     needs: host
@@ -66,6 +71,7 @@ jobs:
       matrix:
         profile: [qemu, physical]
         mode: ['on', 'off']
+        output: [bypass, peak]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -78,8 +84,8 @@ jobs:
           tools-path: ${{ runner.temp }}/esp-tools
       - name: Build continuous application, audit ABI and atomic backend, package exact flash inputs
         run: |
-          mkdir -p build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}
-          bash scripts/build_v1_loop_realtime.sh ${{ matrix.profile }} ${{ matrix.mode }} 2>&1 | tee build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/build.log
+          mkdir -p build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}
+          bash scripts/build_v1_loop_realtime.sh ${{ matrix.profile }} ${{ matrix.mode }} ${{ matrix.output }} 2>&1 | tee build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/build.log
       - uses: actions/download-artifact@v4
         if: matrix.profile == 'qemu'
         with:
@@ -87,18 +93,18 @@ jobs:
           path: build/v1-loop-realtime-host
       - name: Execute real control/audio tasks in QEMU
         if: matrix.profile == 'qemu'
-        run: bash scripts/run_v1_loop_realtime_qemu.sh ${{ matrix.mode }}
+        run: bash scripts/run_v1_loop_realtime_qemu.sh ${{ matrix.mode }} ${{ matrix.output }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}
+          name: v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}
           path: |
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/*.json
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/*.log
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/*.txt
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/sdkconfig
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.h
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.json
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/generated/*.sha256
-            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}/flash-bundle/**
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/*.json
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/*.log
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/*.txt
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/sdkconfig
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/generated/*.h
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/generated/*.json
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/generated/*.sha256
+            build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/flash-bundle/**
           if-no-files-found: error
