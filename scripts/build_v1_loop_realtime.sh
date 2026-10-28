@@ -18,9 +18,10 @@ if [[ "$PROFILE" == qemu ]]; then
 else
     SOURCE="$ROOT/assets/sf2/subsets/FM_GM_Open_subset_6MiB.sf2"
 fi
-EXTRA=()
-[[ "$ANALYSIS" == off ]] || EXTRA+=(--analysis)
-python3 -m tools.v1_loop_realtime_manifest "$SOURCE" "$OUT/generated" --profile "$PROFILE" --output-mode "$OUTPUT_MODE" "${EXTRA[@]}"
+# Keep argv nonempty: Bash 3.2 rejects an empty array under set -u.
+set -- "$SOURCE" "$OUT/generated" --profile "$PROFILE" --output-mode "$OUTPUT_MODE"
+[[ "$ANALYSIS" == off ]] || set -- "$@" --analysis
+python3 -m tools.v1_loop_realtime_manifest "$@"
 python "$IDF_PATH/tools/idf.py" --version | tee "$OUT/idf-version.txt"
 grep -qx 'ESP-IDF v6.1' "$OUT/idf-version.txt"
 python "$IDF_PATH/tools/idf.py" -B "$OUT/target" -D IDF_TARGET=esp32s3 \
