@@ -16,7 +16,11 @@ The product baseline is fixed to **ESP32-S3 N16R8**:
 
 R16 is not a target and must not be used to justify memory decisions.
 
-## Initial targets
+## Original starting targets (historical)
+
+The 16 / 18–20 Voice numbers below describe the initial project target. The
+later M6–M8 physical baseline is 24 normal/full-FX and 8 heavy-DSP sample Voices;
+the new optional Loop path requires its own physical qualification.
 
 - 44.1 kHz, 16-bit stereo I2S output
 - GM1: 128 melodic programs + drums
@@ -137,8 +141,10 @@ Measurements that require the actual electrical/storage/audio characteristics of
 
 - **M0–M6 core implementation:** host/ESP-IDF and physical qualification complete for the documented N16R8 configuration.
 - **M7 GM128/native SF2:** program-level release matrices, representative multichannel behavior and real-hardware long runs are qualified for tested banks; not a claim of arbitrary SF2 support or subjective listening approval.
-- **M8 hot-path and volume controls:** M7/M8 development PRs #17 and #18 are merged into `agent/m6-sf2-playback-prepare-v1`. The frozen `bb31908b` M8 image completed three physical stress runs with zero hard-gate failures and unchanged PCM checksum. Digital master defaults to unity; ES8311 DAC remains -12 dB.
-- **V1 Release Candidate:** main-branch source integration, representative listening, output-level/headroom checks and release packaging are separate steps. No public V1 release is approved yet.
+- **M8 hot-path and volume controls:** the core integration is in `main`. The frozen `bb31908b` image completed three physical stress runs with zero hard-gate failures and unchanged PCM checksum. Its actual `bb31908-dirty` banner is retained and was expressly accepted for integration. Digital master defaults to unity; ES8311 DAC remains -12 dB.
+- **Optional Loop path:** PRs #19–#24 are merged; #25 merged as `51dc57d42057e9c23d3cf593717f56cc3841c92e` after all 17 workflows / 25 check runs passed at `5502e974`. That serial startup qualification is distinct from concurrent audio/I2S or hardware performance. The frozen scoring policy is unchanged, and feature defaults remain OFF.
+- **Current integration work:** `docs/V1_LOOP_REALTIME_INTEGRATION.md` describes the separate control/audio owner, continuous I2S profile and new-path hardware evidence gates. The earlier 24/8 baseline is not an approval of this enabled path.
+- **V1 Release Candidate:** representative listening, output-level/headroom checks, new-path physical qualification and release packaging remain separate gates. No public V1 release is approved yet.
 
 The physical qualification output is **mono downmix via ES8311**, not a spatial-stereo speaker test. 24 normal/full-FX *sample voices* (not necessarily 24 keys on layered presets) and 8 pathological heavy-DSP voices are the measured stability envelope. Do not advertise the software 32-voice cap as a guaranteed realtime specification.
 

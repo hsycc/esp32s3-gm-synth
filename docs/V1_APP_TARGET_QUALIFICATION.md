@@ -1,9 +1,14 @@
 # Application transaction on Xtensa (default-off qualification)
 
+Status update, 2026-10-28: PRs #19–#25 have merged into main. The scope below
+records the original application-target batch. Feature defaults remain OFF;
+current concurrent audio and hardware gates are tracked in
+`V1_LOOP_REALTIME_INTEGRATION.md` and `V1_RELEASE_CLOSEOUT.md`.
+
 This batch extends PR #23 at frozen `7c113d582221ac739f8adeef6428ad2a25d06363`.
 It adds a standalone test application, not normal startup enablement. No changes
 to production Voice, resolver, transaction protocol, Host policy, PCM bank,
-normal CMake/default configs, DMA, gain or polyphony. All PRs stay Draft/unmerged.
+normal CMake/default configs, DMA, gain or polyphony were part of that batch.
 A submitted workflow is NOT evidence that target execution passed.
 
 ## Loader identity: actual bytes, constrained lifetime

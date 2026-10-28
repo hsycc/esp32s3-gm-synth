@@ -1,11 +1,17 @@
 # Default-off production Voice loop integration
 
+Status update, 2026-10-28: PRs #19–#25 have merged into main. This document
+preserves the original Voice-binding scope and evidence. Later application and
+target work is recorded separately; current concurrent audio/hardware gates
+are in `V1_LOOP_REALTIME_INTEGRATION.md`. Runtime enablement remains unapproved.
+
 ## Scope
 
 Stacked on frozen PR #21 at `6d954a7bc200cd0ec300873e7e106fff2a87a692`.
 The Host selection policy, PCM, source/prepare/residency, original cursor and
-bounded release math are unchanged. No application, Kconfig, DMA, gain,
-polyphony or arena configuration enables this path. No merge is authorized.
+bounded release math were unchanged by that batch. No application, Kconfig,
+DMA, gain, polyphony or arena configuration in that original batch enabled
+this path. Its historical Draft restriction has been superseded by the merges.
 
 `GM_SYNTH_EXPERIMENTAL_VOICE_LOOP` defaults to 0. All translation units must use
 the same setting. At 0, the Voice/VoiceStartParams layout and compiled native
@@ -86,11 +92,12 @@ fallback and shortened steady-loop period limitations still apply.
   Actual Zone loop modes/regions are retained. Full original instrument DSP
   settings, stereo, listening, memory budgets and hardware timing are NOT_RUN.
 
-## Remaining gates
+## Gates identified at the original Voice-binding stage
 
 Actual application identity provisioning and atomic-order commit orchestration;
 optional-plan capacity/admission policy; production resolver/VoicePool hook;
 optimized active Crossfade path if needed; on-target memory/CPU/DMA/I2S A/B;
-listening and release edge cases. Keep runtime approval false and PR Draft until
-those gates are separately decided. A successful IDF default build does not
+listening and release edge cases. Keep runtime approval false until the
+applicable gates are separately decided; see `V1_RELEASE_CLOSEOUT.md` for their
+current disposition. A successful IDF default build does not
 show that the compiled-out experimental path executed on an ESP32-S3.

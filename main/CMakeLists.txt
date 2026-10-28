@@ -1,3 +1,14 @@
+# Concurrent qualification owns a separate root entry and uses the existing
+# codec only. Keep the original M8 renderer/runner and defaults unchanged.
+if("$ENV{GM_SYNTH_REALTIME_EARLY_MODE}" STREQUAL "1")
+    idf_component_register(
+        SRCS "LoopRealtimeQualification.cpp" "LoopRealtimeI2s.cpp" "KorvoV4Es8311.cpp"
+        INCLUDE_DIRS "." "$ENV{GM_SYNTH_REALTIME_EARLY_GENERATED}"
+        REQUIRES firmware esp_partition esp_timer esp_driver_i2c
+        PRIV_REQUIRES heap freertos mbedtls esp_driver_gpio esp_driver_i2s)
+    return()
+endif()
+
 # Separate qualification entry; the ordinary source/dependency list below is unchanged.
 # Root CMake normalizes and overrides these for its requirement-scan child.
 # Do not depend on a custom cache variable that is absent in early expansion.
