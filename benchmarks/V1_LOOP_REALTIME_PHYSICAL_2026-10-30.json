@@ -1,0 +1,2318 @@
+{
+  "schema": 1,
+  "report_kind": "physical_negative_qualification_observation",
+  "observation_date": "2026-10-30",
+  "source_commit": "1aeb2cf61df48f180f539ff560fd41d768179903",
+  "source_tree": "37d914a56261a2beb26c1431ed480012e2ef6d8d",
+  "qualified": false,
+  "physical_execution": true,
+  "runtime_approved": false,
+  "physical_timing_approved": false,
+  "listening_approved": false,
+  "release_approved": false,
+  "complete_primary_captures": 4,
+  "additional_partial_segments": 1,
+  "source_scope": "User-supplied local-build bundle inspection reports, esptool flash logs and physical serial captures. Not execution.json and not a successful qualification certificate.",
+  "retention": {
+    "originals": "Original attachments retained by the user; raw logs and binaries are not copied into this repository.",
+    "hashes": "SHA-256 over exact uploaded bytes, including original line endings.",
+    "privacy": "Developer-machine paths, serial-port names and board MAC are omitted."
+  },
+  "verification_scope": {
+    "uploaded_file_hashes_independently_computed": true,
+    "bundle_reports_equal_prior_build_reports": true,
+    "flash_writes_verified_by": "esptool Hash of data verified records",
+    "binary_files_available_for_independent_sha_verification": false,
+    "board_flash_readback_performed_by_reviewer": false
+  },
+  "fixed_workload": {
+    "profile": "physical",
+    "synthetic": false,
+    "sample_rate_hz": 44100,
+    "frames_per_block": 64,
+    "input_blocks_required": 32768,
+    "cohort_blocks_required": 4096,
+    "cohort_sample_voices_required": 24,
+    "cohort_max_render_us_required": 1451,
+    "dma_descriptors": 8,
+    "dma_frames": 64,
+    "dma_window_us": 11610,
+    "native_sf2_bytes": 5898214,
+    "native_sf2_sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62"
+  },
+  "observed_failure_sequence": [
+    "24-Voice cohort renders only 2 or 3 blocks at 4188-5265 us average.",
+    "Producer-work backlog exceeds the configured 11610 us window; two active-measurement I2S send queue overflows are also recorded.",
+    "The bounded failure path stops the actors and returns from app_main before the 4096-block cohort and musical replay complete."
+  ],
+  "root_cause_status": "These aggregate logs establish an early render-time/producer-work failure but do not isolate a DSP stage or prove the underlying implementation cause.",
+  "limitations": [
+    "Only 2-3 cohort blocks are observed; no steady-state polyphony boundary or representative cohort quantiles are established.",
+    "Global render averages mix different loads and Prepare durations and are not comparable on/off capacity measurements.",
+    "Raw and digital headroom PASS apply only to the rendered prefix. The fixed overloaded workload was not completed.",
+    "Peak extreme-value probes passed, but no full real-bank peak/headroom or listening acceptance follows.",
+    "Peak drain_frames=0 reflects early failure; the final delayed block is only drained on normal completion.",
+    "Replay events=0 and complete=0 mean the musical replay did not execute.",
+    "The on-peak reconnect segment lacks an independent boot identity and start record.",
+    "No WDT/panic marker or allocation/stale-reference fault is observed in these short runs; this is not long-run reliability evidence.",
+    "PSRAM returns to its pre-run free value. Internal free memory remains 720 bytes below before; ownership and cause of that difference are not established.",
+    "Backlog is software producer-work accounting; dma_queue_overflows records the I2S on_send_q_ovf callback. No exact analog gap length is inferred.",
+    "Subjective listening notes were not supplied.",
+    "The historical bb31908b / bb31908-dirty baseline and the user acceptance of dirty remain unchanged; they do not qualify this path."
+  ],
+  "inputs": [
+    {
+      "file": "off-bypass-bundle.json",
+      "bytes": 2678,
+      "lines": 76,
+      "sha256": "6d19e105285ccc898284571a73d81a7e0c994e9c937b691e4c463fcf9caff05e"
+    },
+    {
+      "file": "off-bypass-flash.log",
+      "bytes": 41919,
+      "lines": 419,
+      "sha256": "080d965ded7ab0e805f76df56990e233e7164b3207b5c32746eeaf1ef6a22b56"
+    },
+    {
+      "file": "off-bypass-run.log",
+      "bytes": 8125,
+      "lines": 103,
+      "sha256": "94c6c3883a0621d171c77b405f84fcd6aa5fd5296e035fb26b042435f2ed70b7"
+    },
+    {
+      "file": "off-peak-bundle.json",
+      "bytes": 2677,
+      "lines": 76,
+      "sha256": "c9ea90b69b8e9c3c4edc6fe8aa90049b580d17df6d6ed47b17e46ff3bc904ea6"
+    },
+    {
+      "file": "off-peak-flash.log",
+      "bytes": 41911,
+      "lines": 419,
+      "sha256": "4426ddbde00383f452e098365102e245c1ae70100384680aba39d317ac2a4365"
+    },
+    {
+      "file": "off-peak-run.log",
+      "bytes": 8124,
+      "lines": 103,
+      "sha256": "d23e9c133fbc0e3c7600d168bd9061737faf96bab8d298c31463d4c9863b50e8"
+    },
+    {
+      "file": "on-bypass-bundle.json",
+      "bytes": 2677,
+      "lines": 76,
+      "sha256": "c412c6d74d91b1a27caaa8d411f65970e914fddf03cd0c72c9368c88f729d100"
+    },
+    {
+      "file": "on-bypass-flash.log",
+      "bytes": 41916,
+      "lines": 419,
+      "sha256": "a6d3d9a1d3306fe0721be11c5027b2be17faa9419dcd5ab00bf84c39f1d53929"
+    },
+    {
+      "file": "on-bypass-run.log",
+      "bytes": 8140,
+      "lines": 103,
+      "sha256": "283a6c20c0f7d04abc9af8bf26e1ae25638a2ddc0b88ee32ff8cdd05a69c39a3"
+    },
+    {
+      "file": "on-peak-bundle.json",
+      "bytes": 2676,
+      "lines": 76,
+      "sha256": "e39d4fe738c4eca44ee44e34ef6bd682230a7431f2ee2e4a43f7acf783b83b7d"
+    },
+    {
+      "file": "on-peak-flash.log",
+      "bytes": 41907,
+      "lines": 419,
+      "sha256": "7dcab84f803a1fba1c31bd6bc52d55fcd92d9afa511bb7106c2498d3ad27f4ce"
+    },
+    {
+      "file": "on-peak-run.log",
+      "bytes": 12193,
+      "lines": 127,
+      "sha256": "e7a2e648f33ead63dfffa698ab9c3cb6f890c0d43a150880249cc67c249bb64d"
+    }
+  ],
+  "cases": [
+    {
+      "mode": "off-bypass",
+      "source_bundle_file": "off-bypass-bundle.json",
+      "bundle_manifest": {
+        "schema": 2,
+        "source_commit": "1aeb2cf61df48f180f539ff560fd41d768179903",
+        "source_tree": "37d914a56261a2beb26c1431ed480012e2ef6d8d",
+        "source_dirty": false,
+        "tracked_inputs_match_head": true,
+        "build_inputs_match_head": true,
+        "owned_translation_units_match_head": true,
+        "profile": "physical",
+        "analysis": false,
+        "runtime_approved": false,
+        "physical_timing_approved": false,
+        "release_approved": false,
+        "flash_files": [
+          {
+            "offset": 0,
+            "bytes": 21120,
+            "sha256": "b4516d53a3c2d3d090de48683329187294ba430f091cf33d27365e7fe65100d7",
+            "file": "images/000000-bootloader.bin"
+          },
+          {
+            "offset": 32768,
+            "bytes": 3072,
+            "sha256": "2aec9dcccef399dbf1cca831c5cc51fb6a810fa3a011b5d9b2fd165d70eef7e4",
+            "file": "images/008000-partition-table.bin"
+          },
+          {
+            "offset": 65536,
+            "bytes": 379136,
+            "sha256": "4dfd5c0a5c3a76ac5ba1c0099f85a9e90404c48f7c565d5f4956aaebf884cf93",
+            "file": "images/010000-esp32s3_gm_synth.bin"
+          },
+          {
+            "offset": 2162688,
+            "bytes": 5898214,
+            "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+            "file": "images/210000-bank.sf2"
+          }
+        ],
+        "configuration": {
+          "profile": "physical",
+          "compared_settings": {
+            "CONFIG_IDF_TARGET": "\"esp32s3\"",
+            "CONFIG_ESPTOOLPY_FLASHSIZE_16MB": "y",
+            "CONFIG_ESPTOOLPY_FLASHMODE_DIO": "y",
+            "CONFIG_ESPTOOLPY_FLASHFREQ_80M": "y",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_PERF": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE": "y",
+            "CONFIG_ESP_TASK_WDT_EN": "y",
+            "CONFIG_ESP_TASK_WDT_INIT": "y",
+            "CONFIG_ESP_TASK_WDT_TIMEOUT_S": "5",
+            "CONFIG_ESP_TASK_WDT_PANIC": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1": "y",
+            "CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15": "32767",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB": "12",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM": "8",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM": "64",
+            "CONFIG_PARTITION_TABLE_CUSTOM": "y",
+            "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME": "\"profiles/v1-loop-realtime/partitions.csv\"",
+            "CONFIG_SPIRAM": "y",
+            "CONFIG_SPIRAM_MODE_OCT": "y",
+            "CONFIG_SPIRAM_SPEED_80M": "y",
+            "CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND": "y",
+            "CONFIG_GM_SYNTH_PCM_ARENA_BYTES": "4718592",
+            "CONFIG_GM_SYNTH_I2S_QUAL_ENABLE": "y"
+          },
+          "physical_timing_approved": false
+        },
+        "output_mode": "bypass",
+        "output_latency_frames": 0,
+        "channels": 2,
+        "max_zones": 16,
+        "listening_approved": false
+      },
+      "matches_previous_build_report": true,
+      "flash": {
+        "file": "off-bypass-flash.log",
+        "hash_verification_lines": [
+          45,
+          53,
+          76,
+          417
+        ],
+        "four_images_written_and_verified": true,
+        "same_observed_board_across_cases": true,
+        "serial_port_and_device_identifier_omitted": true,
+        "fatal_error_markers": 0
+      },
+      "primary_capture": {
+        "file": "off-bypass-run.log",
+        "start_line": 1,
+        "end_line": 102,
+        "capture_contains_start_and_terminal": true,
+        "app_main_returned": true,
+        "workload_complete": false,
+        "qualified": false,
+        "boot": {
+          "app_version": {
+            "line": 59,
+            "value": "1aeb2cf"
+          },
+          "elf_sha256_prefix": {
+            "line": 61,
+            "value": "b971da05f..."
+          },
+          "esp_idf": {
+            "line": 62,
+            "value": "v6.1"
+          },
+          "compile_time": {
+            "line": 60,
+            "value": "Oct 30 2026 18:07:08"
+          }
+        },
+        "telemetry": [
+          {
+            "line": 78,
+            "tag": "REALTIME_BEGIN",
+            "fields": {
+              "schema": 2,
+              "profile": "physical",
+              "analysis": 0,
+              "synthetic": 0,
+              "output_mode": "bypass",
+              "channels": 2,
+              "root_application": 1,
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 79,
+            "tag": "REALTIME_OUTPUT_PROBE",
+            "fields": {
+              "cases": 1,
+              "input_frames": 64,
+              "bypass_raw_overload": 80,
+              "bypass_clipped": 80,
+              "peak_raw_overload": 80,
+              "peak_clipped": 0,
+              "raw_peak_abs": 2147483648,
+              "peak_peak_abs": 32766,
+              "peak_gain_min_q30": 16383,
+              "peak_limited_frames": 64,
+              "peak_latency_frames": 64,
+              "peak_output_frames": 128,
+              "first_zero": 1,
+              "pass": 1,
+              "physical_timing_approved": 0
+            }
+          },
+          {
+            "line": 80,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "before",
+              "internal_free": 375820,
+              "internal_largest": 311296,
+              "internal_min": 375820,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 81,
+            "tag": "REALTIME_READY",
+            "fields": {
+              "status": 1,
+              "session": 1,
+              "plans": 0,
+              "analyses": 0,
+              "channel1_plans": 0,
+              "channel1_analyses": 0,
+              "session_bytes": 169504,
+              "storage_bytes": 102448,
+              "storage_psram": 1,
+              "arena_capacity": 4718592
+            }
+          },
+          {
+            "line": 82,
+            "tag": "REALTIME_ASSET",
+            "fields": {
+              "bytes": 5898214,
+              "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+              "initial_program": 16,
+              "replacement_program": 1
+            }
+          },
+          {
+            "line": 83,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "ready",
+              "internal_free": 199532,
+              "internal_largest": 139264,
+              "internal_min": 199412,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 85,
+            "tag": "REALTIME_I2S_ARMED",
+            "fields": {
+              "sample_rate": 44100,
+              "frames": 64,
+              "dma_desc": 8,
+              "dma_frames": 64,
+              "dma_window_us": 11610,
+              "master_q15": 32767,
+              "dac_db": "-12",
+              "mono_avg_lr": 1,
+              "bclk": 1411200,
+              "mclk": 11289600,
+              "dma_bytes": 1024
+            }
+          },
+          {
+            "line": 87,
+            "tag": "REALTIME_ACTORS",
+            "fields": {
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 88,
+            "tag": "REALTIME_GATES",
+            "fields": {
+              "integration": "FAIL",
+              "cohort": "FAIL",
+              "replay": "FAIL",
+              "raw_headroom": "PASS",
+              "digital_headroom": "PASS"
+            }
+          },
+          {
+            "line": 89,
+            "tag": "REALTIME_RESULT",
+            "fields": {
+              "frames": 27392,
+              "blocks": 428,
+              "checksum": 9413319480050779452,
+              "events": 45,
+              "rejected": 0,
+              "clipped": 0,
+              "voices_peak": 24,
+              "loop_voices_peak": 0,
+              "program_switches": 2,
+              "blocks_during_prepare": 56
+            }
+          },
+          {
+            "line": 90,
+            "tag": "REALTIME_OUTPUT",
+            "fields": {
+              "mode": "bypass",
+              "latency_frames": 0,
+              "raw_peak_abs": 15350,
+              "raw_overload_samples": 0,
+              "post_peak_abs": 15350,
+              "post_hard_clipped": 0,
+              "limited_frames": 0,
+              "gain_min_q30": 1073741824,
+              "input_frames": 27392,
+              "output_frames": 27392,
+              "drain_frames": 0,
+              "drain_wall_us": 0
+            }
+          },
+          {
+            "line": 91,
+            "tag": "REALTIME_REPLAY",
+            "fields": {
+              "name": "two-channel-phrase-v1",
+              "events": 0,
+              "definition_hash": 4354443756388215394,
+              "event_checksum": 14695981039346656037,
+              "first_frame": 0,
+              "second_frame": 0,
+              "cleanup_frame": 0,
+              "end_frame": 0,
+              "program_switches": 0,
+              "channel_mask": 0,
+              "loop_channel_mask": 0,
+              "concurrent_blocks": 0,
+              "prepare_with_other_loop": 0,
+              "voices_peak": 0,
+              "loop_voices_peak": 0,
+              "complete": 0
+            }
+          },
+          {
+            "line": 92,
+            "tag": "REALTIME_CONTROL",
+            "fields": {
+              "queued": 69,
+              "note_on": 28,
+              "note_off": 27,
+              "cc": 12,
+              "sustain": 4,
+              "program_change": 2,
+              "pitch_bend": 0,
+              "channel_pressure": 0,
+              "services": 56,
+              "prepared": 2,
+              "acknowledgements": 2,
+              "ack_failures": 0,
+              "io_reads": 1099,
+              "io_bytes": 187066,
+              "io_yields": 19,
+              "analysis_yields": 0
+            }
+          },
+          {
+            "line": 93,
+            "tag": "REALTIME_TIMING",
+            "fields": {
+              "startup_us": 1018537,
+              "hash_us": 896013,
+              "prepare_avg_us": 38864,
+              "prepare_max_us": 53990,
+              "render_avg_us": 651,
+              "render_p95_upper_us": 943,
+              "render_p99_upper_us": 1871,
+              "render_max_us": 5055,
+              "quantile_bucket_us": 16,
+              "physical": 1
+            }
+          },
+          {
+            "line": 94,
+            "tag": "REALTIME_STAGES",
+            "fields": {
+              "read_us": 19097,
+              "read_max_us": 3540,
+              "analysis_us": 104,
+              "analysis_max_us": 40,
+              "analysis_calls": 4,
+              "read_excludes_yield": 1,
+              "analysis_includes_yield": 1
+            }
+          },
+          {
+            "line": 95,
+            "tag": "REALTIME_HEALTH",
+            "fields": {
+              "render_soft_overruns": 8,
+              "work_soft_overruns": 11,
+              "max_backlog_us": 12121,
+              "final_backlog_us": 12121,
+              "min_dma_margin_us": 0,
+              "exceeded": 1,
+              "stalls": 0,
+              "writes": 428,
+              "write_errors": 0,
+              "timeouts": 0,
+              "partial": 0,
+              "sent": 436,
+              "dma_queue_overflows": 2,
+              "event_queue_drops": 0,
+              "audio_stack": 5464,
+              "control_stack": 10580
+            }
+          },
+          {
+            "line": 96,
+            "tag": "REALTIME_COHORT",
+            "fields": {
+              "requested": 24,
+              "required": 1,
+              "blocks": 3,
+              "voices_min": 24,
+              "voices_max": 24,
+              "loops_min": 0,
+              "loops_max": 0,
+              "clipped": 0,
+              "raw_overload_samples": 0,
+              "render_avg_us": 4188,
+              "render_p95_upper_us": 4498,
+              "render_p99_upper_us": 4498,
+              "render_max_us": 4498,
+              "max_backlog_us": 8424,
+              "final_backlog_us": 8424,
+              "gate": "FAIL"
+            }
+          },
+          {
+            "line": 97,
+            "tag": "REALTIME_PCM",
+            "fields": {
+              "capacity": 4718592,
+              "high_water": 168348,
+              "used": 168348,
+              "allocation_failures": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 98,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "joined",
+              "internal_free": 199396,
+              "internal_largest": 131072,
+              "internal_min": 173048,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 99,
+            "tag": "REALTIME_STOP",
+            "fields": {
+              "started": 1,
+              "audio_stopped": 1,
+              "control_stopped": 1,
+              "releases": 1,
+              "mapped": 0,
+              "arena_live": 0,
+              "live_refs": 0,
+              "acquirers": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 100,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "stopped",
+              "internal_free": 375100,
+              "internal_largest": 180224,
+              "internal_min": 173048,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 101,
+            "tag": "REALTIME_FAIL",
+            "fields": {
+              "reason": "qualification"
+            }
+          }
+        ]
+      },
+      "observed_failures": [
+        "integration",
+        "cohort",
+        "replay",
+        "producer_backlog_window",
+        "i2s_send_queue_overflow"
+      ],
+      "observed_zero_fault_counters": [
+        "event_queue_drops",
+        "write_errors",
+        "timeouts",
+        "partial",
+        "allocation_failures",
+        "stale_refs"
+      ],
+      "cohort_sample_is_steady_state_capacity_measurement": false
+    },
+    {
+      "mode": "off-peak",
+      "source_bundle_file": "off-peak-bundle.json",
+      "bundle_manifest": {
+        "schema": 2,
+        "source_commit": "1aeb2cf61df48f180f539ff560fd41d768179903",
+        "source_tree": "37d914a56261a2beb26c1431ed480012e2ef6d8d",
+        "source_dirty": false,
+        "tracked_inputs_match_head": true,
+        "build_inputs_match_head": true,
+        "owned_translation_units_match_head": true,
+        "profile": "physical",
+        "analysis": false,
+        "runtime_approved": false,
+        "physical_timing_approved": false,
+        "release_approved": false,
+        "flash_files": [
+          {
+            "offset": 0,
+            "bytes": 21120,
+            "sha256": "00f7a4f76e09c5fcfbb064fa39d09ed0085c66a0e2b789df530ea36239a2fde9",
+            "file": "images/000000-bootloader.bin"
+          },
+          {
+            "offset": 32768,
+            "bytes": 3072,
+            "sha256": "2aec9dcccef399dbf1cca831c5cc51fb6a810fa3a011b5d9b2fd165d70eef7e4",
+            "file": "images/008000-partition-table.bin"
+          },
+          {
+            "offset": 65536,
+            "bytes": 379168,
+            "sha256": "33706a11e0e1a852bd5133967ef941000ef01c3ee3a6106b843fb6b20c73d6be",
+            "file": "images/010000-esp32s3_gm_synth.bin"
+          },
+          {
+            "offset": 2162688,
+            "bytes": 5898214,
+            "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+            "file": "images/210000-bank.sf2"
+          }
+        ],
+        "configuration": {
+          "profile": "physical",
+          "compared_settings": {
+            "CONFIG_IDF_TARGET": "\"esp32s3\"",
+            "CONFIG_ESPTOOLPY_FLASHSIZE_16MB": "y",
+            "CONFIG_ESPTOOLPY_FLASHMODE_DIO": "y",
+            "CONFIG_ESPTOOLPY_FLASHFREQ_80M": "y",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_PERF": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE": "y",
+            "CONFIG_ESP_TASK_WDT_EN": "y",
+            "CONFIG_ESP_TASK_WDT_INIT": "y",
+            "CONFIG_ESP_TASK_WDT_TIMEOUT_S": "5",
+            "CONFIG_ESP_TASK_WDT_PANIC": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1": "y",
+            "CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15": "32767",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB": "12",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM": "8",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM": "64",
+            "CONFIG_PARTITION_TABLE_CUSTOM": "y",
+            "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME": "\"profiles/v1-loop-realtime/partitions.csv\"",
+            "CONFIG_SPIRAM": "y",
+            "CONFIG_SPIRAM_MODE_OCT": "y",
+            "CONFIG_SPIRAM_SPEED_80M": "y",
+            "CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND": "y",
+            "CONFIG_GM_SYNTH_PCM_ARENA_BYTES": "4718592",
+            "CONFIG_GM_SYNTH_I2S_QUAL_ENABLE": "y"
+          },
+          "physical_timing_approved": false
+        },
+        "output_mode": "peak",
+        "output_latency_frames": 64,
+        "channels": 2,
+        "max_zones": 16,
+        "listening_approved": false
+      },
+      "matches_previous_build_report": true,
+      "flash": {
+        "file": "off-peak-flash.log",
+        "hash_verification_lines": [
+          45,
+          53,
+          76,
+          417
+        ],
+        "four_images_written_and_verified": true,
+        "same_observed_board_across_cases": true,
+        "serial_port_and_device_identifier_omitted": true,
+        "fatal_error_markers": 0
+      },
+      "primary_capture": {
+        "file": "off-peak-run.log",
+        "start_line": 1,
+        "end_line": 102,
+        "capture_contains_start_and_terminal": true,
+        "app_main_returned": true,
+        "workload_complete": false,
+        "qualified": false,
+        "boot": {
+          "app_version": {
+            "line": 59,
+            "value": "1aeb2cf"
+          },
+          "elf_sha256_prefix": {
+            "line": 61,
+            "value": "501e4d7dc..."
+          },
+          "esp_idf": {
+            "line": 62,
+            "value": "v6.1"
+          },
+          "compile_time": {
+            "line": 60,
+            "value": "Oct 30 2026 18:06:42"
+          }
+        },
+        "telemetry": [
+          {
+            "line": 78,
+            "tag": "REALTIME_BEGIN",
+            "fields": {
+              "schema": 2,
+              "profile": "physical",
+              "analysis": 0,
+              "synthetic": 0,
+              "output_mode": "peak",
+              "channels": 2,
+              "root_application": 1,
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 79,
+            "tag": "REALTIME_OUTPUT_PROBE",
+            "fields": {
+              "cases": 1,
+              "input_frames": 64,
+              "bypass_raw_overload": 80,
+              "bypass_clipped": 80,
+              "peak_raw_overload": 80,
+              "peak_clipped": 0,
+              "raw_peak_abs": 2147483648,
+              "peak_peak_abs": 32766,
+              "peak_gain_min_q30": 16383,
+              "peak_limited_frames": 64,
+              "peak_latency_frames": 64,
+              "peak_output_frames": 128,
+              "first_zero": 1,
+              "pass": 1,
+              "physical_timing_approved": 0
+            }
+          },
+          {
+            "line": 80,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "before",
+              "internal_free": 375820,
+              "internal_largest": 311296,
+              "internal_min": 375820,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 81,
+            "tag": "REALTIME_READY",
+            "fields": {
+              "status": 1,
+              "session": 1,
+              "plans": 0,
+              "analyses": 0,
+              "channel1_plans": 0,
+              "channel1_analyses": 0,
+              "session_bytes": 169504,
+              "storage_bytes": 102448,
+              "storage_psram": 1,
+              "arena_capacity": 4718592
+            }
+          },
+          {
+            "line": 82,
+            "tag": "REALTIME_ASSET",
+            "fields": {
+              "bytes": 5898214,
+              "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+              "initial_program": 16,
+              "replacement_program": 1
+            }
+          },
+          {
+            "line": 83,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "ready",
+              "internal_free": 199532,
+              "internal_largest": 139264,
+              "internal_min": 199412,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 85,
+            "tag": "REALTIME_I2S_ARMED",
+            "fields": {
+              "sample_rate": 44100,
+              "frames": 64,
+              "dma_desc": 8,
+              "dma_frames": 64,
+              "dma_window_us": 11610,
+              "master_q15": 32767,
+              "dac_db": "-12",
+              "mono_avg_lr": 1,
+              "bclk": 1411200,
+              "mclk": 11289600,
+              "dma_bytes": 1024
+            }
+          },
+          {
+            "line": 87,
+            "tag": "REALTIME_ACTORS",
+            "fields": {
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 88,
+            "tag": "REALTIME_GATES",
+            "fields": {
+              "integration": "FAIL",
+              "cohort": "FAIL",
+              "replay": "FAIL",
+              "raw_headroom": "PASS",
+              "digital_headroom": "PASS"
+            }
+          },
+          {
+            "line": 89,
+            "tag": "REALTIME_RESULT",
+            "fields": {
+              "frames": 27392,
+              "blocks": 428,
+              "checksum": 15612554681887012546,
+              "events": 45,
+              "rejected": 0,
+              "clipped": 0,
+              "voices_peak": 24,
+              "loop_voices_peak": 0,
+              "program_switches": 2,
+              "blocks_during_prepare": 56
+            }
+          },
+          {
+            "line": 90,
+            "tag": "REALTIME_OUTPUT",
+            "fields": {
+              "mode": "peak",
+              "latency_frames": 64,
+              "raw_peak_abs": 15350,
+              "raw_overload_samples": 0,
+              "post_peak_abs": 15350,
+              "post_hard_clipped": 0,
+              "limited_frames": 0,
+              "gain_min_q30": 1073741824,
+              "input_frames": 27392,
+              "output_frames": 27392,
+              "drain_frames": 0,
+              "drain_wall_us": 0
+            }
+          },
+          {
+            "line": 91,
+            "tag": "REALTIME_REPLAY",
+            "fields": {
+              "name": "two-channel-phrase-v1",
+              "events": 0,
+              "definition_hash": 4354443756388215394,
+              "event_checksum": 14695981039346656037,
+              "first_frame": 0,
+              "second_frame": 0,
+              "cleanup_frame": 0,
+              "end_frame": 0,
+              "program_switches": 0,
+              "channel_mask": 0,
+              "loop_channel_mask": 0,
+              "concurrent_blocks": 0,
+              "prepare_with_other_loop": 0,
+              "voices_peak": 0,
+              "loop_voices_peak": 0,
+              "complete": 0
+            }
+          },
+          {
+            "line": 92,
+            "tag": "REALTIME_CONTROL",
+            "fields": {
+              "queued": 69,
+              "note_on": 28,
+              "note_off": 27,
+              "cc": 12,
+              "sustain": 4,
+              "program_change": 2,
+              "pitch_bend": 0,
+              "channel_pressure": 0,
+              "services": 56,
+              "prepared": 2,
+              "acknowledgements": 2,
+              "ack_failures": 0,
+              "io_reads": 1099,
+              "io_bytes": 187066,
+              "io_yields": 19,
+              "analysis_yields": 0
+            }
+          },
+          {
+            "line": 93,
+            "tag": "REALTIME_TIMING",
+            "fields": {
+              "startup_us": 1018710,
+              "hash_us": 896187,
+              "prepare_avg_us": 38912,
+              "prepare_max_us": 54139,
+              "render_avg_us": 733,
+              "render_p95_upper_us": 1039,
+              "render_p99_upper_us": 1935,
+              "render_max_us": 5315,
+              "quantile_bucket_us": 16,
+              "physical": 1
+            }
+          },
+          {
+            "line": 94,
+            "tag": "REALTIME_STAGES",
+            "fields": {
+              "read_us": 19926,
+              "read_max_us": 3777,
+              "analysis_us": 98,
+              "analysis_max_us": 32,
+              "analysis_calls": 4,
+              "read_excludes_yield": 1,
+              "analysis_includes_yield": 1
+            }
+          },
+          {
+            "line": 95,
+            "tag": "REALTIME_HEALTH",
+            "fields": {
+              "render_soft_overruns": 10,
+              "work_soft_overruns": 12,
+              "max_backlog_us": 12712,
+              "final_backlog_us": 12712,
+              "min_dma_margin_us": 0,
+              "exceeded": 1,
+              "stalls": 0,
+              "writes": 428,
+              "write_errors": 0,
+              "timeouts": 0,
+              "partial": 0,
+              "sent": 437,
+              "dma_queue_overflows": 2,
+              "event_queue_drops": 0,
+              "audio_stack": 5464,
+              "control_stack": 10580
+            }
+          },
+          {
+            "line": 96,
+            "tag": "REALTIME_COHORT",
+            "fields": {
+              "requested": 24,
+              "required": 1,
+              "blocks": 3,
+              "voices_min": 24,
+              "voices_max": 24,
+              "loops_min": 0,
+              "loops_max": 0,
+              "clipped": 0,
+              "raw_overload_samples": 0,
+              "render_avg_us": 4280,
+              "render_p95_upper_us": 4603,
+              "render_p99_upper_us": 4603,
+              "render_max_us": 4603,
+              "max_backlog_us": 8746,
+              "final_backlog_us": 8746,
+              "gate": "FAIL"
+            }
+          },
+          {
+            "line": 97,
+            "tag": "REALTIME_PCM",
+            "fields": {
+              "capacity": 4718592,
+              "high_water": 168348,
+              "used": 168348,
+              "allocation_failures": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 98,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "joined",
+              "internal_free": 199396,
+              "internal_largest": 131072,
+              "internal_min": 173048,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 99,
+            "tag": "REALTIME_STOP",
+            "fields": {
+              "started": 1,
+              "audio_stopped": 1,
+              "control_stopped": 1,
+              "releases": 1,
+              "mapped": 0,
+              "arena_live": 0,
+              "live_refs": 0,
+              "acquirers": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 100,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "stopped",
+              "internal_free": 375100,
+              "internal_largest": 180224,
+              "internal_min": 173048,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 101,
+            "tag": "REALTIME_FAIL",
+            "fields": {
+              "reason": "qualification"
+            }
+          }
+        ]
+      },
+      "observed_failures": [
+        "integration",
+        "cohort",
+        "replay",
+        "producer_backlog_window",
+        "i2s_send_queue_overflow"
+      ],
+      "observed_zero_fault_counters": [
+        "event_queue_drops",
+        "write_errors",
+        "timeouts",
+        "partial",
+        "allocation_failures",
+        "stale_refs"
+      ],
+      "cohort_sample_is_steady_state_capacity_measurement": false
+    },
+    {
+      "mode": "on-bypass",
+      "source_bundle_file": "on-bypass-bundle.json",
+      "bundle_manifest": {
+        "schema": 2,
+        "source_commit": "1aeb2cf61df48f180f539ff560fd41d768179903",
+        "source_tree": "37d914a56261a2beb26c1431ed480012e2ef6d8d",
+        "source_dirty": false,
+        "tracked_inputs_match_head": true,
+        "build_inputs_match_head": true,
+        "owned_translation_units_match_head": true,
+        "profile": "physical",
+        "analysis": true,
+        "runtime_approved": false,
+        "physical_timing_approved": false,
+        "release_approved": false,
+        "flash_files": [
+          {
+            "offset": 0,
+            "bytes": 21120,
+            "sha256": "3b913e6bd37feff805488bca767fb36b0bb30708862bd760085327998896bcbd",
+            "file": "images/000000-bootloader.bin"
+          },
+          {
+            "offset": 32768,
+            "bytes": 3072,
+            "sha256": "2aec9dcccef399dbf1cca831c5cc51fb6a810fa3a011b5d9b2fd165d70eef7e4",
+            "file": "images/008000-partition-table.bin"
+          },
+          {
+            "offset": 65536,
+            "bytes": 379200,
+            "sha256": "2f1eed61e166dba599b75bae2f07c3b19b3fdf77cc745085a518317a2fb611e1",
+            "file": "images/010000-esp32s3_gm_synth.bin"
+          },
+          {
+            "offset": 2162688,
+            "bytes": 5898214,
+            "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+            "file": "images/210000-bank.sf2"
+          }
+        ],
+        "configuration": {
+          "profile": "physical",
+          "compared_settings": {
+            "CONFIG_IDF_TARGET": "\"esp32s3\"",
+            "CONFIG_ESPTOOLPY_FLASHSIZE_16MB": "y",
+            "CONFIG_ESPTOOLPY_FLASHMODE_DIO": "y",
+            "CONFIG_ESPTOOLPY_FLASHFREQ_80M": "y",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_PERF": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE": "y",
+            "CONFIG_ESP_TASK_WDT_EN": "y",
+            "CONFIG_ESP_TASK_WDT_INIT": "y",
+            "CONFIG_ESP_TASK_WDT_TIMEOUT_S": "5",
+            "CONFIG_ESP_TASK_WDT_PANIC": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1": "y",
+            "CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15": "32767",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB": "12",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM": "8",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM": "64",
+            "CONFIG_PARTITION_TABLE_CUSTOM": "y",
+            "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME": "\"profiles/v1-loop-realtime/partitions.csv\"",
+            "CONFIG_SPIRAM": "y",
+            "CONFIG_SPIRAM_MODE_OCT": "y",
+            "CONFIG_SPIRAM_SPEED_80M": "y",
+            "CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND": "y",
+            "CONFIG_GM_SYNTH_PCM_ARENA_BYTES": "4718592",
+            "CONFIG_GM_SYNTH_I2S_QUAL_ENABLE": "y"
+          },
+          "physical_timing_approved": false
+        },
+        "output_mode": "bypass",
+        "output_latency_frames": 0,
+        "channels": 2,
+        "max_zones": 16,
+        "listening_approved": false
+      },
+      "matches_previous_build_report": true,
+      "flash": {
+        "file": "on-bypass-flash.log",
+        "hash_verification_lines": [
+          45,
+          53,
+          76,
+          417
+        ],
+        "four_images_written_and_verified": true,
+        "same_observed_board_across_cases": true,
+        "serial_port_and_device_identifier_omitted": true,
+        "fatal_error_markers": 0
+      },
+      "primary_capture": {
+        "file": "on-bypass-run.log",
+        "start_line": 1,
+        "end_line": 102,
+        "capture_contains_start_and_terminal": true,
+        "app_main_returned": true,
+        "workload_complete": false,
+        "qualified": false,
+        "boot": {
+          "app_version": {
+            "line": 59,
+            "value": "1aeb2cf"
+          },
+          "elf_sha256_prefix": {
+            "line": 61,
+            "value": "8e479273e..."
+          },
+          "esp_idf": {
+            "line": 62,
+            "value": "v6.1"
+          },
+          "compile_time": {
+            "line": 60,
+            "value": "Oct 30 2026 18:09:49"
+          }
+        },
+        "telemetry": [
+          {
+            "line": 78,
+            "tag": "REALTIME_BEGIN",
+            "fields": {
+              "schema": 2,
+              "profile": "physical",
+              "analysis": 1,
+              "synthetic": 0,
+              "output_mode": "bypass",
+              "channels": 2,
+              "root_application": 1,
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 79,
+            "tag": "REALTIME_OUTPUT_PROBE",
+            "fields": {
+              "cases": 1,
+              "input_frames": 64,
+              "bypass_raw_overload": 80,
+              "bypass_clipped": 80,
+              "peak_raw_overload": 80,
+              "peak_clipped": 0,
+              "raw_peak_abs": 2147483648,
+              "peak_peak_abs": 32766,
+              "peak_gain_min_q30": 16383,
+              "peak_limited_frames": 64,
+              "peak_latency_frames": 64,
+              "peak_output_frames": 128,
+              "first_zero": 1,
+              "pass": 1,
+              "physical_timing_approved": 0
+            }
+          },
+          {
+            "line": 80,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "before",
+              "internal_free": 375820,
+              "internal_largest": 311296,
+              "internal_min": 375820,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 81,
+            "tag": "REALTIME_READY",
+            "fields": {
+              "status": 1,
+              "session": 1,
+              "plans": 1,
+              "analyses": 1,
+              "channel1_plans": 1,
+              "channel1_analyses": 1,
+              "session_bytes": 169504,
+              "storage_bytes": 102448,
+              "storage_psram": 1,
+              "arena_capacity": 4718592
+            }
+          },
+          {
+            "line": 82,
+            "tag": "REALTIME_ASSET",
+            "fields": {
+              "bytes": 5898214,
+              "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+              "initial_program": 16,
+              "replacement_program": 1
+            }
+          },
+          {
+            "line": 83,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "ready",
+              "internal_free": 199532,
+              "internal_largest": 139264,
+              "internal_min": 199412,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 85,
+            "tag": "REALTIME_I2S_ARMED",
+            "fields": {
+              "sample_rate": 44100,
+              "frames": 64,
+              "dma_desc": 8,
+              "dma_frames": 64,
+              "dma_window_us": 11610,
+              "master_q15": 32767,
+              "dac_db": "-12",
+              "mono_avg_lr": 1,
+              "bclk": 1411200,
+              "mclk": 11289600,
+              "dma_bytes": 1024
+            }
+          },
+          {
+            "line": 87,
+            "tag": "REALTIME_ACTORS",
+            "fields": {
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 88,
+            "tag": "REALTIME_GATES",
+            "fields": {
+              "integration": "FAIL",
+              "cohort": "FAIL",
+              "replay": "FAIL",
+              "raw_headroom": "PASS",
+              "digital_headroom": "PASS"
+            }
+          },
+          {
+            "line": 89,
+            "tag": "REALTIME_RESULT",
+            "fields": {
+              "frames": 56064,
+              "blocks": 876,
+              "checksum": 1685441383737202161,
+              "events": 45,
+              "rejected": 0,
+              "clipped": 0,
+              "voices_peak": 24,
+              "loop_voices_peak": 24,
+              "program_switches": 2,
+              "blocks_during_prepare": 505
+            }
+          },
+          {
+            "line": 90,
+            "tag": "REALTIME_OUTPUT",
+            "fields": {
+              "mode": "bypass",
+              "latency_frames": 0,
+              "raw_peak_abs": 15350,
+              "raw_overload_samples": 0,
+              "post_peak_abs": 15350,
+              "post_hard_clipped": 0,
+              "limited_frames": 0,
+              "gain_min_q30": 1073741824,
+              "input_frames": 56064,
+              "output_frames": 56064,
+              "drain_frames": 0,
+              "drain_wall_us": 0
+            }
+          },
+          {
+            "line": 91,
+            "tag": "REALTIME_REPLAY",
+            "fields": {
+              "name": "two-channel-phrase-v1",
+              "events": 0,
+              "definition_hash": 4354443756388215394,
+              "event_checksum": 14695981039346656037,
+              "first_frame": 0,
+              "second_frame": 0,
+              "cleanup_frame": 0,
+              "end_frame": 0,
+              "program_switches": 0,
+              "channel_mask": 0,
+              "loop_channel_mask": 0,
+              "concurrent_blocks": 0,
+              "prepare_with_other_loop": 0,
+              "voices_peak": 0,
+              "loop_voices_peak": 0,
+              "complete": 0
+            }
+          },
+          {
+            "line": 92,
+            "tag": "REALTIME_CONTROL",
+            "fields": {
+              "queued": 69,
+              "note_on": 28,
+              "note_off": 27,
+              "cc": 12,
+              "sustain": 4,
+              "program_change": 2,
+              "pitch_bend": 0,
+              "channel_pressure": 0,
+              "services": 56,
+              "prepared": 2,
+              "acknowledgements": 2,
+              "ack_failures": 0,
+              "io_reads": 1102,
+              "io_bytes": 187204,
+              "io_yields": 19,
+              "analysis_yields": 27
+            }
+          },
+          {
+            "line": 93,
+            "tag": "REALTIME_TIMING",
+            "fields": {
+              "startup_us": 2217341,
+              "hash_us": 896022,
+              "prepare_avg_us": 362724,
+              "prepare_max_us": 671324,
+              "render_avg_us": 442,
+              "render_p95_upper_us": 895,
+              "render_p99_upper_us": 1375,
+              "render_max_us": 6111,
+              "quantile_bucket_us": 16,
+              "physical": 1
+            }
+          },
+          {
+            "line": 94,
+            "tag": "REALTIME_STAGES",
+            "fields": {
+              "read_us": 19258,
+              "read_max_us": 3559,
+              "analysis_us": 1845820,
+              "analysis_max_us": 647368,
+              "analysis_calls": 4,
+              "read_excludes_yield": 1,
+              "analysis_includes_yield": 1
+            }
+          },
+          {
+            "line": 95,
+            "tag": "REALTIME_HEALTH",
+            "fields": {
+              "render_soft_overruns": 6,
+              "work_soft_overruns": 10,
+              "max_backlog_us": 12334,
+              "final_backlog_us": 12334,
+              "min_dma_margin_us": 0,
+              "exceeded": 1,
+              "stalls": 0,
+              "writes": 876,
+              "write_errors": 0,
+              "timeouts": 0,
+              "partial": 0,
+              "sent": 884,
+              "dma_queue_overflows": 2,
+              "event_queue_drops": 0,
+              "audio_stack": 5592,
+              "control_stack": 10580
+            }
+          },
+          {
+            "line": 96,
+            "tag": "REALTIME_COHORT",
+            "fields": {
+              "requested": 24,
+              "required": 1,
+              "blocks": 2,
+              "voices_min": 24,
+              "voices_max": 24,
+              "loops_min": 24,
+              "loops_max": 24,
+              "clipped": 0,
+              "raw_overload_samples": 0,
+              "render_avg_us": 5152,
+              "render_p95_upper_us": 5201,
+              "render_p99_upper_us": 5201,
+              "render_max_us": 5201,
+              "max_backlog_us": 7587,
+              "final_backlog_us": 7587,
+              "gate": "FAIL"
+            }
+          },
+          {
+            "line": 97,
+            "tag": "REALTIME_PCM",
+            "fields": {
+              "capacity": 4718592,
+              "high_water": 168348,
+              "used": 168348,
+              "allocation_failures": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 98,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "joined",
+              "internal_free": 199396,
+              "internal_largest": 131072,
+              "internal_min": 173048,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 99,
+            "tag": "REALTIME_STOP",
+            "fields": {
+              "started": 1,
+              "audio_stopped": 1,
+              "control_stopped": 1,
+              "releases": 1,
+              "mapped": 0,
+              "arena_live": 0,
+              "live_refs": 0,
+              "acquirers": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 100,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "stopped",
+              "internal_free": 375100,
+              "internal_largest": 180224,
+              "internal_min": 173048,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 101,
+            "tag": "REALTIME_FAIL",
+            "fields": {
+              "reason": "qualification"
+            }
+          }
+        ]
+      },
+      "observed_failures": [
+        "integration",
+        "cohort",
+        "replay",
+        "producer_backlog_window",
+        "i2s_send_queue_overflow"
+      ],
+      "observed_zero_fault_counters": [
+        "event_queue_drops",
+        "write_errors",
+        "timeouts",
+        "partial",
+        "allocation_failures",
+        "stale_refs"
+      ],
+      "cohort_sample_is_steady_state_capacity_measurement": false
+    },
+    {
+      "mode": "on-peak",
+      "source_bundle_file": "on-peak-bundle.json",
+      "bundle_manifest": {
+        "schema": 2,
+        "source_commit": "1aeb2cf61df48f180f539ff560fd41d768179903",
+        "source_tree": "37d914a56261a2beb26c1431ed480012e2ef6d8d",
+        "source_dirty": false,
+        "tracked_inputs_match_head": true,
+        "build_inputs_match_head": true,
+        "owned_translation_units_match_head": true,
+        "profile": "physical",
+        "analysis": true,
+        "runtime_approved": false,
+        "physical_timing_approved": false,
+        "release_approved": false,
+        "flash_files": [
+          {
+            "offset": 0,
+            "bytes": 21120,
+            "sha256": "70bff8b581229c5fab914998759ff861e828cb6e1cc774cdce9a1f3a8a3ebb5e",
+            "file": "images/000000-bootloader.bin"
+          },
+          {
+            "offset": 32768,
+            "bytes": 3072,
+            "sha256": "2aec9dcccef399dbf1cca831c5cc51fb6a810fa3a011b5d9b2fd165d70eef7e4",
+            "file": "images/008000-partition-table.bin"
+          },
+          {
+            "offset": 65536,
+            "bytes": 379184,
+            "sha256": "6053b8708242a25ade5ca8e03d111f42921bb467b6e83ce997a25957afc0a052",
+            "file": "images/010000-esp32s3_gm_synth.bin"
+          },
+          {
+            "offset": 2162688,
+            "bytes": 5898214,
+            "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+            "file": "images/210000-bank.sf2"
+          }
+        ],
+        "configuration": {
+          "profile": "physical",
+          "compared_settings": {
+            "CONFIG_IDF_TARGET": "\"esp32s3\"",
+            "CONFIG_ESPTOOLPY_FLASHSIZE_16MB": "y",
+            "CONFIG_ESPTOOLPY_FLASHMODE_DIO": "y",
+            "CONFIG_ESPTOOLPY_FLASHFREQ_80M": "y",
+            "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_PERF": "y",
+            "CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE": "y",
+            "CONFIG_ESP_TASK_WDT_EN": "y",
+            "CONFIG_ESP_TASK_WDT_INIT": "y",
+            "CONFIG_ESP_TASK_WDT_TIMEOUT_S": "5",
+            "CONFIG_ESP_TASK_WDT_PANIC": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0": "y",
+            "CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1": "y",
+            "CONFIG_GM_SYNTH_I2S_QUAL_MASTER_GAIN_Q15": "32767",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DAC_ATTENUATION_DB": "12",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_DESC_NUM": "8",
+            "CONFIG_GM_SYNTH_I2S_QUAL_DMA_FRAME_NUM": "64",
+            "CONFIG_PARTITION_TABLE_CUSTOM": "y",
+            "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME": "\"profiles/v1-loop-realtime/partitions.csv\"",
+            "CONFIG_SPIRAM": "y",
+            "CONFIG_SPIRAM_MODE_OCT": "y",
+            "CONFIG_SPIRAM_SPEED_80M": "y",
+            "CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND": "y",
+            "CONFIG_GM_SYNTH_PCM_ARENA_BYTES": "4718592",
+            "CONFIG_GM_SYNTH_I2S_QUAL_ENABLE": "y"
+          },
+          "physical_timing_approved": false
+        },
+        "output_mode": "peak",
+        "output_latency_frames": 64,
+        "channels": 2,
+        "max_zones": 16,
+        "listening_approved": false
+      },
+      "matches_previous_build_report": true,
+      "flash": {
+        "file": "on-peak-flash.log",
+        "hash_verification_lines": [
+          45,
+          53,
+          76,
+          417
+        ],
+        "four_images_written_and_verified": true,
+        "same_observed_board_across_cases": true,
+        "serial_port_and_device_identifier_omitted": true,
+        "fatal_error_markers": 0
+      },
+      "primary_capture": {
+        "file": "on-peak-run.log",
+        "start_line": 1,
+        "end_line": 102,
+        "capture_contains_start_and_terminal": true,
+        "app_main_returned": true,
+        "workload_complete": false,
+        "qualified": false,
+        "boot": {
+          "app_version": {
+            "line": 59,
+            "value": "1aeb2cf"
+          },
+          "elf_sha256_prefix": {
+            "line": 61,
+            "value": "b6d1c8715..."
+          },
+          "esp_idf": {
+            "line": 62,
+            "value": "v6.1"
+          },
+          "compile_time": {
+            "line": 60,
+            "value": "Oct 30 2026 18:09:24"
+          }
+        },
+        "telemetry": [
+          {
+            "line": 78,
+            "tag": "REALTIME_BEGIN",
+            "fields": {
+              "schema": 2,
+              "profile": "physical",
+              "analysis": 1,
+              "synthetic": 0,
+              "output_mode": "peak",
+              "channels": 2,
+              "root_application": 1,
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 79,
+            "tag": "REALTIME_OUTPUT_PROBE",
+            "fields": {
+              "cases": 1,
+              "input_frames": 64,
+              "bypass_raw_overload": 80,
+              "bypass_clipped": 80,
+              "peak_raw_overload": 80,
+              "peak_clipped": 0,
+              "raw_peak_abs": 2147483648,
+              "peak_peak_abs": 32766,
+              "peak_gain_min_q30": 16383,
+              "peak_limited_frames": 64,
+              "peak_latency_frames": 64,
+              "peak_output_frames": 128,
+              "first_zero": 1,
+              "pass": 1,
+              "physical_timing_approved": 0
+            }
+          },
+          {
+            "line": 80,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "before",
+              "internal_free": 375820,
+              "internal_largest": 311296,
+              "internal_min": 375820,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 81,
+            "tag": "REALTIME_READY",
+            "fields": {
+              "status": 1,
+              "session": 1,
+              "plans": 1,
+              "analyses": 1,
+              "channel1_plans": 1,
+              "channel1_analyses": 1,
+              "session_bytes": 169504,
+              "storage_bytes": 102448,
+              "storage_psram": 1,
+              "arena_capacity": 4718592
+            }
+          },
+          {
+            "line": 82,
+            "tag": "REALTIME_ASSET",
+            "fields": {
+              "bytes": 5898214,
+              "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+              "initial_program": 16,
+              "replacement_program": 1
+            }
+          },
+          {
+            "line": 83,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "ready",
+              "internal_free": 199532,
+              "internal_largest": 139264,
+              "internal_min": 199412,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 85,
+            "tag": "REALTIME_I2S_ARMED",
+            "fields": {
+              "sample_rate": 44100,
+              "frames": 64,
+              "dma_desc": 8,
+              "dma_frames": 64,
+              "dma_window_us": 11610,
+              "master_q15": 32767,
+              "dac_db": "-12",
+              "mono_avg_lr": 1,
+              "bclk": 1411200,
+              "mclk": 11289600,
+              "dma_bytes": 1024
+            }
+          },
+          {
+            "line": 87,
+            "tag": "REALTIME_ACTORS",
+            "fields": {
+              "control_core": 0,
+              "audio_core": 1
+            }
+          },
+          {
+            "line": 88,
+            "tag": "REALTIME_GATES",
+            "fields": {
+              "integration": "FAIL",
+              "cohort": "FAIL",
+              "replay": "FAIL",
+              "raw_headroom": "PASS",
+              "digital_headroom": "PASS"
+            }
+          },
+          {
+            "line": 89,
+            "tag": "REALTIME_RESULT",
+            "fields": {
+              "frames": 56960,
+              "blocks": 890,
+              "checksum": 17826606708089461881,
+              "events": 45,
+              "rejected": 0,
+              "clipped": 0,
+              "voices_peak": 24,
+              "loop_voices_peak": 24,
+              "program_switches": 2,
+              "blocks_during_prepare": 519
+            }
+          },
+          {
+            "line": 90,
+            "tag": "REALTIME_OUTPUT",
+            "fields": {
+              "mode": "peak",
+              "latency_frames": 64,
+              "raw_peak_abs": 15350,
+              "raw_overload_samples": 0,
+              "post_peak_abs": 15350,
+              "post_hard_clipped": 0,
+              "limited_frames": 0,
+              "gain_min_q30": 1073741824,
+              "input_frames": 56960,
+              "output_frames": 56960,
+              "drain_frames": 0,
+              "drain_wall_us": 0
+            }
+          },
+          {
+            "line": 91,
+            "tag": "REALTIME_REPLAY",
+            "fields": {
+              "name": "two-channel-phrase-v1",
+              "events": 0,
+              "definition_hash": 4354443756388215394,
+              "event_checksum": 14695981039346656037,
+              "first_frame": 0,
+              "second_frame": 0,
+              "cleanup_frame": 0,
+              "end_frame": 0,
+              "program_switches": 0,
+              "channel_mask": 0,
+              "loop_channel_mask": 0,
+              "concurrent_blocks": 0,
+              "prepare_with_other_loop": 0,
+              "voices_peak": 0,
+              "loop_voices_peak": 0,
+              "complete": 0
+            }
+          },
+          {
+            "line": 92,
+            "tag": "REALTIME_CONTROL",
+            "fields": {
+              "queued": 69,
+              "note_on": 28,
+              "note_off": 27,
+              "cc": 12,
+              "sustain": 4,
+              "program_change": 2,
+              "pitch_bend": 0,
+              "channel_pressure": 0,
+              "services": 56,
+              "prepared": 2,
+              "acknowledgements": 2,
+              "ack_failures": 0,
+              "io_reads": 1102,
+              "io_bytes": 187204,
+              "io_yields": 19,
+              "analysis_yields": 27
+            }
+          },
+          {
+            "line": 93,
+            "tag": "REALTIME_TIMING",
+            "fields": {
+              "startup_us": 2217520,
+              "hash_us": 896210,
+              "prepare_avg_us": 372863,
+              "prepare_max_us": 691325,
+              "render_avg_us": 532,
+              "render_p95_upper_us": 1007,
+              "render_p99_upper_us": 1535,
+              "render_max_us": 6004,
+              "quantile_bucket_us": 16,
+              "physical": 1
+            }
+          },
+          {
+            "line": 94,
+            "tag": "REALTIME_STAGES",
+            "fields": {
+              "read_us": 20262,
+              "read_max_us": 3707,
+              "analysis_us": 1865964,
+              "analysis_max_us": 667469,
+              "analysis_calls": 4,
+              "read_excludes_yield": 1,
+              "analysis_includes_yield": 1
+            }
+          },
+          {
+            "line": 95,
+            "tag": "REALTIME_HEALTH",
+            "fields": {
+              "render_soft_overruns": 10,
+              "work_soft_overruns": 12,
+              "max_backlog_us": 12498,
+              "final_backlog_us": 12498,
+              "min_dma_margin_us": 0,
+              "exceeded": 1,
+              "stalls": 0,
+              "writes": 890,
+              "write_errors": 0,
+              "timeouts": 0,
+              "partial": 0,
+              "sent": 898,
+              "dma_queue_overflows": 2,
+              "event_queue_drops": 0,
+              "audio_stack": 5400,
+              "control_stack": 10580
+            }
+          },
+          {
+            "line": 96,
+            "tag": "REALTIME_COHORT",
+            "fields": {
+              "requested": 24,
+              "required": 1,
+              "blocks": 2,
+              "voices_min": 24,
+              "voices_max": 24,
+              "loops_min": 24,
+              "loops_max": 24,
+              "clipped": 0,
+              "raw_overload_samples": 0,
+              "render_avg_us": 5265,
+              "render_p95_upper_us": 5315,
+              "render_p99_upper_us": 5315,
+              "render_max_us": 5315,
+              "max_backlog_us": 7836,
+              "final_backlog_us": 7836,
+              "gate": "FAIL"
+            }
+          },
+          {
+            "line": 97,
+            "tag": "REALTIME_PCM",
+            "fields": {
+              "capacity": 4718592,
+              "high_water": 168348,
+              "used": 168348,
+              "allocation_failures": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 98,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "joined",
+              "internal_free": 199396,
+              "internal_largest": 131072,
+              "internal_min": 173048,
+              "psram_free": 3563108,
+              "psram_largest": 3538944
+            }
+          },
+          {
+            "line": 99,
+            "tag": "REALTIME_STOP",
+            "fields": {
+              "started": 1,
+              "audio_stopped": 1,
+              "control_stopped": 1,
+              "releases": 1,
+              "mapped": 0,
+              "arena_live": 0,
+              "live_refs": 0,
+              "acquirers": 0,
+              "stale_refs": 0
+            }
+          },
+          {
+            "line": 100,
+            "tag": "REALTIME_MEMORY",
+            "fields": {
+              "phase": "stopped",
+              "internal_free": 375100,
+              "internal_largest": 180224,
+              "internal_min": 173048,
+              "psram_free": 8386156,
+              "psram_largest": 8257536
+            }
+          },
+          {
+            "line": 101,
+            "tag": "REALTIME_FAIL",
+            "fields": {
+              "reason": "qualification"
+            }
+          }
+        ]
+      },
+      "observed_failures": [
+        "integration",
+        "cohort",
+        "replay",
+        "producer_backlog_window",
+        "i2s_send_queue_overflow"
+      ],
+      "observed_zero_fault_counters": [
+        "event_queue_drops",
+        "write_errors",
+        "timeouts",
+        "partial",
+        "allocation_failures",
+        "stale_refs"
+      ],
+      "cohort_sample_is_steady_state_capacity_measurement": false
+    }
+  ],
+  "additional_partial_capture": {
+    "file": "on-peak-run.log",
+    "disconnect_line": 103,
+    "waiting_for_reconnect_line": 104,
+    "disconnect_message": "read failed: [Errno 6] Device not configured",
+    "start_line": 105,
+    "end_line": 126,
+    "capture_contains_start_and_terminal": false,
+    "missing_start_records": [
+      "boot identity",
+      "REALTIME_BEGIN",
+      "REALTIME_OUTPUT_PROBE",
+      "REALTIME_MEMORY phase=before"
+    ],
+    "attribution": "Separate partial segment after monitor reconnect; do not merge into the primary capture or count as another independently identified complete run.",
+    "app_main_returned": true,
+    "workload_complete": false,
+    "qualified": false,
+    "telemetry": [
+      {
+        "line": 105,
+        "tag": "REALTIME_READY",
+        "fields": {
+          "status": 1,
+          "session": 1,
+          "plans": 1,
+          "analyses": 1,
+          "channel1_plans": 1,
+          "channel1_analyses": 1,
+          "session_bytes": 169504,
+          "storage_bytes": 102448,
+          "storage_psram": 1,
+          "arena_capacity": 4718592
+        }
+      },
+      {
+        "line": 106,
+        "tag": "REALTIME_ASSET",
+        "fields": {
+          "bytes": 5898214,
+          "sha256": "9650eb1c2202e2d92aa3be155e4e895cf6531a241c8ea413fc09e7f9159d4a62",
+          "initial_program": 16,
+          "replacement_program": 1
+        }
+      },
+      {
+        "line": 107,
+        "tag": "REALTIME_MEMORY",
+        "fields": {
+          "phase": "ready",
+          "internal_free": 199532,
+          "internal_largest": 139264,
+          "internal_min": 199412,
+          "psram_free": 3563108,
+          "psram_largest": 3538944
+        }
+      },
+      {
+        "line": 109,
+        "tag": "REALTIME_I2S_ARMED",
+        "fields": {
+          "sample_rate": 44100,
+          "frames": 64,
+          "dma_desc": 8,
+          "dma_frames": 64,
+          "dma_window_us": 11610,
+          "master_q15": 32767,
+          "dac_db": "-12",
+          "mono_avg_lr": 1,
+          "bclk": 1411200,
+          "mclk": 11289600,
+          "dma_bytes": 1024
+        }
+      },
+      {
+        "line": 111,
+        "tag": "REALTIME_ACTORS",
+        "fields": {
+          "control_core": 0,
+          "audio_core": 1
+        }
+      },
+      {
+        "line": 112,
+        "tag": "REALTIME_GATES",
+        "fields": {
+          "integration": "FAIL",
+          "cohort": "FAIL",
+          "replay": "FAIL",
+          "raw_headroom": "PASS",
+          "digital_headroom": "PASS"
+        }
+      },
+      {
+        "line": 113,
+        "tag": "REALTIME_RESULT",
+        "fields": {
+          "frames": 56960,
+          "blocks": 890,
+          "checksum": 17826606708089461881,
+          "events": 45,
+          "rejected": 0,
+          "clipped": 0,
+          "voices_peak": 24,
+          "loop_voices_peak": 24,
+          "program_switches": 2,
+          "blocks_during_prepare": 519
+        }
+      },
+      {
+        "line": 114,
+        "tag": "REALTIME_OUTPUT",
+        "fields": {
+          "mode": "peak",
+          "latency_frames": 64,
+          "raw_peak_abs": 15350,
+          "raw_overload_samples": 0,
+          "post_peak_abs": 15350,
+          "post_hard_clipped": 0,
+          "limited_frames": 0,
+          "gain_min_q30": 1073741824,
+          "input_frames": 56960,
+          "output_frames": 56960,
+          "drain_frames": 0,
+          "drain_wall_us": 0
+        }
+      },
+      {
+        "line": 115,
+        "tag": "REALTIME_REPLAY",
+        "fields": {
+          "name": "two-channel-phrase-v1",
+          "events": 0,
+          "definition_hash": 4354443756388215394,
+          "event_checksum": 14695981039346656037,
+          "first_frame": 0,
+          "second_frame": 0,
+          "cleanup_frame": 0,
+          "end_frame": 0,
+          "program_switches": 0,
+          "channel_mask": 0,
+          "loop_channel_mask": 0,
+          "concurrent_blocks": 0,
+          "prepare_with_other_loop": 0,
+          "voices_peak": 0,
+          "loop_voices_peak": 0,
+          "complete": 0
+        }
+      },
+      {
+        "line": 116,
+        "tag": "REALTIME_CONTROL",
+        "fields": {
+          "queued": 69,
+          "note_on": 28,
+          "note_off": 27,
+          "cc": 12,
+          "sustain": 4,
+          "program_change": 2,
+          "pitch_bend": 0,
+          "channel_pressure": 0,
+          "services": 56,
+          "prepared": 2,
+          "acknowledgements": 2,
+          "ack_failures": 0,
+          "io_reads": 1102,
+          "io_bytes": 187204,
+          "io_yields": 19,
+          "analysis_yields": 27
+        }
+      },
+      {
+        "line": 117,
+        "tag": "REALTIME_TIMING",
+        "fields": {
+          "startup_us": 2217026,
+          "hash_us": 895718,
+          "prepare_avg_us": 372863,
+          "prepare_max_us": 691326,
+          "render_avg_us": 530,
+          "render_p95_upper_us": 1007,
+          "render_p99_upper_us": 1535,
+          "render_max_us": 6011,
+          "quantile_bucket_us": 16,
+          "physical": 1
+        }
+      },
+      {
+        "line": 118,
+        "tag": "REALTIME_STAGES",
+        "fields": {
+          "read_us": 20269,
+          "read_max_us": 3708,
+          "analysis_us": 1865963,
+          "analysis_max_us": 667469,
+          "analysis_calls": 4,
+          "read_excludes_yield": 1,
+          "analysis_includes_yield": 1
+        }
+      },
+      {
+        "line": 119,
+        "tag": "REALTIME_HEALTH",
+        "fields": {
+          "render_soft_overruns": 10,
+          "work_soft_overruns": 12,
+          "max_backlog_us": 12506,
+          "final_backlog_us": 12506,
+          "min_dma_margin_us": 0,
+          "exceeded": 1,
+          "stalls": 0,
+          "writes": 890,
+          "write_errors": 0,
+          "timeouts": 0,
+          "partial": 0,
+          "sent": 898,
+          "dma_queue_overflows": 2,
+          "event_queue_drops": 0,
+          "audio_stack": 5448,
+          "control_stack": 10580
+        }
+      },
+      {
+        "line": 120,
+        "tag": "REALTIME_COHORT",
+        "fields": {
+          "requested": 24,
+          "required": 1,
+          "blocks": 2,
+          "voices_min": 24,
+          "voices_max": 24,
+          "loops_min": 24,
+          "loops_max": 24,
+          "clipped": 0,
+          "raw_overload_samples": 0,
+          "render_avg_us": 5265,
+          "render_p95_upper_us": 5305,
+          "render_p99_upper_us": 5305,
+          "render_max_us": 5305,
+          "max_backlog_us": 7839,
+          "final_backlog_us": 7839,
+          "gate": "FAIL"
+        }
+      },
+      {
+        "line": 121,
+        "tag": "REALTIME_PCM",
+        "fields": {
+          "capacity": 4718592,
+          "high_water": 168348,
+          "used": 168348,
+          "allocation_failures": 0,
+          "stale_refs": 0
+        }
+      },
+      {
+        "line": 122,
+        "tag": "REALTIME_MEMORY",
+        "fields": {
+          "phase": "joined",
+          "internal_free": 199396,
+          "internal_largest": 131072,
+          "internal_min": 173048,
+          "psram_free": 3563108,
+          "psram_largest": 3538944
+        }
+      },
+      {
+        "line": 123,
+        "tag": "REALTIME_STOP",
+        "fields": {
+          "started": 1,
+          "audio_stopped": 1,
+          "control_stopped": 1,
+          "releases": 1,
+          "mapped": 0,
+          "arena_live": 0,
+          "live_refs": 0,
+          "acquirers": 0,
+          "stale_refs": 0
+        }
+      },
+      {
+        "line": 124,
+        "tag": "REALTIME_MEMORY",
+        "fields": {
+          "phase": "stopped",
+          "internal_free": 375100,
+          "internal_largest": 180224,
+          "internal_min": 173048,
+          "psram_free": 8386156,
+          "psram_largest": 8257536
+        }
+      },
+      {
+        "line": 125,
+        "tag": "REALTIME_FAIL",
+        "fields": {
+          "reason": "qualification"
+        }
+      }
+    ]
+  }
+}

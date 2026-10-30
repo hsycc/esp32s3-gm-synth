@@ -394,6 +394,13 @@ private:
     void beginRelease(std::uint32_t release_frames, FastReleaseKind fast_release_kind);
     void finish();
 
+    // BEGIN V1_REALTIME_FAST_PATH
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    VoiceRenderResult renderAddStaticRealtime(
+        std::int32_t* interleaved_stereo, std::size_t frame_count);
+    void advanceStaticVibrato(std::size_t frame_count);
+#endif
+    // END V1_REALTIME_FAST_PATH
     sample::PublishedSampleDirectory* directory_ = nullptr;
     sample::PublishedVoiceRef ref_{};
     VoiceStartParams params_{};

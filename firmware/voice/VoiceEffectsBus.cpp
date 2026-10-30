@@ -123,6 +123,230 @@ std::uint64_t wrapContinuousPhase(
 
 }  // namespace
 
+// BEGIN V1_REALTIME_FAST_PATH
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+namespace {
+
+// Exact floor(amplitude * position / total), then one-unit position steps.
+// The initial division is once per envelope segment, never once per sample.
+// A rare long-envelope numerator retains the wide divide at segment setup.
+// Remainder updates avoid overflowing uint32 even when total is UINT32_MAX.
+struct StaticEnvelopeRamp {
+    std::uint32_t value = 0, remainder = 0, whole_step = 0, remainder_step = 0;
+    std::uint32_t total = 1;
+    void start(std::uint32_t amplitude, std::uint32_t position, std::uint32_t divisor) {
+        total = divisor;
+        const std::uint64_t numerator = std::uint64_t{amplitude} * position;
+        value = static_cast<std::uint32_t>(numerator <= UINT32_MAX
+            ? static_cast<std::uint32_t>(numerator) / total : numerator / total);
+        remainder = static_cast<std::uint32_t>(numerator - std::uint64_t{value} * total);
+        whole_step = amplitude / total;
+        remainder_step = amplitude - whole_step * total;
+    }
+    void rise() {
+        value += whole_step;
+        if (remainder >= total - remainder_step) {
+            ++value;
+            remainder -= total - remainder_step;
+        } else {
+            remainder += remainder_step;
+        }
+    }
+    void fall() {
+        value -= whole_step;
+        if (remainder < remainder_step) {
+            --value;
+            remainder = total - (remainder_step - remainder);
+        } else {
+            remainder -= remainder_step;
+        }
+    }
+};
+
+std::int32_t staticFilterRoundQ24(std::int64_t value) {
+    constexpr std::int64_t round = std::int64_t{1} << (kFilterCoefficientFractionBits - 1u);
+    const std::int64_t rounded = value >= 0
+        ? (value + round) >> kFilterCoefficientFractionBits
+        : -(((-value) + round) >> kFilterCoefficientFractionBits);
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(rounded,
+        std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::max()));
+}
+
+}  // namespace
+
+void Voice::advanceStaticVibrato(std::size_t frames) {
+    // A zero-depth oscillator is inaudible now, but its phase and control tick
+    // must still match the reference when a later CC1/pressure event adds depth.
+    if (!params_.vibrato_lfo.enabled || frames == 0) return;
+    if (frames <= vibrato_delay_remaining_) {
+        vibrato_delay_remaining_ -= static_cast<std::uint32_t>(frames);
+        if (vibrato_delay_remaining_ == 0) vibrato_control_frames_remaining_ = 0;
+        return;
+    }
+    if (vibrato_delay_remaining_) {
+        frames -= vibrato_delay_remaining_;
+        vibrato_delay_remaining_ = 0;
+        vibrato_control_frames_remaining_ = 0;
+    }
+    vibrato_phase_q32_ += params_.vibrato_lfo.phase_step_q32 * static_cast<std::uint32_t>(frames);
+    if (frames < vibrato_control_frames_remaining_) {
+        vibrato_control_frames_remaining_ -= static_cast<std::uint8_t>(frames);
+    } else {
+        const auto after_tick = (frames - vibrato_control_frames_remaining_) %
+            kRealtimeModulationControlFrames;
+        vibrato_control_frames_remaining_ = static_cast<std::uint8_t>(
+            (kRealtimeModulationControlFrames - after_tick) % kRealtimeModulationControlFrames);
+    }
+}
+
+VoiceRenderResult Voice::renderAddStaticRealtime(
+    std::int32_t* interleaved_stereo, std::size_t frame_count) {
+    const auto region_start = playbackStartFrame();
+    const auto end_frame = playbackEndFrame();
+    const auto loop_start = playbackLoopStartFrame();
+    const auto loop_end = playbackLoopEndFrame();
+    if (!(region_start <= loop_start && loop_start < loop_end && loop_end <= end_frame))
+        return renderAdd(interleaved_stereo, frame_count);
+    const auto* const pcm = ref_.record->pcm;
+    const auto loop_start_q32 = std::uint64_t{loop_start} << 32;
+    const auto loop_end_q32 = std::uint64_t{loop_end} << 32;
+    const auto loop_length = loop_end - loop_start;
+    const auto step = current_phase_increment_q32_;
+    const auto filter = current_lowpass_;
+    auto z1 = lowpass_z1_q24_, z2 = lowpass_z2_q24_;
+    auto phase = phase_q32_;
+    VoiceRenderResult result{};
+    if (loop_execution_enabled_ && !loop_cursor_.setStep(step)) {
+        finish(); result.finished = true; return result;
+    }
+
+    while (result.frames_rendered < frame_count && active_) {
+        const auto stage = envelope_stage_;
+        std::uint32_t total = 0;
+        std::int32_t constant_envelope = 0;
+        StaticEnvelopeRamp ramp;
+        switch (stage) {
+            case EnvelopeStage::Delay: total = params_.envelope.delay_frames; break;
+            case EnvelopeStage::Attack: total = params_.envelope.attack_frames; break;
+            case EnvelopeStage::Hold:
+                total = params_.envelope.hold_frames; constant_envelope = kQ15Unity; break;
+            case EnvelopeStage::Decay: total = params_.envelope.decay_frames; break;
+            case EnvelopeStage::Sustain: constant_envelope = params_.envelope.sustain_q15; break;
+            case EnvelopeStage::Release: total = active_release_frames_; break;
+            case EnvelopeStage::Done: finish(); break;
+        }
+        if (!active_) break;
+        // Normally unreachable: all zero-duration transitions skip these stages.
+        // Preserve the reference's defensive behavior rather than dividing by 0.
+        if (stage != EnvelopeStage::Sustain && (total == 0 || envelope_stage_frame_ >= total)) {
+            phase_q32_ = phase; lowpass_z1_q24_ = z1; lowpass_z2_q24_ = z2;
+            advanceStaticVibrato(result.frames_rendered);
+            const auto rest = renderAdd(interleaved_stereo + result.frames_rendered * kChannels,
+                                        frame_count - result.frames_rendered);
+            result.frames_rendered += rest.frames_rendered;
+            result.finished = rest.finished;
+            return result;
+        }
+        const auto chunk = stage == EnvelopeStage::Sustain
+            ? frame_count - result.frames_rendered
+            : std::min<std::size_t>(frame_count - result.frames_rendered, total - envelope_stage_frame_);
+        const bool attack = stage == EnvelopeStage::Attack;
+        const bool decay = stage == EnvelopeStage::Decay;
+        const bool release = stage == EnvelopeStage::Release;
+        const bool varying = attack || decay || release;
+        if (attack) ramp.start(kQ15Unity, envelope_stage_frame_ + 1u, total);
+        if (decay) ramp.start(kQ15Unity - params_.envelope.sustain_q15, envelope_stage_frame_ + 1u, total);
+        if (release) ramp.start(static_cast<std::uint32_t>(release_start_level_q15_),
+                                total - envelope_stage_frame_, total);
+        const auto constant_left = multiplyQ15(current_gain_left_q15_, constant_envelope);
+        const auto constant_right = multiplyQ15(current_gain_right_q15_, constant_envelope);
+        const bool shared_gain = current_gain_left_q15_ == current_gain_right_q15_;
+        std::size_t rendered = 0;
+        for (; rendered < chunk; ++rendered) {
+            if ((phase >> 32) >= end_frame) { finish(); break; }
+            const auto envelope = varying
+                ? static_cast<std::int32_t>(decay ? kQ15Unity - ramp.value : ramp.value)
+                : constant_envelope;
+            // The reference suppresses a terminal zero-valued release frame.
+            if (release && envelope_stage_frame_ + rendered + 1u == total && envelope <= 0) {
+                finish(); break;
+            }
+            std::int32_t source = 0;
+            if (loop_execution_enabled_) {
+                std::int16_t raw = 0;
+                if (!loop_cursor_.next(raw)) { finish(); break; }
+                source = raw;
+            } else {
+                const auto index = static_cast<std::uint32_t>(phase >> 32);
+                auto next_index = index + 1u;
+                if (index >= loop_start && next_index >= loop_end) next_index = loop_start;
+                else if (next_index >= end_frame) next_index = end_frame - 1u;
+                const std::int32_t a = pcm[index], b = pcm[next_index];
+                source = static_cast<std::int32_t>(std::int64_t{a} +
+                    ((std::int64_t{b - a} * static_cast<std::uint32_t>(phase)) >> 32));
+            }
+            auto mono = source;
+            if (filter.enabled) {
+                const std::int64_t input_a0 = std::int64_t{source} * filter.a0_q24;
+                mono = staticFilterRoundQ24(input_a0 + z1);
+                z1 = std::int64_t{source} * filter.a1_q24 + z2 - std::int64_t{mono} * filter.b1_q24;
+                z2 = input_a0 - std::int64_t{mono} * filter.b2_q24;
+            }
+            const auto left_gain = varying ? multiplyQ15(current_gain_left_q15_, envelope) : constant_left;
+            const auto left = scaleSampleQ15Wide(mono, left_gain);
+            const auto at = (result.frames_rendered + rendered) * kChannels;
+            interleaved_stereo[at] += left;
+            interleaved_stereo[at + 1u] += shared_gain ? left : scaleSampleQ15Wide(mono,
+                varying ? multiplyQ15(current_gain_right_q15_, envelope) : constant_right);
+            envelope_level_q15_ = envelope;
+            if (loop_execution_enabled_) {
+                phase = loop_cursor_.phaseQ32();
+                if (!loop_cursor_.active()) { ++rendered; finish(); break; }
+            } else {
+                phase += step;
+                phase = wrapContinuousPhase(phase, loop_start_q32, loop_end_q32, loop_length);
+            }
+            if (varying && rendered + 1u < chunk) {
+                if (release) ramp.fall(); else ramp.rise();
+            }
+        }
+        result.frames_rendered += rendered;
+        if (!active_) break;
+        if (stage == EnvelopeStage::Sustain) continue;
+        envelope_stage_frame_ += static_cast<std::uint32_t>(rendered);
+        if (envelope_stage_frame_ < total) continue;
+        envelope_stage_frame_ = 0;
+        switch (stage) {
+            case EnvelopeStage::Delay:
+                envelope_stage_ = params_.envelope.attack_frames ? EnvelopeStage::Attack :
+                    params_.envelope.hold_frames ? EnvelopeStage::Hold :
+                    params_.envelope.decay_frames ? EnvelopeStage::Decay : EnvelopeStage::Sustain;
+                break;
+            case EnvelopeStage::Attack:
+                envelope_level_q15_ = kQ15Unity;
+                envelope_stage_ = params_.envelope.hold_frames ? EnvelopeStage::Hold :
+                    params_.envelope.decay_frames ? EnvelopeStage::Decay : EnvelopeStage::Sustain;
+                break;
+            case EnvelopeStage::Hold:
+                envelope_stage_ = params_.envelope.decay_frames ? EnvelopeStage::Decay : EnvelopeStage::Sustain;
+                break;
+            case EnvelopeStage::Decay:
+                envelope_level_q15_ = params_.envelope.sustain_q15;
+                envelope_stage_ = EnvelopeStage::Sustain;
+                break;
+            case EnvelopeStage::Release: finish(); break;
+            default: break;
+        }
+    }
+    if (active_) {
+        phase_q32_ = phase; lowpass_z1_q24_ = z1; lowpass_z2_q24_ = z2;
+        advanceStaticVibrato(result.frames_rendered);
+    }
+    result.finished = !active_;
+    return result;
+}
+#endif
+// END V1_REALTIME_FAST_PATH
 VoiceRenderResult Voice::renderAddRealtime(
     std::int32_t* interleaved_stereo,
     std::size_t frame_count) {
@@ -132,6 +356,18 @@ VoiceRenderResult Voice::renderAddRealtime(
         return result;
     }
 
+    // BEGIN V1_REALTIME_FAST_PATH
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Static filter/gain/pitch is common in real SF2 playback even when a
+    // zero-depth vibrato oscillator is armed for later controller changes.
+    if ((loop_execution_enabled_ || current_lowpass_.enabled || params_.vibrato_lfo.enabled) &&
+        params_.loop_mode == LoopMode::Continuous && ref_.valid() && ref_.record->pcm &&
+        !params_.mod_lfo.enabled && !params_.mod_envelope.enabled &&
+        !params_.dynamic_lowpass_table.enabled &&
+        (!params_.vibrato_lfo.enabled || params_.vibrato_lfo.pitch_depth_cents == 0))
+        return renderAddStaticRealtime(interleaved_stereo, frame_count);
+#endif
+    // END V1_REALTIME_FAST_PATH
 #if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
     // Correctness-first opt-in path. Existing fast paths stay untouched for
     // Direct voices; crossfade voices reuse reference DSP and event ordering.

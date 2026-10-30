@@ -1,7 +1,8 @@
 # V1 source integration and release closeout
 
 Status: **M0–M8 and optional serial/concurrent Loop integration merged to main;
-concurrent Loop hardware/audible gates open; V1 NOT RELEASED**.
+concurrent Loop hardware gate FAILED in its first consolidated run,
+audible gates open; V1 NOT RELEASED**.
 
 ## Verified evidence
 
@@ -11,6 +12,7 @@ concurrent Loop hardware/audible gates open; V1 NOT RELEASED**.
 - The tested banner was `bb31908-dirty`. The user explicitly confirmed local modifications do not affect the qualification outcome and accepted this for the integration decision. Preserve the original banner and evidence; do not claim byte-for-byte identity with a clean CI-built ELF.
 - PRs #19–#24 subsequently merged into main. PR #25 merged with full history as `51dc57d42057e9c23d3cf593717f56cc3841c92e`, after live review of unchanged head `5502e974` / base `6146cc34`: 17/17 workflows and 25/25 check runs SUCCESS, no review submissions or unresolved threads. Its accepted QEMU artifacts cover serial on/off startup, not concurrent I2S or physical performance.
 - PR #26 merged with history as `4b097e8bd65e86893e343943342b51e42377c03d`, after final head `5d02b4b` passed 12 workflows / 24 checks and all five artifacts were downloaded and verified. Both QEMU execution JSONs reconstructed identically. Its main push triggered two successful workflows (`40641662730`, `40641662879`). Physical bundles were built, not executed on a board.
+- User hardware batch at `1aeb2cf` / tree `37d914a` (2026-10-30): four matching clean local builds, four complete verified flash operations, and four complete physical runs. Every run failed realtime qualification after only 2–3 held-cohort blocks; observed average render was 4,188–5,265 us against the unchanged 1,451-us budget, with exhausted DMA backlog and active send-queue overflows. On reached 24 actual Loop Voices. Replay had not started and full-scene headroom/listening were not qualified. The extra on-peak reconnect fragment remains incomplete, not a fifth qualified run. See `benchmarks/V1_LOOP_REALTIME_PHYSICAL_2026-10-30.md` for the immutable evidence identity and limits. This does not invalidate or replace the accepted `bb31908-dirty` baseline.
 
 ## Main integration gate — completed
 
@@ -25,7 +27,7 @@ the default ESP-IDF run is `40636633886`.
 ## Remaining V1 release gates
 
 - **Audible:** document representative piano/sustain, drums, reverb/chorus, CC21 and sample-loop playback on physical hardware. Use `docs/V1_AUDIBLE_ACCEPTANCE.md`. Items without observations remain NOT RUN.
-- **Concurrent Loop hardware:** qualify actual control/audio overlap, internal RAM/largest block, unchanged 4.5 MiB PCM capacity, Prepare/hash/load/analyze latency, real active Loop Voices, I2S/DMA/queue health and stable normal/heavy polyphony on the new on/off images. The old 24/8 result cannot satisfy this gate. See `docs/V1_LOOP_REALTIME_INTEGRATION.md`.
+- **Concurrent Loop hardware — FAILED, repair/retest required:** optimize the new real-bank rendering path and requalify actual control/audio overlap, internal RAM/largest block, unchanged 4.5 MiB PCM capacity, Prepare/hash/load/analyze latency, real active Loop Voices, I2S/DMA/queue health and stable normal/heavy polyphony on the new on/off images. The old 24/8 result cannot satisfy this gate. The first failed cohort covers early envelope stages, not a measured steady-state capacity boundary. See `docs/V1_LOOP_REALTIME_INTEGRATION.md`.
 - **Loop seam:** retain the user's existing Host preference: 604/32f sounded best; 602 and 62 had little difference, with no forced-processing preference. The frozen automatic policy remains authoritative for effective Zone ranges (604/7943f chooses32f; its other ranges and the exported602/62 references remain Direct). This does not approve global enablement or physical full-instrument listening.
 - **Output level:** unity post-FX master / ES8311 DAC -12 dB are the performance baselines; a -6 dB listening/headroom trial is a distinct image and must not substitute for the M8 timing image.
 - **Known digital headroom failure:** the new fixed FM Program16 / 24-Voice / velocity64 cohort clips in both Direct and on modes in Host rendering. It is retained as a negative qualification with the original zero-clipping gate; see `docs/V1_LOOP_REALTIME_INTEGRATION.md` for exact scene and counts. Do not call this workload a released 24-Voice audio configuration until headroom is resolved and independently verified.

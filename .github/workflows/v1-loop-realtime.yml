@@ -10,6 +10,7 @@ on:
       - 'profiles/v1-loop-realtime/**'
       - 'scripts/*v1_loop_realtime*'
       - 'scripts/check_v1_output_bypass.sh'
+      - 'scripts/check_v1_realtime_render_equivalence.sh'
       - 'scripts/check_v1_loop_startup_default.py'
       - 'tools/v1_loop_realtime*'
       - 'tools/v1_loop_target_evidence.py'
@@ -56,6 +57,12 @@ jobs:
           mkdir -p build/v1-loop-realtime-host
           bash scripts/test_v1_loop_realtime.sh | tee build/v1-loop-realtime-host/native.log
           CXX=clang++ SANITIZE=1 V1_REALTIME_DIR=build/v1-loop-realtime-asan bash scripts/test_v1_loop_realtime.sh | tee build/v1-loop-realtime-host/asan.log
+      - name: Preserve complete pre-fix real-bank and musical PCM in all four modes
+        run: |
+          bash scripts/check_v1_realtime_render_equivalence.sh
+          cp build/v1-loop-realtime-render-equivalence/render-equivalence.json build/v1-loop-realtime-host/
+          cp build/v1-loop-realtime-render-equivalence/frozen.log build/v1-loop-realtime-host/render-equivalence-reference.log
+          cp build/v1-loop-realtime-render-equivalence/candidate.log build/v1-loop-realtime-host/render-equivalence-candidate.log
       - name: ThreadSanitizer ownership and publication races
         run: |
           CXX=g++ THREAD_SANITIZE=1 V1_REALTIME_DIR=build/v1-loop-realtime-tsan bash scripts/test_v1_loop_realtime.sh | tee build/v1-loop-realtime-host/tsan.log
@@ -71,6 +78,7 @@ jobs:
           name: v1-loop-realtime-host
           path: |
             build/v1-loop-realtime-host/*.log
+            build/v1-loop-realtime-host/*.json
             build/v1-loop-realtime-host/*.txt
             build/v1-loop-realtime-host/*.gz
             build/v1-loop-realtime-host/*.sha256

@@ -23,10 +23,22 @@ release remain open.
 
 M8 reference: `bb31908b` three physical runs PASS with PCM checksum `fe69915701738934`, 24 nominal normal/full-FX sample voices, eight stable pathological heavy-DSP voices, no WDT/hard-gate failures and final backlog zero. User confirmed the recorded `-dirty` suffix is not a blocker for this source integration; retain the actual banner without claiming clean CI binary identity. See `benchmarks/M8_PHYSICAL_THREE_RUN_2026-10-24.md`.
 
-Current focus: explicit default-OFF output peak protection and reproducible
-two-channel replay, then one consolidated on/off × bypass/peak hardware batch
-for memory, Prepare/render latency,
-actual Loop Voice coverage and sustained polyphony. See
+The first consolidated on/off × bypass/peak hardware batch at `1aeb2cf` was
+received on 2026-10-30. All four images were built/flashed correctly, but all
+four complete runs failed the new realtime gate. The real Program16 cohort
+rendered only 2–3 of 4,096 blocks after its onset, at 4,188–5,265 us average;
+backlog exceeded the unchanged 11,610-us DMA window and active I2S queue
+overflows were recorded. On images reached 24 actual Loop Voices, but neither
+mode established a stable 24-Voice boundary. The later musical replay never
+started. Zero clipping in these short aborted prefixes is not full headroom
+approval. The source/version and per-upload hashes are recorded in
+`benchmarks/V1_LOOP_REALTIME_PHYSICAL_2026-10-30.md` and its companion JSON.
+
+Current focus: preserve that failed hardware evidence, optimize the opt-in
+renderer without changing PCM or the fixed workload, and add bounded stage
+profiling before the next consolidated hardware batch. Continue to measure
+memory, Prepare/render latency, actual Loop Voice coverage and sustained
+polyphony. See
 `docs/V1_OUTPUT_HEADROOM.md` and `docs/V1_LOOP_REALTIME_INTEGRATION.md`.
 Batch development and Host/CI/QEMU are the
 daily verification path; do not ask for physical reruns after every small edit.

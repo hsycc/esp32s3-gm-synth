@@ -10,6 +10,62 @@ For the new two-channel replay and independently optional output candidate,
 including schema-2 profiles, see `V1_OUTPUT_HEADROOM.md`. New profiles do not
 retroactively qualify the old images or reinterpret their evidence.
 
+### First physical batch and renderer repair
+
+The user's 2026-10-30 batch at `1aeb2cf` failed in all four Loop/output
+combinations. Image identity and four-image Flash verification were consistent,
+and on reached 24 actual Loop Voices. However, the 24-Voice cohort ended after
+only 2–3 blocks: average render time was 4,188–5,265 us and producer backlog
+exceeded the 11,610-us DMA window. The later musical replay had not started.
+See `benchmarks/V1_LOOP_REALTIME_PHYSICAL_2026-10-30.md` and its companion JSON.
+Keep this failure distinct from the accepted `bb31908-dirty` baseline and from
+the already known complete-scene bypass clipping failure.
+
+The real Program16 Voices all use static lowpass filtering, unlike the old
+simple normal-Voice sweep. Their vibrato oscillator is armed with zero depth;
+the measured early source phases have not yet reached the Crossfade region.
+The repair therefore targets repeated static DSP work, not the frozen loop
+score, fade length or workload. In the experimental build only,
+`Voice::renderAddRealtime` selects a static continuous-loop specialization when
+no dynamic filter table, Mod-LFO, Mod-Envelope or nonzero vibrato depth is
+present. It caches invariant filter/gain/region data, reuses the identical Q24
+filter product, and advances linear envelope stages using exact integer
+quotient/remainder recurrences. Zero-depth oscillator delay, phase and control
+ticks still advance so later controller changes preserve the same sound.
+On-mode sample transport uses the original cursor unchanged. Unsupported
+dynamic cases and UntilRelease retain the existing path; the old cheapest
+unfiltered simple path is also retained. No sample ID or preset allowlist is
+used, no Voice fields are added, and feature defaults remain OFF.
+
+The original `Voice::renderAdd` remains unchanged as a differential oracle.
+The new 444-case suite covers PCM/state, envelope boundaries, long durations,
+extreme pitch steps, filter overshoot, segmented rendering, later controller
+changes and release/retirement. In addition,
+`scripts/check_v1_realtime_render_equivalence.sh` compiles both revisions with
+the same compiler and the **original `1aeb2cf` test program**. It requires all
+eight complete real-bank/musical on/off × bypass/peak WAVs and their counters to
+remain byte-identical. This is Host equivalence evidence, not a physical speed
+measurement. The existing default-off object/layout/trace gates remain in
+place; source guards require the new marked optional code to be exactly
+removable back to the original bodies.
+
+Physical qualification now also enables the existing fixed 16-entry worst-block
+profiler before starting either actor. All blocks can supply stage timing;
+only slow scheduled-renderer blocks are retained. After both actors join,
+`REALTIME_PROFILE` / `REALTIME_WORST` report event, Voice and FX/finalization
+costs. Joint Program commits are timed separately because they precede the
+scheduled renderer. **The unchanged outer render/work gates include all clock,
+snapshot and retention overhead**; profiler values never replace or reduce the
+measured gate values. `REALTIME_DIAGNOSTIC` names the actor stop reason and
+records actual input/cohort/replay/output completion, without making incomplete
+coverage a pass. There is no new hot-path printing or allocation.
+
+The next physical batch must still complete the original 32,768 input blocks,
+4,096 strict cohort blocks and 117-event replay with unchanged 24-Voice load,
+1,451-us cohort threshold, volume, DMA and WDT settings. The repair remains a
+performance candidate until that new hardware evidence is received; successful
+Host and QEMU runs do not close the physical or audible release gates.
+
 PR #25 merged normally into `main` as
 `51dc57d42057e9c23d3cf593717f56cc3841c92e`. Its reviewed head was
 `5502e97468fdace04ed43180f43bf477179a541b`; all 17 triggered workflows and 25

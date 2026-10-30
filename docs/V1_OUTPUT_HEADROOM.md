@@ -165,6 +165,16 @@ The old startup/analysis fixture and all schema-1 manifests remain unchanged.
 
 ## Verification and concentrated hardware acceptance
 
+The first four-mode physical batch at `1aeb2cf` failed realtime qualification
+on 2026-10-30. The complete logs establish correct image/source/asset identity
+and actual on-mode Loop Voices, but stop after 2–3 held-cohort blocks because
+rendering exhausts the unchanged DMA backlog window. All four real-bank raw
+overload counters were still zero at that point; that incomplete prefix does
+not reverse the negative Host results above or qualify Peak64's complete
+physical workload. The 117-event replay was never reached. Preserve the
+failure and the separate post-completion USB reconnect fragment as documented
+in `benchmarks/V1_LOOP_REALTIME_PHYSICAL_2026-10-30.md`.
+
 Run the complete Host suite and independent sanitizers, then the dedicated
 workflow's **Loop on/off × output bypass/peak × QEMU/physical** build matrix.
 The four QEMU profiles execute real Xtensa/FreeRTOS actors. Current QEMU runs
