@@ -10,8 +10,26 @@ OUTPUT_MODE="${3:-bypass}"
 [[ "$ANALYSIS" == on || "$ANALYSIS" == off ]] || { echo 'Use on or off'; exit 2; }
 [[ "$OUTPUT_MODE" == bypass || "$OUTPUT_MODE" == peak ]] || { echo 'Use bypass or peak'; exit 2; }
 OUT="$ROOT/build/v1-loop-realtime-$PROFILE-$ANALYSIS-$OUTPUT_MODE"
-[[ ! -f "$OUT/target/CMakeCache.txt" ]] || { echo "Existing build: $OUT; choose a fresh dedicated directory"; exit 2; }
+# Check the toolchain before moving any previous build or its evidence.
+IDF_VERSION="$(python "$IDF_PATH/tools/idf.py" --version)"
+printf '%s\n' "$IDF_VERSION"
+[[ "$IDF_VERSION" == 'ESP-IDF v6.1' ]] || { echo 'Expected ESP-IDF v6.1' >&2; exit 2; }
+# A retry starts from the pinned defaults, while retaining the complete prior
+# attempt (including immutable bundles and runtime logs). A CI-created build.log
+# alone is not a configured attempt and must stay in the current output directory.
+for PREVIOUS in generated target sdkconfig flash-bundle build-audit.json atomic-backend-audit.json execution.json; do
+    if [[ -e "$OUT/$PREVIOUS" || -L "$OUT/$PREVIOUS" ]]; then
+        HISTORY="$ROOT/build/v1-loop-realtime-history"
+        mkdir -p "$HISTORY"
+        ARCHIVE="$(mktemp -d "$HISTORY/$PROFILE-$ANALYSIS-$OUTPUT_MODE.XXXXXXXX")"
+        mv "$OUT" "$ARCHIVE/build"
+        printf 'Previous build preserved: %s\n' "$ARCHIVE/build"
+        break
+    fi
+done
 mkdir -p "$OUT/generated"
+printf 'Build output: %s\n' "$OUT"
+printf '%s\n' "$IDF_VERSION" > "$OUT/idf-version.txt"
 if [[ "$PROFILE" == qemu ]]; then
     python3 tests/app/make_loop_replay_fixture.py "$OUT/fixture"
     SOURCE="$OUT/fixture/fixture.sf2"
@@ -22,8 +40,6 @@ fi
 set -- "$SOURCE" "$OUT/generated" --profile "$PROFILE" --output-mode "$OUTPUT_MODE"
 [[ "$ANALYSIS" == off ]] || set -- "$@" --analysis
 python3 -m tools.v1_loop_realtime_manifest "$@"
-python "$IDF_PATH/tools/idf.py" --version | tee "$OUT/idf-version.txt"
-grep -qx 'ESP-IDF v6.1' "$OUT/idf-version.txt"
 python "$IDF_PATH/tools/idf.py" -B "$OUT/target" -D IDF_TARGET=esp32s3 \
     -D "SDKCONFIG=$OUT/sdkconfig" \
     -D "SDKCONFIG_DEFAULTS=$ROOT/profiles/v1-loop-realtime/sdkconfig.common;$ROOT/profiles/v1-loop-realtime/sdkconfig.$PROFILE" \

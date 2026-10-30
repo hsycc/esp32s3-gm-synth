@@ -98,8 +98,57 @@ jobs:
           tools-path: ${{ runner.temp }}/esp-tools
       - name: Build continuous application, audit ABI and atomic backend, package exact flash inputs
         run: |
-          mkdir -p build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}
-          bash scripts/build_v1_loop_realtime.sh ${{ matrix.profile }} ${{ matrix.mode }} ${{ matrix.output }} 2>&1 | tee build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}/build.log
+          out=build/v1-loop-realtime-${{ matrix.profile }}-${{ matrix.mode }}-${{ matrix.output }}
+          log=$(mktemp "$RUNNER_TEMP/v1-loop-realtime-build.XXXXXXXX")
+          status=0
+          bash scripts/build_v1_loop_realtime.sh ${{ matrix.profile }} ${{ matrix.mode }} ${{ matrix.output }} 2>&1 | tee "$log" || status=$?
+          mkdir -p "$out"
+          mv "$log" "$out/build.log"
+          exit "$status"
+      - name: Rebuild physical off modes and verify preserved and current bundles
+        if: matrix.profile == 'physical' && matrix.mode == 'off'
+        run: |
+          out=build/v1-loop-realtime-physical-off-${{ matrix.output }}
+          before=$(mktemp "$RUNNER_TEMP/v1-loop-realtime-before.XXXXXXXX")
+          cp "$out/flash-bundle/SHA256SUMS" "$before"
+          log=$(mktemp "$RUNNER_TEMP/v1-loop-realtime-rebuild.XXXXXXXX")
+          status=0
+          bash scripts/build_v1_loop_realtime.sh physical off ${{ matrix.output }} 2>&1 | tee "$log" || status=$?
+          mkdir -p "$out"
+          mv "$log" "$out/rebuild.log"
+          if [[ "$status" != 0 ]]; then exit "$status"; fi
+          python - "$out" "$before" '${{ matrix.output }}' <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+          from scripts.v1_loop_realtime_hardware import inspect_bundle
+
+          out, before, mode = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+          history = list((out.parent / 'v1-loop-realtime-history').glob(f'physical-off-{mode}.*/build'))
+          if len(history) != 1:
+              raise ValueError('expected exactly one preserved build after one retry')
+          archived, current = history[0] / 'flash-bundle', out / 'flash-bundle'
+          old_sums = (archived / 'SHA256SUMS').read_bytes()
+          if old_sums != before.read_bytes():
+              raise ValueError('the previous bundle hash list changed during rebuild')
+          manifests = [inspect_bundle(bundle) for bundle in (archived, current)]
+          for manifest in manifests:
+              if manifest['analysis'] is not False or manifest['output_mode'] != mode:
+                  raise ValueError('rebuild changed the requested loop/output mode')
+          if manifests[0]['source_tree'] != manifests[1]['source_tree']:
+              raise ValueError('source tree changed during the repeated build')
+          report = dict(schema=1, profile='physical', analysis=False, output_mode=mode,
+                        source_tree=manifests[1]['source_tree'], archived_build=str(history[0]),
+                        archived_bundle_unchanged=True, archived_bundle_valid=True,
+                        current_bundle_valid=True,
+                        archived_sha256sums_sha256=hashlib.sha256(old_sums).hexdigest(),
+                        current_sha256sums_sha256=hashlib.sha256((current / 'SHA256SUMS').read_bytes()).hexdigest(),
+                        runtime_approved=False, physical_timing_approved=False)
+          text = json.dumps(report, indent=2) + '\n'
+          (out / 'rebuild-verification.json').write_text(text)
+          print(text, end='')
+          PY
       - uses: actions/download-artifact@v4
         if: matrix.profile == 'qemu'
         with:

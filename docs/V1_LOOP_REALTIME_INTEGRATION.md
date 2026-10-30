@@ -153,8 +153,22 @@ bash scripts/build_v1_loop_realtime.sh physical on
 bash scripts/build_v1_loop_realtime.sh physical off
 ```
 
-Build scripts reject reuse of a configured dedicated build directory rather
-than silently replacing a prior SDK configuration. The QEMU runner additionally
+The realtime build command can be repeated in the same checkout, including
+after a failed or successful build. After checking ESP-IDF v6.1, it moves the
+complete previous attempt to a unique directory under
+`build/v1-loop-realtime-history/<profile>-<on|off>-<bypass|peak>.XXXXXXXX/build/`
+and prints that path. It then rebuilds at the original output path with the
+current pinned defaults and a new sdkconfig. Old bundles, logs, configuration
+and execution evidence retain their original bytes in the archive; other
+mode combinations are unaffected. A failed retry returns its actual error and
+does not leave the previous bundle or execution result in the current path.
+Archives are records, not directories to resume with CMake. Retain the ones
+used for hardware results; archive cleanup is left to the operator.
+
+If recording shell output with `tee`, write it outside this command's output
+directory so that opening the log cannot truncate the previous attempt's log
+before the script archives it. Only run one build of a given combination at a
+time. The QEMU runner additionally
 needs Linux `timeout`, the IDF QEMU tool and the matching Host log downloaded
 by CI; it is not presented as an unchanged macOS runner.
 
