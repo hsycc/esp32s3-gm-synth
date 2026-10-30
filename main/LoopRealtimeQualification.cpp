@@ -81,6 +81,9 @@ struct Context {
     std::atomic<std::uint32_t> replay_first{0}, replay_second{0}, replay_cleanup{0}, replay_end{0};
     // Each following member is owned by ONE actor, read by coordinator after join.
     bool audio_ok = true, control_ok = true;
+    const char* audio_stop_reason = "not_started";
+    const char* control_stop_reason = "not_started";
+    unsigned control_stage = 0;
     int audio_core = -1, control_core = -1;
     unsigned blocks = 0, voices_peak = 0, loops_peak = 0, program_switches = 0;
     unsigned blocks_during_prepare = 0, audio_stack = 0, control_stack = 0;
@@ -115,6 +118,36 @@ std::uint32_t elapsed(std::int64_t start, std::int64_t end) {
     return static_cast<std::uint32_t>(std::min<std::uint64_t>(
         end > start ? static_cast<std::uint64_t>(end - start) : 0,
         std::numeric_limits<std::uint32_t>::max()));
+}
+
+// Coordinator only, after both actors join. Retention and stage clocks are
+// bounded in the renderer; formatting never runs on either realtime actor.
+void reportProfile(const Session& session) {
+    const auto* profile = session.audioWorstBlockProfile();
+    if (!profile) return;
+    const auto commit = session.audioCommitTiming();
+    std::printf("REALTIME_PROFILE retained=%u capacity=%u candidates=%u deadline_us=%u all_block_stages=1 topn_scope=scheduled_renderer gate_scope=outer_wall overhead_included=1 commit_blocks=%" PRIu64 " commits=%" PRIu64 " commit_total_us=%" PRIu64 " commit_max_us=%" PRIu64 " commit_worst_frame=%" PRIu64 "\n",
+        unsigned(profile->retained), unsigned(profile->kCapacity), unsigned(profile->deadline_candidates),
+        unsigned(profile->deadline_us), commit.blocks, commit.commits, commit.total_us,
+        commit.max_us, commit.worst_frame);
+    for (std::size_t i = 0; i < profile->retained; ++i) {
+        const auto& entry = profile->slowest[i];
+        const auto& stage = entry.stages;
+        const auto& event = entry.events;
+        const auto& voice = entry.voices;
+        std::printf("REALTIME_WORST rank=%u block=%u frame=%" PRIu64 " scheduled_render_us=%u stages_valid=%u setup_prepare_us=%u event_apply_us=%u note_on_us=%u cc120_us=%u other_cc_us=%u other_event_us=%u voice_render_us=%u effects_finalize_us=%u events=%u note_on=%u note_off=%u cc=%u pc=%u pitch_bend=%u pressure=%u gm_reset=%u event_channels=%u sustain_channels=%u voices=%u voice_channels=%u releasing=%u lowpass=%u vibrato=%u mod_lfo=%u mod_env=%u fx_send=%u realtime_control=%u fast_release_tails=%u steal_tails=%u exclusive_tails=%u\n",
+            unsigned(i + 1), unsigned(entry.stream_block), entry.block_start_frame, unsigned(entry.render_us),
+            unsigned(stage.valid), unsigned(stage.setup_prepare_us), unsigned(stage.event_apply_us),
+            unsigned(stage.note_on_apply_us), unsigned(stage.cc120_apply_us), unsigned(stage.other_cc_apply_us),
+            unsigned(stage.other_event_apply_us), unsigned(stage.voice_render_us), unsigned(stage.effects_finalize_us),
+            unsigned(event.total), unsigned(event.note_on), unsigned(event.note_off), unsigned(event.control_change),
+            unsigned(event.program_change), unsigned(event.pitch_bend), unsigned(event.channel_pressure),
+            unsigned(event.gm_reset), unsigned(event.event_channel_mask), unsigned(event.sustain_channel_mask),
+            unsigned(voice.active), unsigned(voice.channel_mask), unsigned(voice.releasing), unsigned(voice.lowpass),
+            unsigned(voice.vibrato), unsigned(voice.mod_lfo), unsigned(voice.mod_env), unsigned(voice.fx_send),
+            unsigned(voice.realtime_control), unsigned(voice.fast_release_tails), unsigned(voice.steal_tails),
+            unsigned(voice.exclusive_tails));
+    }
 }
 
 bool outputProbe() {
@@ -284,6 +317,7 @@ void controlTask(void* opaque) {
     auto& c = *static_cast<Context*>(opaque);
     auto& s = *c.session;
     c.control_core = xPortGetCoreID();
+    c.control_stop_reason = "stop_requested";
     while (!c.audio_ready.load(std::memory_order_acquire) && !s.stopRequested()) vTaskDelay(1);
     unsigned stage = 0;
     while (!s.stopRequested()) {
@@ -294,7 +328,7 @@ void controlTask(void* opaque) {
         if (result == gm::ProgramChangeServiceStatus::Ok) c.service.add(duration);
         else if (result != gm::ProgramChangeServiceStatus::NoPending &&
                  result != gm::ProgramChangeServiceStatus::TransitionBusy) {
-            c.control_ok = false; s.requestStop(); break;
+            c.control_ok = false; c.control_stop_reason = "service_failed"; s.requestStop(); break;
         }
         const auto program = c.program.load(std::memory_order_acquire);
         const auto frame = c.frame.load(std::memory_order_acquire);
@@ -314,9 +348,11 @@ void controlTask(void* opaque) {
         } else if (stage == 5 && frame >= c.replay_end.load(std::memory_order_acquire)) {
             c.replay_complete = true; stage = 6;
         }
-        if (!c.control_ok) { s.requestStop(); break; }
+        if (!c.control_ok) { c.control_stop_reason = "event_enqueue_failed"; s.requestStop(); break; }
         vTaskDelay(1); // give CPU0 idle its normal WDT opportunity
     }
+    c.control_stage = stage;
+    if (c.control_ok && stage == 6) c.control_stop_reason = "complete";
     c.control_ok = c.control_ok && stage == 6;
     c.control_stack = uxTaskGetStackHighWaterMark(nullptr);
     s.controlStop();
@@ -332,6 +368,7 @@ void audioTask(void* opaque) {
     c.audio_core = xPortGetCoreID();
     LoopRealtimeI2s sink;
     c.audio_ok = !manifest::physical || sink.start();
+    c.audio_stop_reason = c.audio_ok ? "stop_requested" : "i2s_start_failed";
     c.audio_ready.store(1, std::memory_order_release);
     std::array<std::int16_t, 128> output{};
     unsigned previous_program = manifest::initial_program, previous_replay_program = manifest::initial_program;
@@ -346,7 +383,7 @@ void audioTask(void* opaque) {
         const auto replay_phase = s.phase(1);
         c.audio_ok = s.audioRender(output.data());
         const auto render_end = esp_timer_get_time();
-        if (!c.audio_ok) break;
+        if (!c.audio_ok) { c.audio_stop_reason = "audio_render_rejected"; break; }
         const auto render_us = elapsed(cycle_start, render_end);
         c.render.add(render_us); ++c.blocks;
         const auto program = s.audioProgram();
@@ -366,7 +403,10 @@ void audioTask(void* opaque) {
         c.replay_program.store(replay_program, std::memory_order_release);
         std::uint32_t downmix_us = 0;
         const auto write_start = esp_timer_get_time();
-        if (manifest::physical) c.audio_ok = sink.write(output.data(), downmix_us);
+        if (manifest::physical) {
+            c.audio_ok = sink.write(output.data(), downmix_us);
+            if (!c.audio_ok) c.audio_stop_reason = "i2s_write_failed";
+        }
         else vTaskDelay(1); // only emulated pacing; never physical timing evidence
         const auto cycle_end = esp_timer_get_time();
         previous_write_end = cycle_end;
@@ -411,22 +451,30 @@ void audioTask(void* opaque) {
             c.work_consecutive = work_us > kBudgetUs ? c.work_consecutive + 1u : 0;
             // A real overload is a recorded failure, not a reason to change the
             // load/buffer/WDT. End before sustained CPU1 idle starvation.
-            if (c.work_consecutive >= 128u || c.health.snapshot().backlog_exceeded_dma_window) c.audio_ok = false;
+            if (c.audio_ok && c.health.snapshot().backlog_exceeded_dma_window) {
+                c.audio_stop_reason = "dma_backlog_exceeded"; c.audio_ok = false;
+            } else if (c.audio_ok && c.work_consecutive >= 128u) {
+                c.audio_stop_reason = "sustained_work_overrun"; c.audio_ok = false;
+            }
         }
     }
     // One pending 64-frame output block is emitted only on normal completion.
     // It is timed and sent, but is never counted as another rendered input block.
     if (c.audio_ok && c.blocks == manifest::blocks && !s.stopRequested()) {
+        c.audio_stop_reason = "complete";
         const auto before = esp_timer_get_time();
         if (s.audioDrainOutput(output.data())) {
             c.drain_frames = 64;
             for (auto value : output) { c.checksum ^= static_cast<std::uint16_t>(value); c.checksum *= UINT64_C(1099511628211); }
             std::uint32_t downmix_us = 0;
-            if (manifest::physical) c.audio_ok = sink.write(output.data(), downmix_us);
+            if (manifest::physical) {
+                c.audio_ok = sink.write(output.data(), downmix_us);
+                if (!c.audio_ok) c.audio_stop_reason = "i2s_drain_write_failed";
+            }
             else vTaskDelay(1);
             c.drain_us = elapsed(before, esp_timer_get_time());
             if (manifest::physical && c.drain_us > LoopRealtimeI2s::kDmaWindowUs) ++c.stalls;
-        }
+        } else if (manifest::output_peak) c.audio_stop_reason = "output_drain_missing";
     }
     c.audio_stack = uxTaskGetStackHighWaterMark(nullptr);
     c.i2s = sink.stats();
@@ -507,19 +555,23 @@ void runLoopRealtimeQualification() {
     std::printf("REALTIME_ASSET bytes=%u sha256=%s initial_program=%u replacement_program=%u\n",
         unsigned(manifest::bytes), manifest::digest_hex, unsigned(manifest::initial_program), unsigned(manifest::replacement_program));
     memory("ready");
+    if (ok && manifest::physical)
+        ok = session->beginAudioProfilingQuiescent(kBudgetUs, config.now_us);
     ok = ok && initialEvents(*c) && session->beginActors();
     bool started = false;
     if (ok) {
         started = true;
         const auto control_created = xTaskCreatePinnedToCore(controlTask, "loop-control", 16384, c, 5, nullptr, 0);
         if (control_created != pdPASS) {
-            c->control_ok = false; session->controlStop(); c->control_done.store(1, std::memory_order_release);
+            c->control_ok = false; c->control_stop_reason = "task_create_failed";
+            session->controlStop(); c->control_done.store(1, std::memory_order_release);
         }
         const auto audio_created = control_created == pdPASS ?
             xTaskCreatePinnedToCore(audioTask, "loop-audio", CONFIG_GM_SYNTH_I2S_QUAL_TASK_STACK_BYTES,
                 c, CONFIG_GM_SYNTH_I2S_QUAL_TASK_PRIORITY, nullptr, 1) : pdFAIL;
         if (audio_created != pdPASS) {
-            c->audio_ok = false; session->audioStop(); c->audio_done.store(1, std::memory_order_release);
+            c->audio_ok = false; c->audio_stop_reason = "task_create_failed";
+            session->audioStop(); c->audio_done.store(1, std::memory_order_release);
         }
         ok = join(*c) && control_created == pdPASS && audio_created == pdPASS && ok;
     }
@@ -600,6 +652,13 @@ void runLoopRealtimeQualification() {
         unsigned(c->cohort_render.average()),
         unsigned(c->cohort_render.upper(95)), unsigned(c->cohort_render.upper(99)), unsigned(c->cohort_render.maximum),
         cohort.max_backlog_us, cohort.final_backlog_us, cohort_required ? (cohort_ok ? "PASS" : "FAIL") : "NOT_RUN");
+    std::printf("REALTIME_DIAGNOSTIC audio_stop=%s control_stop=%s control_stage=%u expected_blocks=%u input_complete=%u cohort_complete=%u replay_started=%u replay_complete=%u output_complete=%u\n",
+        c->audio_stop_reason, c->control_stop_reason, c->control_stage, unsigned(manifest::blocks),
+        unsigned(c->blocks == manifest::blocks), unsigned(cohort_required && c->cohort_blocks == kCohortBlocks),
+        unsigned(c->replay_first.load(std::memory_order_relaxed) != 0 &&
+            audio.output_frames > c->replay_first.load(std::memory_order_relaxed)),
+        unsigned(c->replay_complete), unsigned(c->blocks == manifest::blocks && output_accounting_ok));
+    reportProfile(*session);
     std::printf("REALTIME_PCM capacity=%u high_water=%u used=%u allocation_failures=%u stale_refs=%" PRIu64 "\n",
         unsigned(pcm.capacity_bytes), unsigned(pcm.high_water_bytes), unsigned(pcm.used_bytes), unsigned(pcm.allocation_failures),
         publication.stale_release_faults);

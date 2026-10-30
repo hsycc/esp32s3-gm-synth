@@ -157,6 +157,17 @@ public:
     const ScheduledWorstBlockProfile& worstBlockProfile() const {
         return worst_profile_;
     }
+    // BEGIN V1_LOOP_PROFILE_STAGES
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    // Qualification-only opt-in before the first block/profiling arm. The
+    // default keeps the historical event-burst-only stage instrumentation.
+    bool setWorstBlockStageTimingQuiescent(bool all_blocks) noexcept {
+        if (stats_.blocks_rendered || worst_profile_enabled_) return false;
+        worst_profile_all_block_stages_ = all_blocks;
+        return true;
+    }
+#endif
+    // END V1_LOOP_PROFILE_STAGES
 
 private:
     static std::int16_t saturateToI16(std::int32_t sample, bool* clipped);
@@ -191,6 +202,11 @@ private:
     // END V1_OUTPUT_FINALIZER
 
     bool worst_profile_enabled_ = false;
+    // BEGIN V1_LOOP_PROFILE_STAGES
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    bool worst_profile_all_block_stages_ = false;
+#endif
+    // END V1_LOOP_PROFILE_STAGES
     std::uint32_t last_profiled_render_us_ = 0;
     std::uint64_t worst_profile_first_frame_ = 0;
     std::uint16_t worst_profile_sustain_mask_ = 0;

@@ -130,9 +130,11 @@ struct Fixture {
     std::array<std::int16_t, 128> pcm{};
     bool begun = false;
 
-    explicit Fixture(bool enabled = true, std::size_t capacity = 20 * 1024) {
+    explicit Fixture(bool enabled = true, std::size_t capacity = 20 * 1024,
+                     app::OutputPeakProtector::Mode output_mode = app::OutputPeakProtector::Mode::Bypass) {
         backing.observer = session.get();
         app::LoopRealtimeConfig config;
+        config.output_mode = output_mode;
         config.analysis.experimental_opt_in = enabled;
         config.analysis.checkpoint = &Checkpoint::analysis;
         config.analysis.checkpoint_context = &checkpoint;
@@ -218,6 +220,88 @@ void disabled_default() {
     CHECK(f.session->audioStats().events_rejected == 0);
     f.finish();
     std::puts("REALTIME_HOST_CASE default_off PASS");
+}
+
+thread_local std::uint64_t profile_clock_calls = 0;
+std::uint64_t profileClock() {
+    CHECK(domain == Domain::Audio);
+    return ++profile_clock_calls; // deterministic diagnostic clock, not timing evidence
+}
+
+void profiling_preserves_stream_and_lifecycle() {
+    auto unused_storage = std::make_unique<Session::Storage>();
+    auto unused = std::make_unique<Session>(*unused_storage);
+    CHECK(!unused->beginAudioProfilingQuiescent(1451, profileClock));
+    using Mode = app::OutputPeakProtector::Mode;
+    for (bool enabled : {false, true}) for (auto mode : {Mode::Bypass, Mode::Peak64}) {
+        Fixture plain(enabled, 20 * 1024, mode), profiled(enabled, 20 * 1024, mode);
+        profile_clock_calls = 0;
+        CHECK(!plain.session->audioWorstBlockProfile());
+        CHECK(!profiled.session->beginAudioProfilingQuiescent(0, profileClock));
+        CHECK(!profiled.session->beginAudioProfilingQuiescent(1451, nullptr));
+        CHECK(profiled.session->beginAudioProfilingQuiescent(1451, profileClock));
+        CHECK(!profiled.session->beginAudioProfilingQuiescent(1451, profileClock));
+        CHECK(profile_clock_calls == 0);
+        plain.begin(); profiled.begin();
+        CHECK(!plain.session->beginAudioProfilingQuiescent(1451, profileClock));
+        auto event = [&](Event type, unsigned a, unsigned b = 0, unsigned offset = 0) {
+            plain.push(type, a, b, offset); profiled.push(type, a, b, offset);
+        };
+        unsigned blocks = 0;
+        auto render = [&](unsigned count = 1) {
+            for (unsigned i = 0; i < count; ++i) {
+                plain.render(); profiled.render(); ++blocks;
+                CHECK(plain.pcm == profiled.pcm);
+                CHECK(plain.session->audioProgram() == profiled.session->audioProgram());
+                CHECK(plain.session->phase() == profiled.session->phase());
+                CHECK(plain.session->audioVoices() == profiled.session->audioVoices());
+                CHECK(plain.session->audioLoops() == profiled.session->audioLoops());
+                const auto a = plain.session->audioStats(), b = profiled.session->audioStats();
+                CHECK(a.blocks_rendered == b.blocks_rendered && a.output_frames == b.output_frames);
+                CHECK(a.render_segments == b.render_segments && a.events_attempted == b.events_attempted);
+                CHECK(a.events_applied == b.events_applied && a.events_rejected == b.events_rejected);
+                CHECK(a.clipped_samples == b.clipped_samples && a.peak_abs_accumulator == b.peak_abs_accumulator);
+            }
+        };
+        auto service = [&](Service expected) {
+            CHECK(plain.service() == expected); CHECK(profiled.service() == expected);
+        };
+        event(Event::ControlChange, 91, 40);
+        event(Event::ControlChange, 93, 20);
+        event(Event::NoteOn, 61, 100, 7);
+        event(Event::ControlChange, 64, 127, 16);
+        event(Event::NoteOff, 61, 0, 32);
+        render(8);
+        event(Event::ProgramChange, 1, 0, 8); render();
+        service(Service::Ok);
+        CHECK(profiled.session->phase() == Phase::Ready);
+        render();
+        CHECK(profiled.session->phase() == Phase::Committed && profiled.session->audioProgram() == 1);
+        service(Service::NoPending);
+        event(Event::NoteOn, 60, 100); render(8);
+        event(Event::ControlChange, 64, 0, 16);
+        event(Event::ControlChange, 120, 0, 32); render();
+        event(Event::ProgramChange, 0, 0, 8); render();
+        service(Service::Ok); render(); service(Service::NoPending);
+        event(Event::NoteOn, 61, 100); render(8);
+        event(Event::NoteOff, 61, 0, 13); render(128);
+        const auto commit = profiled.session->audioCommitTiming();
+        CHECK(commit.blocks == blocks && commit.commits == 2);
+        CHECK(commit.total_us == blocks && commit.max_us == 1 && commit.worst_frame == 0);
+        CHECK(profile_clock_calls == 2u * blocks);
+        CHECK(plain.session->audioCommitTiming().blocks == 0);
+        const auto* profile = profiled.session->audioWorstBlockProfile();
+        CHECK(profile && profile->deadline_us == 1451 && profile->retained == 0);
+        // Host rendering must not fabricate ESP stage timings or physical PASS.
+        CHECK(profile->deadline_candidates == 0);
+        CHECK(plain.session->audioDrainOutput(plain.pcm.data()) == (mode == Mode::Peak64));
+        CHECK(profiled.session->audioDrainOutput(profiled.pcm.data()) == (mode == Mode::Peak64));
+        CHECK(plain.pcm == profiled.pcm);
+        plain.finish(); profiled.finish();
+        CHECK(!profiled.session->audioWorstBlockProfile());
+        CHECK(!profiled.session->beginAudioProfilingQuiescent(1451, profileClock));
+    }
+    std::puts("REALTIME_HOST_CASE profiling_preserves_stream_and_lifecycle PASS");
 }
 
 void continuous_real_provider() {
@@ -594,6 +678,7 @@ int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     CHECK(argc == 2);
     disabled_default();
+    profiling_preserves_stream_and_lifecycle();
     continuous_real_provider();
     missing_program();
     residency_failure();
@@ -604,6 +689,6 @@ int main(int argc, char** argv) {
     storage_exclusive_reuse();
     real_bank_cohort(argv[1]);
     // Checks include bounded-wait iterations and therefore vary by scheduling.
-    std::printf("REALTIME_HOST_RESULT suites=10 checks=%u PASS actor_ownership=1\n",
+    std::printf("REALTIME_HOST_RESULT suites=11 checks=%u PASS actor_ownership=1\n",
                 checks.load(std::memory_order_relaxed));
 }

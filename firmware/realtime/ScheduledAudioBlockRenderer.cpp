@@ -295,7 +295,16 @@ void ScheduledAudioBlockRenderer::render(
     ScheduledWorstBlockStages stage{};
     (void)stage;  // ESP-only physical profiling; no host timing instrumentation.
 #if defined(ESP_PLATFORM)
+    // BEGIN V1_LOOP_PROFILE_STAGES
+#if GM_SYNTH_EXPERIMENTAL_VOICE_LOOP
+    const bool time_burst = worst_profile_enabled_ &&
+        (worst_profile_all_block_stages_ || batch.count >= 8u);
+#else
+    // END V1_LOOP_PROFILE_STAGES
     const bool time_burst = worst_profile_enabled_ && batch.count >= 8u;
+    // BEGIN V1_LOOP_PROFILE_STAGES
+#endif
+    // END V1_LOOP_PROFILE_STAGES
     stage.valid = time_burst;
     if (time_burst) {
         const auto now = esp_timer_get_time();

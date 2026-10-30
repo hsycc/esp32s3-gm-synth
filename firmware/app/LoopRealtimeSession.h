@@ -28,6 +28,9 @@ struct LoopRealtimeIoStats {
 struct LoopRealtimeAnalysisTiming {
     std::uint64_t calls = 0, total_us = 0, max_us = 0;
 };
+struct LoopRealtimeCommitTiming {
+    std::uint64_t blocks = 0, commits = 0, total_us = 0, max_us = 0, worst_frame = 0;
+};
 
 template<std::size_t MaxZones, std::size_t MaxPlans, std::size_t Channels> class LoopRealtimeSession;
 
@@ -274,6 +277,19 @@ public:
         actors_started_ = true;
         return true;
     }
+    // Physical qualification only: configure while quiescent, after start and
+    // before publishing either actor. The clock must be bounded/non-blocking.
+    // Its cost and all retained Top-N snapshots remain inside audioRender's
+    // caller-observed wall time; callers must not subtract them from gates.
+    bool beginAudioProfilingQuiescent(std::uint32_t deadline_us,
+                                     std::uint64_t (*now_us)()) noexcept {
+        if (status_ != LoopStartupStatus::Running || actors_started_ || stopRequested() ||
+            !graph_ || frame_ || !deadline_us || !now_us || audio_profile_now_us_) return false;
+        if (!graph_->renderer.setWorstBlockStageTimingQuiescent(true)) return false;
+        graph_->renderer.beginWorstBlockProfiling(deadline_us, frame_);
+        audio_profile_now_us_ = now_us;
+        return true;
+    }
     // ONE producer, before beginActors or on the control/input actor afterwards.
     // No read of audio-owned frame/status/Voice fields is made here.
     bool enqueue(realtime::RealtimeEvent event) noexcept {
@@ -313,7 +329,23 @@ public:
             frame_ > std::numeric_limits<std::uint64_t>::max() - 64) {
             requestStop(); audioStop(); return false;
         }
-        graph_->runtime.render(graph_->renderer, frame_, stereo);
+        if (audio_profile_now_us_) {
+            // Preserve the same joint-commit-before-render order. Commit work
+            // is outside ScheduledAudioBlockRenderer's existing Top-N scope,
+            // so report it separately instead of mislabeling it Voice cost.
+            const auto before = audio_profile_now_us_();
+            const auto committed = graph_->runtime.commitReadyAtBlockBoundary();
+            const auto after = audio_profile_now_us_();
+            const auto duration = after >= before ? after - before : 0;
+            ++audio_commit_timing_.blocks;
+            audio_commit_timing_.commits += committed;
+            audio_commit_timing_.total_us += duration;
+            if (duration > audio_commit_timing_.max_us) {
+                audio_commit_timing_.max_us = duration;
+                audio_commit_timing_.worst_frame = frame_;
+            }
+            graph_->renderer.render(frame_, stereo);
+        } else graph_->runtime.render(graph_->renderer, frame_, stereo);
         frame_ += 64;
         for (const auto& channel : graph_->channels)
             if (channel->phase() == Phase::Fault) { requestStop(); audioStop(); return false; }
@@ -362,6 +394,10 @@ public:
     // AUDIO owner only, or coordinator after joining audio. These are NOT
     // concurrent telemetry. Publish copies through a separately owned channel.
     std::uint64_t audioFrame() const { return frame_; }
+    const realtime::ScheduledWorstBlockProfile* audioWorstBlockProfile() const noexcept {
+        return graph_ && audio_profile_now_us_ ? &graph_->renderer.worstBlockProfile() : nullptr;
+    }
+    LoopRealtimeCommitTiming audioCommitTiming() const noexcept { return audio_commit_timing_; }
     unsigned audioVoices() const { return graph_ ? graph_->pool.activeVoiceCount() : 0; }
     unsigned audioVoices(std::uint8_t channel) {
         unsigned count = 0;
@@ -448,6 +484,8 @@ private:
     VerifiedReadOnlyBank::Status bank_status_ = VerifiedReadOnlyBank::Status::InvalidInput;
     bool actors_started_ = false, owns_storage_ = false;
     std::uint64_t serial_ = 0, frame_ = 0;
+    std::uint64_t (*audio_profile_now_us_)() = nullptr;
+    LoopRealtimeCommitTiming audio_commit_timing_{};
     sample::PublicationStats final_publication_{};
 };
 } // namespace gm_synth::app

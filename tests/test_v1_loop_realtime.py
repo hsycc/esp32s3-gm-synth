@@ -642,6 +642,34 @@ class Evidence(unittest.TestCase):
 
 
 class OutputReplayEvidence(unittest.TestCase):
+    def test_optional_diagnostics_do_not_change_qualification_scope(self):
+        native, text = output_native_log(), target_v2_log('physical', 'peak')
+        diagnostics = (
+            'REALTIME_DIAGNOSTIC audio_stop=complete control_stop=complete control_stage=6 '
+            'expected_blocks=32768 input_complete=1 cohort_complete=1 replay_started=1 replay_complete=1 output_complete=1\n'
+            'REALTIME_PROFILE retained=0 capacity=16 candidates=0 deadline_us=1451 all_block_stages=1 '
+            'topn_scope=scheduled_renderer gate_scope=outer_wall overhead_included=1 '
+            'commit_blocks=32768 commits=4 commit_total_us=32768 commit_max_us=1 commit_worst_frame=0\n')
+        annotated = text.replace('REALTIME_PCM ', diagnostics + 'REALTIME_PCM ')
+        self.assertEqual(validate(native, text, 'physical', 1, 'peak'),
+                         validate(native, annotated, 'physical', 1, 'peak'))
+
+    def test_early_overload_diagnostics_cannot_be_collected_as_headroom_only(self):
+        native, text = output_native_log(), target_v2_log('physical', 'bypass')
+        text = text.replace('reason=digital_headroom', 'reason=qualification')
+        text = text.replace('integration=PASS cohort=PASS replay=PASS',
+                            'integration=FAIL cohort=FAIL replay=FAIL')
+        text = text.replace('frames=2097152 blocks=32768', 'frames=56064 blocks=876')
+        text = text.replace('REALTIME_COHORT requested=24 required=1 blocks=4096',
+                            'REALTIME_COHORT requested=24 required=1 blocks=2')
+        diagnostic = ('REALTIME_DIAGNOSTIC audio_stop=dma_backlog_exceeded control_stop=stop_requested '
+                      'control_stage=2 expected_blocks=32768 input_complete=0 cohort_complete=0 '
+                      'replay_started=0 replay_complete=0 output_complete=0\n')
+        text = text.replace('REALTIME_PCM ', diagnostic + 'REALTIME_PCM ')
+        for collect in (False, True):
+            with self.subTest(collect=collect), self.assertRaisesRegex(ValueError, 'fatal target marker'):
+                validate(native, text, 'physical', 1, 'bypass', collect)
+
     def test_full_mode_matrix_has_distinct_output_and_physical_scopes(self):
         native = output_native_log()
         for profile in ('qemu', 'physical'):
